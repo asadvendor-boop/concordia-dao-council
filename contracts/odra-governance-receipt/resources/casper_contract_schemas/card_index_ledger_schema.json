@@ -1,0 +1,96 @@
+{
+  "casper_contract_schema_version": 1,
+  "toolchain": "rustc 1.98.0-nightly (df6ee909e 2026-06-28)",
+  "authors": [],
+  "repository": null,
+  "homepage": null,
+  "contract_name": "CardIndexLedger",
+  "contract_version": "0.1.0",
+  "types": [],
+  "errors": [],
+  "entry_points": [
+    {
+      "name": "seal_card_root",
+      "description": "",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "sequence",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "card_root_hex",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "get_card_root",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "sequence",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "Option": "String"
+      },
+      "is_contract_context": true,
+      "access": "public"
+    }
+  ],
+  "events": [],
+  "call": {
+    "wasm_file_name": "CardIndexLedger.wasm",
+    "description": null,
+    "arguments": [
+      {
+        "name": "odra_cfg_package_hash_key_name",
+        "description": "The arg name for the package hash key name.",
+        "ty": "String",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_allow_key_override",
+        "description": "If true and the key specified in odra_cfg_package_hash_key_name already exists, it will be overwritten.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgradable",
+        "description": "The arg name for the contract upgradeability setting.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgrade",
+        "description": "The arg name for telling the installer that the contract is being upgraded.",
+        "ty": "Bool",
+        "optional": false
+      }
+    ]
+  }
+}

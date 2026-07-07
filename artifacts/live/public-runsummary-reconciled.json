@@ -1,0 +1,71 @@
+{
+  "runs": [
+    {
+      "agent_processing_secs": 1300,
+      "card_count": 12,
+      "card_types": [
+        "ProposalCard",
+        "TriageDecision",
+        "Assessment",
+        "Verdict",
+        "Assessment",
+        "Verdict",
+        "ResponsePlan",
+        "StructuredApproval",
+        "CasperExecutionReceipt",
+        "GovernanceSummary",
+        "CasperExecutionReceipt",
+        "GovernanceSummary"
+      ],
+      "casper_block_height": 8340490,
+      "casper_deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+      "casper_explorer_url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+      "casper_receipt": {
+        "api_proof_url": "https://api.testnet.cspr.live/deploys/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+        "block_height": 8340490,
+        "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+        "deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+        "explorer_url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+        "transaction_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
+      },
+      "challenges": 1,
+      "disagreement_events": 1,
+      "handoff_method": "adjacent published card-role transitions",
+      "handoffs": 11,
+      "human_intervention": true,
+      "human_rejections": 0,
+      "human_review_secs": 30655,
+      "plan_revisions": 0,
+      "post_plan_wait_secs": 30655,
+      "proposal_family": "governance feed",
+      "proposal_id": "DAO-PROP-6CB25C",
+      "receipt_verified": true,
+      "signal_service": "casper-liquidity-strategy-alpha",
+      "state": "RESOLVED",
+      "total_resolution_secs": 31955
+    }
+  ],
+  "summary": {
+    "avg_agent_processing_secs": 1300,
+    "avg_human_review_secs": 30655,
+    "avg_post_plan_wait_secs": 30655,
+    "avg_total_resolution_secs": 31955,
+    "baseline_note": "Comparison is shown only when MANUAL_BASELINE_SECS is explicitly configured.",
+    "baseline_source": null,
+    "disagreement_events": 1,
+    "handoff_method": "adjacent published card-role transitions",
+    "human_intervention_method": "consumed human_approval authorizations",
+    "human_interventions": 1,
+    "manual_baseline_secs": null,
+    "proposals_challenged": 1,
+    "proposals_measured": 1,
+    "proposals_revised": 0,
+    "receipt_verified_count": 1,
+    "speedup_factor": null,
+    "total_challenges_issued": 1,
+    "total_handoffs": 11,
+    "total_human_rejections": 0,
+    "total_plan_revisions": 0,
+    "unsafe_plans_blocked": null
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "approved_allocation_bps": 0,
+  "canonical_proof_unchanged": true,
+  "casper_submission": {
+    "call_target": "contract",
+    "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+    "contract_version": null,
+    "deploy_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+    "driver": "pycspr",
+    "duration_seconds": 12.84,
+    "entry_point": "store_governance_receipt",
+    "final_card_hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+    "finality": {
+      "attempt": 3,
+      "block_hash": "37e0936b0a1cc591b701e301cde92e6a7f62f5a584fd14688df8fd0675ee9777",
+      "block_height": 8370023,
+      "deploy_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+      "error_message": null,
+      "hash_kind": "deploy",
+      "rpc_method": "info_get_deploy",
+      "status": "finalized",
+      "success": true
+    },
+    "mode": "real",
+    "network": "casper-testnet",
+    "payload_hash": "799be4245f1ffccf3737973e9aaa0fa8471626cae0ec86dfcb138a7f0dbb2830",
+    "plan_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+    "proposal_id": "DAO-PROP-RWA-001",
+    "rpc_response": {
+      "id": "concordia-1782979908245",
+      "jsonrpc": "2.0",
+      "result": {
+        "api_version": "2.0.0",
+        "deploy_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc"
+      }
+    },
+    "status": "success",
+    "submitted_at": "2026-07-02T08:12:00.589860+00:00",
+    "transaction_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc"
+  },
+  "chain_errors": [],
+  "chain_valid": true,
+  "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+  "deploy_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+  "entry_point": "store_governance_receipt",
+  "final_card_sequence": 7,
+  "generated_at": "2026-07-01T08:00:00+00:00",
+  "message": "Supplemental dynamic execution proof processed on Casper Testnet.",
+  "processed_at": "2026-07-02T08:12:00.589860+00:00",
+  "proposal_id": "DAO-PROP-RWA-001",
+  "receipt_request": {
+    "action_hash": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf",
+    "agent_council_version": "concordia-dao-council-2026.06",
+    "approved_allocation_bps": "",
+    "casper_network": "casper-test",
+    "decision": "ESCALATED_TO_HUMANS",
+    "dissent_hash": "",
+    "evidence_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json",
+    "final_card_hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+    "payload_hash": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11",
+    "plan_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+    "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+    "policy_version": "2026.06.cas-v1",
+    "proposal_id": "DAO-PROP-RWA-001",
+    "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+    "risk_level": "MEDIUM",
+    "risk_score": "58",
+    "treasury_action": "record_rwa_invoice_pool_review"
+  },
+  "requested_allocation_bps": 0,
+  "rwa_document_hash": "sha256:1dea7193031ad17c45aec10682c180d422891ffeb200dfd0414262fd3babfe3e",
+  "rwa_document_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json",
+  "scope": "supplemental_rwa_run",
+  "status": "processed",
+  "transaction_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+  "typed_runtime_args": {
+    "agent_action_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf"
+    },
+    "agent_council_version": {
+      "cl_type": "String",
+      "value": "concordia-dao-council-2026.06"
+    },
+    "approved_allocation_bps": {
+      "cl_type": "U32",
+      "value": 0
+    },
+    "casper_network": {
+      "cl_type": "String",
+      "value": "casper-test"
+    },
+    "decision": {
+      "cl_type": "String",
+      "value": "ESCALATED_TO_HUMANS"
+    },
+    "dissent_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "evidence_uri": {
+      "cl_type": "String",
+      "value": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json"
+    },
+    "final_card_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a"
+    },
+    "plan_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc"
+    },
+    "policy_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+    },
+    "policy_version": {
+      "cl_type": "String",
+      "value": "2026.06.cas-v1"
+    },
+    "proposal_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11"
+    },
+    "proposal_id": {
+      "cl_type": "String",
+      "value": "DAO-PROP-RWA-001"
+    },
+    "proposal_type": {
+      "cl_type": "String",
+      "value": "RWA_INVOICE_POOL_ONBOARDING"
+    },
+    "risk_level": {
+      "cl_type": "String",
+      "value": "MEDIUM"
+    },
+    "risk_score": {
+      "cl_type": "U32",
+      "value": 58
+    },
+    "treasury_action": {
+      "cl_type": "String",
+      "value": "record_rwa_invoice_pool_review"
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "verified_at": "2026-06-30T05:14:50.280516+00:00",
+  "services": {
+    "data": [
+      "concordia-gateway",
+      "jaeger-all-in-one",
+      "concordia-x402-provider"
+    ],
+    "total": 3,
+    "limit": 0,
+    "offset": 0,
+    "errors": null
+  },
+  "operations": {
+    "concordia-gateway": {
+      "data": [
+        "GET /api/casper/finality/{deploy_hash} http send",
+        "GET /integrations/status http send",
+        "GET /api/rooms",
+        "GET http send",
+        "GET /api/rooms http send",
+        "GET /suppression-rules",
+        "GET /evidence/{proposal_id} http send",
+        "HEAD /api/ipfs/{cid} http send",
+        "GET /cspr-click/unsigned-receipt/{proposal_id}",
+        "GET /api/ipfs/{cid} http send",
+        "GET /agent-status http send",
+        "GET /cspr-click/unsigned-receipt/{proposal_id} http send",
+        "GET /proposals",
+        "GET /stats http send",
+        "x402.provider_redeem_attempt",
+        "GET /api/ipfs/{cid}",
+        "GET /evidence/{proposal_id}",
+        "GET /stats/runsummary http send",
+        "GET /health",
+        "POST /ipfs/evidence/{proposal_id}",
+        "GET /x402/governance-report",
+        "POST /api/prepare/{card_type} http receive",
+        "POST /heartbeat http send",
+        "GET /cspr-click/quorum-approval/{proposal_id}",
+        "GET /api/casper/finality/{deploy_hash}",
+        "GET /proof-pack/{proposal_id} http send",
+        "GET /agent-status",
+        "GET /stats/runsummary",
+        "GET /agent-skills",
+        "POST /heartbeat",
+        "GET /suppression-rules http send",
+        "ipfs.add_json",
+        "casper.await_finality",
+        "HEAD /api/ipfs/{cid}",
+        "GET /council-messages/{proposal_id} http send",
+        "GET /api/rooms/{room_id}/messages",
+        "GET /health http send",
+        "GET /stats",
+        "POST",
+        "GET /cspr-click/quorum-approval/{proposal_id} http send",
+        "GET /adversarial-safety-demo/{proposal_id} http send",
+        "GET /proposals/{proposal_id} http send",
+        "GET /proof-pack/{proposal_id}",
+        "POST /api/prepare/{card_type}",
+        "POST /heartbeat http receive",
+        "GET /adversarial-safety-demo/{proposal_id}",
+        "POST /ipfs/evidence/{proposal_id} http send",
+        "GET",
+        "GET /proof-center/{proposal_id} http send",
+        "GET /x402/governance-report http send",
+        "GET /api/rooms/{room_id}/messages http send",
+        "GET /proposals/{proposal_id}",
+        "GET /ready http send",
+        "x402.provider_redeem_flow",
+        "GET /council-messages/{proposal_id}",
+        "GET /ready",
+        "ipfs.cat",
+        "POST /api/prepare/{card_type} http send",
+        "GET /integrations/status",
+        "GET /proposals http send",
+        "GET /proof-center/{proposal_id}",
+        "GET /agent-skills http send"
+      ],
+      "total": 62,
+      "limit": 0,
+      "offset": 0,
+      "errors": null
+    },
+    "jaeger-all-in-one": {
+      "data": [
+        "/api/operations",
+        "/api/services",
+        "/api/traces",
+        "/api/services/{service}/operations"
+      ],
+      "total": 4,
+      "limit": 0,
+      "offset": 0,
+      "errors": null
+    },
+    "concordia-x402-provider": {
+      "data": [
+        "x402.cspr_live_deploy_lookup",
+        "GET",
+        "GET /health http send",
+        "GET /health",
+        "GET /x402/risk-report",
+        "GET /x402/risk-report http send"
+      ],
+      "total": 6,
+      "limit": 0,
+      "offset": 0,
+      "errors": null
+    }
+  }
+}

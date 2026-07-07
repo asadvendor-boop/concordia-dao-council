@@ -1,0 +1,93 @@
+{
+  "chrome_signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+  "generated_at": "2026-07-01T06:36:07.012136+00:00",
+  "install_upgradable": true,
+  "modules": {
+    "CardIndexLedger": {
+      "constructor_args": {},
+      "install_deploy_hash": "9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e",
+      "install_finality": {
+        "attempt": 2,
+        "block_hash": "e3016e59c13cdf2f6c9fb118febb45da65bc7236996498419ae48f93b7a57a9d",
+        "block_height": 8358506,
+        "deploy_hash": "9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e",
+        "error_message": null,
+        "hash_kind": "deploy",
+        "rpc_method": "info_get_deploy",
+        "status": "finalized",
+        "success": true
+      },
+      "install_upgradable": true,
+      "module": "CardIndexLedger",
+      "package_hash": "hash-8c6dd5c4d0712c8dc05ce32673abc036fed54fd9ee72b8172a0f0391453872fc",
+      "package_key_name": "concordia_topology_20260701_v3_cardindexledger_package_hash",
+      "wasm": {
+        "path": "/app/contracts/odra-governance-receipt/wasm/CardIndexLedger.wasm",
+        "size_bytes": 197532
+      }
+    }
+  },
+  "node_address": "https://node.testnet.casper.network",
+  "proposal_id": "DAO-PROP-6CB25C",
+  "quorum": {
+    "status": "skipped_governance_receipt_not_requested",
+    "steps": {},
+    "threshold": 2
+  },
+  "requested_modules": [
+    "CardIndexLedger"
+  ],
+  "schema": "concordia.live-odra-module-exercise.v1",
+  "server_signer": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151",
+  "standalone_calls": {
+    "CardIndexLedger": {
+      "entry_point": "seal_card_root",
+      "result": {
+        "acceptance_passed": true,
+        "call_target": "package",
+        "contract_hash": "hash-8c6dd5c4d0712c8dc05ce32673abc036fed54fd9ee72b8172a0f0391453872fc",
+        "contract_version": 1,
+        "deploy_hash": "02C94F29588eb00c71136Feab2EA6DcfE3c91180EE552b942AF2A48536F430a9",
+        "duration_seconds": 7.1,
+        "entry_point": "seal_card_root",
+        "expected_failure": false,
+        "finality": {
+          "attempt": 2,
+          "block_hash": "60d6adeb3ecb0339d7eab3d948560cfd6e78fd3a1feb7a803eec35377e060660",
+          "block_height": 8358507,
+          "deploy_hash": "02C94F29588eb00c71136Feab2EA6DcfE3c91180EE552b942AF2A48536F430a9",
+          "error_message": null,
+          "hash_kind": "deploy",
+          "rpc_method": "info_get_deploy",
+          "status": "finalized",
+          "success": true
+        },
+        "rpc_response": {
+          "id": "concordia-odra-1782887781294",
+          "jsonrpc": "2.0",
+          "result": {
+            "api_version": "2.0.0",
+            "deploy_hash": "02c94f29588eb00c71136feab2ea6dcfe3c91180ee552b942af2a48536f430a9"
+          }
+        },
+        "status": "success",
+        "typed_runtime_args": {
+          "card_root_hex": {
+            "cl_type": "String",
+            "value": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622"
+          },
+          "proposal_id": {
+            "cl_type": "String",
+            "value": "DAO-PROP-6CB25C"
+          },
+          "sequence": {
+            "cl_type": "U32",
+            "value": 6
+          }
+        }
+      }
+    }
+  },
+  "status": "module_calls_complete",
+  "web_signer": "0203389c4766d3b122107f67c7f898f6f9a842c4419f8215b03d048393823a97c18e"
+}

@@ -1,0 +1,11 @@
+[[contracts]]
+fqn = "concordia_odra_governance_receipt::CouncilRegistry"
+
+[[contracts]]
+fqn = "concordia_odra_governance_receipt::CardIndexLedger"
+
+[[contracts]]
+fqn = "concordia_odra_governance_receipt::TreasuryPolicy"
+
+[[contracts]]
+fqn = "concordia_odra_governance_receipt::GovernanceReceipt"

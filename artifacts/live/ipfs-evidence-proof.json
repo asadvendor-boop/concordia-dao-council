@@ -1,0 +1,13 @@
+{
+  "archive_type": "ConcordiaGovernanceArchive",
+  "cid": "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
+  "gateway_http_status": 200,
+  "gateway_url": "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
+  "generated_at_utc": "2026-06-29T22:49:29Z",
+  "ipfs_uri": "ipfs://bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
+  "proof_center_contains_cid": true,
+  "proof_pack_contains_cid": true,
+  "proposal_id": "DAO-PROP-6CB25C",
+  "provider": "kubo",
+  "status": "verified"
+}

@@ -1,0 +1,512 @@
+{
+  "acceptance_criteria": {
+    "browser_wallet_signer_approved": {
+      "block_hash": "7686c16fd1c2869a09b6658636031483884761b4e480f8949cc827c4ce65fb2c",
+      "block_height": 8349632,
+      "deploy_hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+      "entry_point": "approve_envelope",
+      "signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+      "status": "verified",
+      "url": "https://testnet.cspr.live/deploy/7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da"
+    },
+    "final_receipt_after_quorum": {
+      "block_hash": "994d3baff4c9ef2ff047465796ac8448b069abdf4aff4fdc0d822b7d8e6f8808",
+      "block_height": 8350034,
+      "deploy_hash": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+      "entry_point": "store_governance_receipt",
+      "error_message": null,
+      "package_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+      "signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+      "status": "verified",
+      "success": true,
+      "typed_arg_count": 17,
+      "url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928"
+    },
+    "pre_quorum_execution_blocked": {
+      "deploy_hash": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+      "expected_error": "QuorumNotMet",
+      "note": "The contract rejected store_governance_receipt before quorum threshold was reached.",
+      "status": "verified"
+    },
+    "server_signer_approved": {
+      "deploy_hash": "dd7c68fc3be3295261ed8ca41f51e5dd0840923dc83c1e67ca23ad6f5d6a31c5",
+      "entry_point": "approve_envelope",
+      "status": "verified"
+    }
+  },
+  "envelope_hash": "73f2e934af0302f875ab0f8f3d84b01a45a330032a734bccc84702f82243026d",
+  "generated_at": "2026-06-30T01:34:25.120927+00:00",
+  "live_deploys": {
+    "approve_envelope_browser_wallet": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+    "approve_envelope_server": "dd7c68fc3be3295261ed8ca41f51e5dd0840923dc83c1e67ca23ad6f5d6a31c5",
+    "backend_final_store_governance_receipt": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "configure_quorum": "2000d6725021cf066ed4e93c0fff173bbbb917a01c3660f45910f1752a534cc9",
+    "final_store_governance_receipt": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "pre_quorum_expected_failure": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+    "propose_envelope": "02fb4a8bef918990aaf7466c887200ccafb527de1e1cd92962fb5a3c619f900c"
+  },
+  "missing": [],
+  "next_live_steps": [],
+  "option1_backend_signed_receipt": {
+    "call_target": "package",
+    "contract_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+    "contract_version": 1,
+    "deploy_hash": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "deploy_url": "https://testnet.cspr.live/deploy/0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "entry_point": "store_governance_receipt",
+    "finality": {
+      "attempt": 2,
+      "block_hash": "4603693c889fa766b2295ade54983803542a05b2d5983ce291c2a45d340e2297",
+      "block_height": 8350492,
+      "deploy_hash": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+      "error_message": null,
+      "hash_kind": "deploy",
+      "rpc_method": "info_get_deploy",
+      "status": "finalized",
+      "success": true
+    },
+    "status": "success",
+    "updated_at": "2026-06-30T12:47:38.335483+00:00"
+  },
+  "package_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+  "package_version": 1,
+  "proposal_id": "DAO-PROP-6CB25C",
+  "schema": "concordia.odra-quorum-exercise-proof.v1",
+  "signers": {
+    "chrome_wallet": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+    "server": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151",
+    "threshold": 2,
+    "web_wallet": "0203389c4766d3b122107f67c7f898f6f9a842c4419f8215b03d048393823a97c18e"
+  },
+  "spends_cspr": true,
+  "status": "live_complete",
+  "steps": [
+    {
+      "args": {
+        "signer_a": {
+          "cl_type": "Address",
+          "value": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151"
+        },
+        "signer_b": {
+          "cl_type": "Address",
+          "value": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+        },
+        "signer_c": {
+          "cl_type": "Address",
+          "value": "0203389c4766d3b122107f67c7f898f6f9a842c4419f8215b03d048393823a97c18e"
+        },
+        "threshold": {
+          "cl_type": "U32",
+          "value": 2
+        }
+      },
+      "deploy_hash": "2000d6725021cf066ed4e93c0fff173bbbb917a01c3660f45910f1752a534cc9",
+      "entry_point": "configure_quorum",
+      "expected": "quorum registry configured with threshold 2",
+      "signer": "server",
+      "status": "processed",
+      "step": "configure_quorum"
+    },
+    {
+      "args": {
+        "envelope_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "73f2e934af0302f875ab0f8f3d84b01a45a330032a734bccc84702f82243026d"
+        },
+        "proposal_id": {
+          "cl_type": "String",
+          "value": "DAO-PROP-6CB25C"
+        }
+      },
+      "deploy_hash": "02fb4a8bef918990aaf7466c887200ccafb527de1e1cd92962fb5a3c619f900c",
+      "entry_point": "propose_envelope",
+      "expected": "exact approved envelope root proposed",
+      "signer": "server",
+      "status": "processed",
+      "step": "propose_envelope"
+    },
+    {
+      "args": {
+        "agent_action_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "e1f147e26b2bd81e12af86b3926ca1ef9087ac2a3220ff2a8fd8fa586024bb74"
+        },
+        "agent_council_version": {
+          "cl_type": "String",
+          "value": "concordia-dao-council-2026.06"
+        },
+        "approved_allocation_bps": {
+          "cl_type": "U32",
+          "value": 800
+        },
+        "casper_network": {
+          "cl_type": "String",
+          "value": "casper-test"
+        },
+        "decision": {
+          "cl_type": "String",
+          "value": "APPROVED_WITH_LIMITS"
+        },
+        "dissent_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "53fbf4b6f427cc6f6db0167e1c0eca1d92471f89a66cf1b3c33546ec78b1d4a6"
+        },
+        "evidence_uri": {
+          "cl_type": "String",
+          "value": "ipfs://bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
+        },
+        "final_card_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "710b9ad9885458fe4a381be50b1c0f7c077189774f150ef9110cb4de1ed7ad66"
+        },
+        "plan_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "7d625a7079f0af6bbb669fcf7a425b1988b874227d365eb4f113a27f5d8b7410"
+        },
+        "policy_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "cae4f180a0c4b7aee0b6da9f47e5f1a76b39b5b2a0f53f9d30f8738c6de52d28"
+        },
+        "policy_version": {
+          "cl_type": "String",
+          "value": "2026.06.cas-v1"
+        },
+        "proposal_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "b85a991ef86cfdd14751040207c542c4155809d9fe3bf64c782d49c600c73902"
+        },
+        "proposal_id": {
+          "cl_type": "String",
+          "value": "DAO-PROP-6CB25C"
+        },
+        "proposal_type": {
+          "cl_type": "String",
+          "value": "DEFI_TREASURY_REALLOCATION"
+        },
+        "risk_level": {
+          "cl_type": "String",
+          "value": "MEDIUM"
+        },
+        "risk_score": {
+          "cl_type": "U32",
+          "value": 61
+        },
+        "treasury_action": {
+          "cl_type": "String",
+          "value": "cap_to_800_bps"
+        }
+      },
+      "deploy_hash": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+      "entry_point": "store_governance_receipt",
+      "expected": "reverts with QuorumNotMet before two approvals",
+      "expected_failure": true,
+      "signer": "server",
+      "status": "blocked_as_expected",
+      "step": "pre_quorum_store_governance_receipt"
+    },
+    {
+      "args": {
+        "proposal_id": {
+          "cl_type": "String",
+          "value": "DAO-PROP-6CB25C"
+        }
+      },
+      "deploy_hash": "dd7c68fc3be3295261ed8ca41f51e5dd0840923dc83c1e67ca23ad6f5d6a31c5",
+      "entry_point": "approve_envelope",
+      "expected": "approval count becomes 1 of 2",
+      "signer": "server",
+      "status": "processed",
+      "step": "approve_envelope_server"
+    },
+    {
+      "args": {
+        "proposal_id": {
+          "cl_type": "String",
+          "value": "DAO-PROP-6CB25C"
+        }
+      },
+      "deploy_hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+      "entry_point": "approve_envelope",
+      "expected": "approval count becomes 2 of 2",
+      "signer": "chrome_wallet",
+      "status": "processed",
+      "step": "approve_envelope_chrome_wallet",
+      "wallet_deploy_hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+      "wallet_payload": {
+        "call_target": "package",
+        "chain_name": "casper-test",
+        "contract_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+        "contract_version": 1,
+        "custody_note": "Backend packages the typed Odra call; Casper Wallet/CSPR.click signs and broadcasts in the browser.",
+        "deploy_hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+        "deploy_json": {
+          "approvals": [],
+          "hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+          "header": {
+            "account": "02033c3B4d6EdDAe1bE00F87e635AEBe26A1cb5125ec8D09Be1E95297208C5754ce1",
+            "body_hash": "801eBc070C11E1Cb1E3164aFa6c291a01986BFD87032fD14BdFC560F5110f1e6",
+            "chain_name": "casper-test",
+            "dependencies": [],
+            "gas_price": 1,
+            "timestamp": "2026-06-30T01:34:25.121Z",
+            "ttl": "30minutes"
+          },
+          "payment": {
+            "ModuleBytes": {
+              "args": [
+                [
+                  "amount",
+                  {
+                    "bytes": "0500F2052a01",
+                    "cl_type": "U512",
+                    "parsed": "5000000000"
+                  }
+                ]
+              ],
+              "module_bytes": ""
+            }
+          },
+          "session": {
+            "StoredVersionedContractByHash": {
+              "args": [
+                [
+                  "proposal_id",
+                  {
+                    "bytes": "0F00000044414F2d50524F502D364342323543",
+                    "cl_type": "String",
+                    "parsed": "DAO-PROP-6CB25C"
+                  }
+                ]
+              ],
+              "entry_point": "approve_envelope",
+              "hash": "1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+              "version": 1
+            }
+          }
+        },
+        "driver": "pycspr",
+        "entry_point": "approve_envelope",
+        "payload_kind": "deploy",
+        "payment_amount": 5000000000,
+        "signer_public_key": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+        "status": "ready",
+        "typed_runtime_args": {
+          "proposal_id": {
+            "cl_type": "String",
+            "value": "DAO-PROP-6CB25C"
+          }
+        },
+        "wallet_payload": {
+          "approvals": [],
+          "hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+          "header": {
+            "account": "02033c3B4d6EdDAe1bE00F87e635AEBe26A1cb5125ec8D09Be1E95297208C5754ce1",
+            "body_hash": "801eBc070C11E1Cb1E3164aFa6c291a01986BFD87032fD14BdFC560F5110f1e6",
+            "chain_name": "casper-test",
+            "dependencies": [],
+            "gas_price": 1,
+            "timestamp": "2026-06-30T01:34:25.121Z",
+            "ttl": "30minutes"
+          },
+          "payment": {
+            "ModuleBytes": {
+              "args": [
+                [
+                  "amount",
+                  {
+                    "bytes": "0500F2052a01",
+                    "cl_type": "U512",
+                    "parsed": "5000000000"
+                  }
+                ]
+              ],
+              "module_bytes": ""
+            }
+          },
+          "session": {
+            "StoredVersionedContractByHash": {
+              "args": [
+                [
+                  "proposal_id",
+                  {
+                    "bytes": "0F00000044414F2d50524F502D364342323543",
+                    "cl_type": "String",
+                    "parsed": "DAO-PROP-6CB25C"
+                  }
+                ]
+              ],
+              "entry_point": "approve_envelope",
+              "hash": "1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+              "version": 1
+            }
+          }
+        },
+        "wallet_payload_wrapped": {
+          "deploy": {
+            "approvals": [],
+            "hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+            "header": {
+              "account": "02033c3B4d6EdDAe1bE00F87e635AEBe26A1cb5125ec8D09Be1E95297208C5754ce1",
+              "body_hash": "801eBc070C11E1Cb1E3164aFa6c291a01986BFD87032fD14BdFC560F5110f1e6",
+              "chain_name": "casper-test",
+              "dependencies": [],
+              "gas_price": 1,
+              "timestamp": "2026-06-30T01:34:25.121Z",
+              "ttl": "30minutes"
+            },
+            "payment": {
+              "ModuleBytes": {
+                "args": [
+                  [
+                    "amount",
+                    {
+                      "bytes": "0500F2052a01",
+                      "cl_type": "U512",
+                      "parsed": "5000000000"
+                    }
+                  ]
+                ],
+                "module_bytes": ""
+              }
+            },
+            "session": {
+              "StoredVersionedContractByHash": {
+                "args": [
+                  [
+                    "proposal_id",
+                    {
+                      "bytes": "0F00000044414F2d50524F502D364342323543",
+                      "cl_type": "String",
+                      "parsed": "DAO-PROP-6CB25C"
+                    }
+                  ]
+                ],
+                "entry_point": "approve_envelope",
+                "hash": "1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+                "version": 1
+              }
+            }
+          }
+        }
+      },
+      "wallet_payload_status": "signed_and_broadcast"
+    },
+    {
+      "args": {
+        "agent_action_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "e1f147e26b2bd81e12af86b3926ca1ef9087ac2a3220ff2a8fd8fa586024bb74"
+        },
+        "agent_council_version": {
+          "cl_type": "String",
+          "value": "concordia-dao-council-2026.06"
+        },
+        "approved_allocation_bps": {
+          "cl_type": "U32",
+          "value": 800
+        },
+        "casper_network": {
+          "cl_type": "String",
+          "value": "casper-test"
+        },
+        "decision": {
+          "cl_type": "String",
+          "value": "APPROVED_WITH_LIMITS"
+        },
+        "dissent_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "53fbf4b6f427cc6f6db0167e1c0eca1d92471f89a66cf1b3c33546ec78b1d4a6"
+        },
+        "evidence_uri": {
+          "cl_type": "String",
+          "value": "ipfs://bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
+        },
+        "final_card_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "710b9ad9885458fe4a381be50b1c0f7c077189774f150ef9110cb4de1ed7ad66"
+        },
+        "plan_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "7d625a7079f0af6bbb669fcf7a425b1988b874227d365eb4f113a27f5d8b7410"
+        },
+        "policy_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "cae4f180a0c4b7aee0b6da9f47e5f1a76b39b5b2a0f53f9d30f8738c6de52d28"
+        },
+        "policy_version": {
+          "cl_type": "String",
+          "value": "2026.06.cas-v1"
+        },
+        "proposal_hash": {
+          "cl_type": {
+            "ByteArray": 32
+          },
+          "value": "b85a991ef86cfdd14751040207c542c4155809d9fe3bf64c782d49c600c73902"
+        },
+        "proposal_id": {
+          "cl_type": "String",
+          "value": "DAO-PROP-6CB25C"
+        },
+        "proposal_type": {
+          "cl_type": "String",
+          "value": "DEFI_TREASURY_REALLOCATION"
+        },
+        "risk_level": {
+          "cl_type": "String",
+          "value": "MEDIUM"
+        },
+        "risk_score": {
+          "cl_type": "U32",
+          "value": 61
+        },
+        "treasury_action": {
+          "cl_type": "String",
+          "value": "cap_to_800_bps"
+        }
+      },
+      "deploy_hash": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+      "entry_point": "store_governance_receipt",
+      "expected": "receipt stores after quorum threshold is met",
+      "signer": "server",
+      "status": "processed_after_quorum",
+      "step": "final_store_governance_receipt"
+    }
+  ],
+  "summary": {
+    "acceptance": "complete",
+    "backend_signed_final_receipt": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "backend_signed_final_receipt_after_quorum": true,
+    "backend_signed_final_receipt_url": "https://testnet.cspr.live/deploy/0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "quorum_final_receipt": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "quorum_final_receipt_url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "final_receipt_after_threshold": true,
+    "pre_quorum_blocked": true,
+    "quorum_threshold": "2-of-3",
+    "two_signers_approved": true
+  },
+  "updated_at": "2026-06-30T11:51:29.302304+00:00"
+}

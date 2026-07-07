@@ -1,0 +1,198 @@
+{
+  "name": "concordia-odra-governance-migration",
+  "network": "casper-test",
+  "status": "quorum_enabled_migration_package",
+  "qualification_proof_contract": "contracts/governance-receipt",
+  "odra_package": "contracts/odra-governance-receipt",
+  "deployment_order": [
+    "CouncilRegistry",
+    "CardIndexLedger",
+    "TreasuryPolicy",
+    "GovernanceReceipt"
+  ],
+  "contracts": [
+    {
+      "module": "CouncilRegistry",
+      "state_domain": "agent credential registry",
+      "entrypoints": [
+        {
+          "name": "register_agent",
+          "args": {
+            "agent_id": "String",
+            "public_key_hex": "String"
+          }
+        },
+        {
+          "name": "get_agent_key",
+          "args": {
+            "agent_id": "String"
+          },
+          "returns": "Option<String>"
+        }
+      ]
+    },
+    {
+      "module": "CardIndexLedger",
+      "state_domain": "tamper-evident evidence-card roots",
+      "entrypoints": [
+        {
+          "name": "seal_card_root",
+          "args": {
+            "proposal_id": "String",
+            "sequence": "u32",
+            "card_root_hex": "String"
+          }
+        },
+        {
+          "name": "get_card_root",
+          "args": {
+            "proposal_id": "String",
+            "sequence": "u32"
+          },
+          "returns": "Option<String>"
+        }
+      ]
+    },
+    {
+      "module": "TreasuryPolicy",
+      "state_domain": "DAO Constitution allocation caps",
+      "entrypoints": [
+        {
+          "name": "init",
+          "args": {
+            "max_single_allocation_bps": "u32",
+            "max_high_risk_allocation_bps": "u32"
+          }
+        },
+        {
+          "name": "validate_allocation",
+          "args": {
+            "requested_bps": "u32",
+            "high_risk": "bool"
+          },
+          "returns": "bool"
+        },
+        {
+          "name": "current_caps",
+          "args": {},
+          "returns": "String"
+        }
+      ]
+    },
+    {
+      "module": "GovernanceReceipt",
+      "state_domain": "typed final receipt anchoring with M-of-N quorum gate",
+      "entrypoints": [
+        {
+          "name": "configure_quorum",
+          "args": {
+            "signer_a": "Address",
+            "signer_b": "Address",
+            "signer_c": "Address",
+            "threshold": "u32"
+          }
+        },
+        {
+          "name": "propose_envelope",
+          "args": {
+            "proposal_id": "String",
+            "envelope_hash": "ByteArray(32)"
+          }
+        },
+        {
+          "name": "approve_envelope",
+          "args": {
+            "proposal_id": "String"
+          }
+        },
+        {
+          "name": "quorum_status",
+          "args": {
+            "proposal_id": "String"
+          },
+          "returns": "String"
+        },
+        {
+          "name": "store_governance_receipt",
+          "args": {
+            "proposal_id": "String",
+            "proposal_type": "String",
+            "proposal_hash_hex": "String",
+            "final_card_hash_hex": "String",
+            "plan_hash_hex": "String",
+            "decision": "String",
+            "risk_level": "String",
+            "risk_score": "u32",
+            "treasury_action": "String",
+            "policy_hash_hex": "String",
+            "policy_version": "String",
+            "dissent_hash_hex": "String",
+            "approved_allocation_bps": "u32",
+            "casper_network": "String",
+            "agent_council_version": "String",
+            "evidence_uri": "String",
+            "agent_action_hash_hex": "String"
+          }
+        },
+        {
+          "name": "get_receipt",
+          "args": {
+            "proposal_id": "String"
+          },
+          "returns": "Option<String>"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "local_command": "python scripts/verify_odra_migration.py",
+    "compile_command": "cd contracts/odra-governance-receipt && cargo +nightly check",
+    "wasm_build_command": "cd contracts/odra-governance-receipt && RUSTFLAGS='-C link-arg=--allow-undefined' cargo +nightly build --target wasm32-unknown-unknown --release --bin concordia_odra_governance_receipt_build_contract"
+  },
+  "wasm_build": {
+    "status": "verified_local",
+    "note": "Generated target files are intentionally excluded from clean source archives; judges can reproduce them with verification.wasm_build_command.",
+    "artifacts": [
+      {
+        "path": "target/wasm32-unknown-unknown/release/concordia_odra_governance_receipt_build_contract.wasm",
+        "sha256": "7d00ad339b83b72801b2efa1eace2a86cbddc0aa2f335e5dfdd0f895c792a270"
+      },
+      {
+        "path": "target/wasm32-unknown-unknown/release/deps/concordia_odra_governance_receipt_build_contract-d255d7aec0cdf95e.wasm",
+        "sha256": "7d00ad339b83b72801b2efa1eace2a86cbddc0aa2f335e5dfdd0f895c792a270"
+      }
+    ]
+  },
+  "honesty_boundary": "The canonical live proof uses the deployed Odra GovernanceReceipt receipt path shown in live_proof. This source package adds M-of-N quorum entrypoints and multi-module topology. CouncilRegistry, TreasuryPolicy, and CardIndexLedger are now independently installed and called on Casper Testnet as supplemental topology genesis proof in artifacts/live/odra-topology-genesis-proof.json. This supplemental proof does not replace the canonical reviewer receipt and is not claimed as a fully productized four-contract DAO suite.",
+  "supplemental_topology_genesis": {
+    "artifact": "artifacts/live/odra-topology-genesis-proof.json",
+    "status": "live_complete",
+    "modules": {
+      "CouncilRegistry": {
+        "install_deploy_hash": "9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0",
+        "call_deploy_hash": "eba1f45e3cf2b712f70aec18d71b5315db8c3be2f317b94c4b60acb8a2369774",
+        "entry_point": "register_agent"
+      },
+      "TreasuryPolicy": {
+        "install_deploy_hash": "308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b",
+        "call_deploy_hash": "0b7f58c4e7fc9338839f0a2ceb22cfcb06c2a084f193498830ab254d84776daf",
+        "entry_point": "validate_allocation"
+      },
+      "CardIndexLedger": {
+        "install_deploy_hash": "9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e",
+        "call_deploy_hash": "02c94f29588eb00c71136feab2ea6dcfe3c91180ee552b942af2a48536f430a9",
+        "entry_point": "seal_card_root"
+      }
+    }
+  },
+  "live_proof": {
+    "proposal_id": "DAO-PROP-6CB25C",
+    "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+    "package_hash": "hash-992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a",
+    "install_deploy_hash": "d319157b2638ed8fa7c1dfc639be16e1455530cd568c3cde35bb40c1bd20ba32",
+    "receipt_deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+    "entry_point": "store_governance_receipt",
+    "module_exercised": "GovernanceReceipt.store_governance_receipt",
+    "quorum_revision_status": "implemented_and_local_tests_passed_not_yet_testnet_exercised"
+  }
+}

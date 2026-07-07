@@ -1,0 +1,28 @@
+{
+  "status": "verified_local",
+  "package": "contracts/odra-governance-receipt",
+  "verification_commands": [
+    "python scripts/verify_odra_migration.py",
+    "cd contracts/odra-governance-receipt && cargo +nightly check",
+    "cd contracts/odra-governance-receipt && RUSTFLAGS='-C link-arg=--allow-undefined' cargo +nightly build --target wasm32-unknown-unknown --release --bin concordia_odra_governance_receipt_build_contract"
+  ],
+  "contracts": [
+    "CouncilRegistry",
+    "CardIndexLedger",
+    "TreasuryPolicy",
+    "GovernanceReceipt"
+  ],
+  "wasm_artifacts": [
+    {
+      "path": "contracts/odra-governance-receipt/target/wasm32-unknown-unknown/release/concordia_odra_governance_receipt_build_contract.wasm",
+      "sha256": "29c697c2a702e327e9971ce55f898a02d77641363145562f38e1f14fe2b1552e",
+      "bytes": 162410
+    },
+    {
+      "path": "contracts/odra-governance-receipt/target/wasm32-unknown-unknown/release/deps/concordia_odra_governance_receipt.wasm",
+      "sha256": "4fe0b7d751e28f751b4776a7edce7ebe5c28b535a6a690a76ad6028e49398eb3",
+      "bytes": 206261
+    }
+  ],
+  "clean_archive_note": "Generated target files are intentionally excluded from clean source archives; this proof records the local build output and commands to reproduce it."
+}

@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-07-01T05:40:02Z",
+  "results": [
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "name": "health",
+      "status_code": 200,
+      "summary": {
+        "status": "ok"
+      }
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "name": "ready",
+      "status_code": 200,
+      "summary": {
+        "status": "ready"
+      }
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "expected": 200,
+      "name": "judge",
+      "status_code": 200
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "json_error": "JSONDecodeError('Unterminated string starting at: line 1 column 2959 (char 2958)')",
+      "name": "proof_pack",
+      "status_code": 200
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "name": "redaction",
+      "status_code": 200,
+      "summary": {
+        "status": "passed"
+      }
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "json_error": "JSONDecodeError('Unterminated string starting at: line 1 column 2952 (char 2951)')",
+      "name": "consistency",
+      "status_code": 200
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "json_error": "JSONDecodeError('Unterminated string starting at: line 1 column 2946 (char 2945)')",
+      "name": "dynamic_evidence",
+      "status_code": 200
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "json_error": "JSONDecodeError(\"Expecting ',' delimiter: line 1 column 3001 (char 3000)\")",
+      "name": "dynamic_unsigned",
+      "status_code": 200
+    },
+    {
+      "body": "{\"status\":\"evidence_not_ready\",\"proposal_id\":\"DAO-PROP-UNKNOWN\",\"message\":\"Dynamic receipt preview requires sealed evidence cards.\"}",
+      "expected": 422,
+      "name": "unknown_unsigned",
+      "status_code": 422
+    },
+    {
+      "content_type": "application/json",
+      "expected": 200,
+      "name": "adversarial",
+      "status_code": 200,
+      "summary": {
+        "attempted_allocation_bps": 3000,
+        "casper_transaction_triggered": false,
+        "locke_result": "refused_to_sign",
+        "max_allowed_allocation_bps": 800,
+        "status": "blocked"
+      }
+    }
+  ]
+}

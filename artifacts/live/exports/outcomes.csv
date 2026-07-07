@@ -1,0 +1,5 @@
+outcome,tone,description
+APPROVED_WITH_LIMITS,success,Risky treasury move revised from 30% to the 8% DAO Constitution cap.
+BLOCKED_BY_CONSTITUTION,danger,Any attempt to execute the original 30% allocation is rejected by the action firewall.
+ESCALATED_TO_HUMANS,warning,High-risk or evidence-incomplete proposals require multisig review before Locke can act.
+ABSTAINED_UNTIL_EVIDENCE,muted,RWA onboarding can remain non-executable until evidence hashes and issuer data are present.

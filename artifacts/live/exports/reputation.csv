@@ -1,0 +1,7 @@
+agent,metric,value,signal
+Verity,Challenges raised,2,+2 confirmed policy violation
+Alden,Revisions accepted,1,30% plan revised to 8%
+Locke,Exact-envelope executions,1,1 Casper receipt(s) anchored
+Locke,Rogue executions blocked,1,interactive_adversarial_replay
+Mercer,Live Casper reads,2,Node status and state-root source surfaced
+Wells,Archives sealed,2,Governance archive packet available

@@ -1,0 +1,102 @@
+{
+  "block_height": 8339447,
+  "cspr_live_api_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+  "expected_amount_motes": 2500000000,
+  "gateway_settlement": {
+    "attempt": 1,
+    "mode": "real_provider",
+    "network": "casper-testnet",
+    "provider_response": {
+      "proposal_id": "DAO-PROP-6CB25C",
+      "provider": "concordia-risk-oracle-provider",
+      "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+      "risk_report": {
+        "approved_policy_cap_bps": 800,
+        "provider_signal": "external_paid_provider_verified_before_release",
+        "recommendation": "Release specialist report only after Casper payment proof settles.",
+        "requested_allocation_bps": 3000,
+        "risk_level": "medium-after-policy-cap"
+      },
+      "settlement": {
+        "attempt": 1,
+        "cspr_live_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+        "mode": "real_casper_transfer",
+        "network": "casper-testnet",
+        "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+        "proof": {
+          "expected_amount_motes": 2500000000,
+          "observed_amounts": [
+            2500000000
+          ],
+          "status": "settled",
+          "valid": true
+        },
+        "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+        "status": "settled"
+      },
+      "status": "paid"
+    },
+    "provider_url": "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report",
+    "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+    "status": "settled"
+  },
+  "generated_at_utc": "2026-06-29T22:49:29Z",
+  "integration_status": {
+    "active_paid_provider": "external_provider",
+    "concordia_paid_report_provider_configured": true,
+    "cspr_live_api": "https://api.testnet.cspr.live",
+    "direct_casper_settlement_configured": true,
+    "facilitator_url_configured": false,
+    "indexer_lag_retry_enabled": true,
+    "mode": "real",
+    "network": "casper-testnet",
+    "payment_address_configured": true,
+    "provider_settlement_configured": true,
+    "provider_url_configured": true,
+    "real_settlement_configured": true,
+    "receiver_public_key_configured": true,
+    "retry_attempts": 4,
+    "retry_delay_seconds": 5.0,
+    "settlement_driver": "external_paid_provider"
+  },
+  "observed_amounts": [
+    2500000000
+  ],
+  "paid_report_url": "https://concordia.47.84.232.193.sslip.io/x402/governance-report?proposal_id=DAO-PROP-6CB25C",
+  "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+  "payment_protocol": "x402",
+  "proposal_id": "DAO-PROP-6CB25C",
+  "provider_health_url": "https://x402-provider.47.84.232.193.sslip.io/health",
+  "provider_name": "concordia-risk-oracle-provider",
+  "provider_settlement": {
+    "attempt": 1,
+    "cspr_live_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+    "mode": "real_casper_transfer",
+    "network": "casper-testnet",
+    "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+    "proof": {
+      "expected_amount_motes": 2500000000,
+      "observed_amounts": [
+        2500000000
+      ],
+      "status": "settled",
+      "valid": true
+    },
+    "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+    "status": "settled"
+  },
+  "provider_url": "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report",
+  "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+  "settlement_layer": "Casper Testnet",
+  "settlement_mode": "external_paid_provider",
+  "status": "paid",
+  "verification": {
+    "finality_status": "finalized",
+    "gateway_paid_report_status": "paid",
+    "gateway_paid_report_status_code": 200,
+    "indexer_lag_retry_enabled": true,
+    "provider_paid_report_status": "paid",
+    "provider_paid_report_status_code": 200,
+    "provider_url_configured": true
+  }
+}

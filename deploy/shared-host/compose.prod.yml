@@ -1,0 +1,443 @@
+name: concordia
+
+x-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-concordia-env: &concordia-env
+  APP_ENV: production
+  PUBLIC_BASE_URL: https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}
+  GATEWAY_URL: http://concordia-gateway:8000
+  GATEWAY_DB_PATH: /data/concordia.db
+  PROPOSAL_SIMULATOR_URL: http://concordia-simulator:9000
+  CONCORDIA_REQUIRE_LIVE_LLM: "${CONCORDIA_REQUIRE_LIVE_LLM:-1}"
+  CONCORDIA_DISABLE_LLM_REASONING: "${CONCORDIA_DISABLE_LLM_REASONING:-0}"
+  CONCORDIA_TEST_MODE: "${CONCORDIA_TEST_MODE:-0}"
+  CONCORDIA_RATE_LIMIT_PER_MINUTE: "${CONCORDIA_RATE_LIMIT_PER_MINUTE:-240}"
+  CONCORDIA_RATE_LIMIT_WINDOW_SECONDS: "${CONCORDIA_RATE_LIMIT_WINDOW_SECONDS:-60}"
+  LLM_BASE_URL: ${LLM_BASE_URL:?Set LLM_BASE_URL}
+  LLM_TRIAGE_MODEL: ${LLM_TRIAGE_MODEL:?Set LLM_TRIAGE_MODEL}
+  LLM_DIAGNOSIS_MODEL: ${LLM_DIAGNOSIS_MODEL:?Set LLM_DIAGNOSIS_MODEL}
+  LLM_SAFETY_MODEL: ${LLM_SAFETY_MODEL:?Set LLM_SAFETY_MODEL}
+  LLM_COMMANDER_MODEL: ${LLM_COMMANDER_MODEL:?Set LLM_COMMANDER_MODEL}
+  LLM_OPERATOR_MODEL: ${LLM_OPERATOR_MODEL:?Set LLM_OPERATOR_MODEL}
+  LLM_SCRIBE_MODEL: ${LLM_SCRIBE_MODEL:?Set LLM_SCRIBE_MODEL}
+  RECORDER_AGENT_ID: recorder-concordia-core
+  TRIAGE_AGENT_ID: rowan-proposal-sentinel
+  DIAGNOSIS_AGENT_ID: mercer-treasury-intelligence
+  SAFETY_REVIEWER_AGENT_ID: verity-risk-legal
+  COMMANDER_AGENT_ID: alden-protocol-strategy
+  OPERATOR_AGENT_ID: locke-casper-execution
+  SCRIBE_AGENT_ID: wells-governance-archivist
+  HUMAN_APPROVER_IDS: dao-multisig-1
+  CASPER_EXECUTION_MODE: ${CASPER_EXECUTION_MODE:-real}
+  CASPER_EXECUTION_DRIVER: ${CASPER_EXECUTION_DRIVER:-pycspr}
+  CONCORDIA_PYCSPR_DRY_RUN: "${CONCORDIA_PYCSPR_DRY_RUN:-0}"
+  CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+  CASPER_RECEIPT_CONTRACT_HASH: ${CASPER_RECEIPT_CONTRACT_HASH:?Set CASPER_RECEIPT_CONTRACT_HASH}
+  CASPER_ENTRY_POINT: ${CASPER_ENTRY_POINT:-store_governance_receipt}
+  CASPER_CALL_TARGET: ${CASPER_CALL_TARGET:-contract}
+  CASPER_CONTRACT_VERSION: ${CASPER_CONTRACT_VERSION:-}
+  CASPER_NODE_ADDRESS: ${CASPER_NODE_ADDRESS:-https://node.testnet.casper.network}
+  CSPR_NODE_RPC_URL: ${CSPR_NODE_RPC_URL:-https://node.testnet.casper.network/rpc}
+  CASPER_CHAIN_NAME: ${CASPER_CHAIN_NAME:-casper-test}
+  CASPER_PAYMENT_AMOUNT: ${CASPER_PAYMENT_AMOUNT:-5000000000}
+  CSPR_CLOUD_API_URL: ${CSPR_CLOUD_API_URL:-https://api.testnet.cspr.cloud}
+  CSPR_CLOUD_ACCESS_TOKEN: ${CSPR_CLOUD_ACCESS_TOKEN:-}
+  CSPR_CLOUD_STREAM_URL: ${CSPR_CLOUD_STREAM_URL:-wss://streaming.testnet.cspr.cloud}
+  CASPER_QUORUM_PACKAGE_HASH: ${CASPER_QUORUM_PACKAGE_HASH:-}
+  CASPER_QUORUM_CONTRACT_VERSION: ${CASPER_QUORUM_CONTRACT_VERSION:-1}
+  CASPER_MCP_OFFLINE_MOCK: "${CASPER_MCP_OFFLINE_MOCK:-0}"
+  CASPER_MCP_URL: ${CASPER_MCP_URL:-}
+  CSPR_TRADE_MCP_URL: ${CSPR_TRADE_MCP_URL:-}
+  CSPR_TRADE_API_URL: ${CSPR_TRADE_API_URL:-}
+  CSPR_TRADE_SLIPPAGE_BPS: ${CSPR_TRADE_SLIPPAGE_BPS:-50}
+  CASPER_PUBLIC_STATUS_URL: ${CASPER_PUBLIC_STATUS_URL:-https://testnet.cspr.live}
+  X402_SETTLEMENT_MODE: ${X402_SETTLEMENT_MODE:-demo}
+  X402_PAYMENT_NETWORK: ${X402_PAYMENT_NETWORK:-casper-testnet}
+  X402_PAYMENT_AMOUNT: ${X402_PAYMENT_AMOUNT:-1000000}
+  X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS:-}
+  X402_PAYMENT_RECEIVER_PUBLIC_KEY: ${X402_PAYMENT_RECEIVER_PUBLIC_KEY:-}
+  X402_PAYMENT_ACCOUNT_HASH: ${X402_PAYMENT_ACCOUNT_HASH:-}
+  X402_MAX_ATTEMPTS: ${X402_MAX_ATTEMPTS:-4}
+  X402_RETRY_DELAY_SECONDS: ${X402_RETRY_DELAY_SECONDS:-5}
+  X402_TRANSFER_PAYMENT_AMOUNT: ${X402_TRANSFER_PAYMENT_AMOUNT:-100000000}
+  X402_CSPR_LIVE_API: ${X402_CSPR_LIVE_API:-https://api.testnet.cspr.live}
+  X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
+  X402_FACILITATOR_TOKEN: ${X402_FACILITATOR_TOKEN:-}
+  X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
+  X402_PROVIDER_TOKEN: ${X402_PROVIDER_TOKEN:-}
+  X402_PROVIDER_HOSTNAME: ${X402_PROVIDER_HOSTNAME:-}
+  X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
+  IPFS_API_URL: ${IPFS_API_URL:-http://concordia-ipfs:5001}
+  IPFS_GATEWAY_BASE: ${IPFS_GATEWAY_BASE:-https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}/api/ipfs}
+  OTEL_ENABLED: ${OTEL_ENABLED:-1}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://concordia-otel-collector:4318}
+  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+
+x-concordia-secrets: &concordia-secrets
+  - llm_api_key
+  - gateway_secret
+  - recorder_submission_key
+  - triage_submission_key
+  - diagnosis_submission_key
+  - safety_reviewer_submission_key
+  - commander_submission_key
+  - operator_submission_key
+  - proposal_room_api_key
+  - approval_proxy_secret
+  - approval_ui_bcrypt_hash
+  - approval_ui_csrf_secret
+  - concordia_operator_token
+  - casper_secret_key
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: gateway
+      OTEL_SERVICE_NAME: concordia-gateway
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      GATEWAY_SECRET_FILE: /run/secrets/gateway_secret
+      RECORDER_SUBMISSION_KEY_FILE: /run/secrets/recorder_submission_key
+      TRIAGE_SUBMISSION_KEY_FILE: /run/secrets/triage_submission_key
+      DIAGNOSIS_SUBMISSION_KEY_FILE: /run/secrets/diagnosis_submission_key
+      SAFETY_REVIEWER_SUBMISSION_KEY_FILE: /run/secrets/safety_reviewer_submission_key
+      COMMANDER_SUBMISSION_KEY_FILE: /run/secrets/commander_submission_key
+      OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
+      PROPOSAL_ROOM_API_KEY_FILE: /run/secrets/proposal_room_api_key
+      APPROVAL_PROXY_SECRET_FILE: /run/secrets/approval_proxy_secret
+      APPROVAL_UI_BCRYPT_HASH_FILE: /run/secrets/approval_ui_bcrypt_hash
+      APPROVAL_UI_CSRF_SECRET_FILE: /run/secrets/approval_ui_csrf_secret
+      CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+    secrets: *concordia-secrets
+    volumes:
+      - concordia-data:/data
+    networks:
+      concordia-edge:
+        aliases:
+          - concordia-gateway
+      concordia-internal:
+        aliases:
+          - concordia-gateway
+    depends_on:
+      simulator:
+        condition: service_started
+      ipfs:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *bounded-logging
+
+  x402-provider:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: x402-provider
+      OTEL_SERVICE_NAME: concordia-x402-provider
+      X402_PROVIDER_URL: ""
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      GATEWAY_SECRET_FILE: /run/secrets/gateway_secret
+      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+    secrets:
+      - llm_api_key
+      - gateway_secret
+      - casper_secret_key
+    networks:
+      concordia-edge:
+        aliases:
+          - concordia-x402-provider
+      concordia-internal:
+        aliases:
+          - concordia-x402-provider
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *bounded-logging
+
+  simulator:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: simulator
+    networks:
+      concordia-internal:
+        aliases:
+          - concordia-simulator
+    logging: *bounded-logging
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: ""
+        NEXT_PUBLIC_CONCORDIA_MODE: reviewer
+        NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:-csprclick-template}
+    image: concordia-dashboard:local
+    restart: unless-stopped
+    environment:
+      GATEWAY_URL: http://concordia-gateway:8000
+      CONCORDIA_LIVE_DEMO: "${CONCORDIA_LIVE_DEMO:-0}"
+      CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+    secrets:
+      - concordia_operator_token
+    networks:
+      concordia-edge:
+        aliases:
+          - concordia-dashboard
+      concordia-internal:
+        aliases:
+          - concordia-dashboard
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  rowan:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: rowan
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      TRIAGE_SUBMISSION_KEY_FILE: /run/secrets/triage_submission_key
+    secrets:
+      - llm_api_key
+      - triage_submission_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  mercer:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: mercer
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      DIAGNOSIS_SUBMISSION_KEY_FILE: /run/secrets/diagnosis_submission_key
+    secrets:
+      - llm_api_key
+      - diagnosis_submission_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  verity:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: verity
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      SAFETY_REVIEWER_SUBMISSION_KEY_FILE: /run/secrets/safety_reviewer_submission_key
+    secrets:
+      - llm_api_key
+      - safety_reviewer_submission_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  alden:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: alden
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      COMMANDER_SUBMISSION_KEY_FILE: /run/secrets/commander_submission_key
+    secrets:
+      - llm_api_key
+      - commander_submission_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  locke:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: locke
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
+    secrets:
+      - llm_api_key
+      - operator_submission_key
+      - casper_secret_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  wells:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: agent
+      AGENT_ROLE: wells
+      LLM_API_KEY_FILE: /run/secrets/llm_api_key
+      SCRIBE_SUBMISSION_KEY_FILE: /run/secrets/proposal_room_api_key
+    secrets:
+      - llm_api_key
+      - proposal_room_api_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  recorder-heartbeat:
+    image: concordia-dao-council:local
+    restart: unless-stopped
+    environment:
+      <<: *concordia-env
+      CONCORDIA_SERVICE: recorder-heartbeat
+      RECORDER_SUBMISSION_KEY_FILE: /run/secrets/recorder_submission_key
+    secrets:
+      - recorder_submission_key
+    networks:
+      - concordia-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging: *bounded-logging
+
+  ipfs:
+    image: ipfs/kubo:v0.32.1
+    container_name: concordia-ipfs
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ipfs init --profile=server || true
+        ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001
+        ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+        exec ipfs daemon --migrate=true
+    volumes:
+      - concordia-ipfs-data:/data/ipfs
+    networks:
+      concordia-internal:
+        aliases:
+          - concordia-ipfs
+    mem_limit: 512m
+    logging: *bounded-logging
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    container_name: concordia-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otelcol/config.yml:ro
+    networks:
+      concordia-internal:
+        aliases:
+          - concordia-otel-collector
+      concordia-edge:
+        aliases:
+          - concordia-otel-collector
+    depends_on:
+      jaeger:
+        condition: service_started
+    mem_limit: 256m
+    logging: *bounded-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: concordia-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      QUERY_BASE_PATH: /traces
+      MEMORY_MAX_TRACES: "8000"
+    networks:
+      concordia-internal:
+        aliases:
+          - concordia-jaeger
+      concordia-edge:
+        aliases:
+          - concordia-jaeger
+    mem_limit: 1024m
+    logging: *bounded-logging
+
+networks:
+  concordia-edge:
+    external: true
+    name: concordia-edge
+  concordia-internal:
+    name: concordia-internal
+
+volumes:
+  concordia-data:
+  concordia-ipfs-data:
+
+secrets:
+  llm_api_key:
+    file: ${LLM_API_KEY_FILE:-/opt/apps/concordia/secrets/llm_api_key}
+  gateway_secret:
+    file: ${GATEWAY_SECRET_FILE:-/opt/apps/concordia/secrets/gateway_secret}
+  recorder_submission_key:
+    file: ${RECORDER_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/recorder_submission_key}
+  triage_submission_key:
+    file: ${TRIAGE_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/triage_submission_key}
+  diagnosis_submission_key:
+    file: ${DIAGNOSIS_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/diagnosis_submission_key}
+  safety_reviewer_submission_key:
+    file: ${SAFETY_REVIEWER_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/safety_reviewer_submission_key}
+  commander_submission_key:
+    file: ${COMMANDER_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/commander_submission_key}
+  operator_submission_key:
+    file: ${OPERATOR_SUBMISSION_KEY_FILE:-/opt/apps/concordia/secrets/operator_submission_key}
+  proposal_room_api_key:
+    file: ${PROPOSAL_ROOM_API_KEY_FILE:-/opt/apps/concordia/secrets/proposal_room_api_key}
+  approval_proxy_secret:
+    file: ${APPROVAL_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/approval_proxy_secret}
+  approval_ui_bcrypt_hash:
+    file: ${APPROVAL_UI_BCRYPT_HASH_FILE:-/opt/apps/concordia/secrets/approval_ui_bcrypt_hash}
+  approval_ui_csrf_secret:
+    file: ${APPROVAL_UI_CSRF_SECRET_FILE:-/opt/apps/concordia/secrets/approval_ui_csrf_secret}
+  concordia_operator_token:
+    file: ${CONCORDIA_OPERATOR_TOKEN_FILE:-/opt/apps/concordia/secrets/concordia_operator_token}
+  casper_secret_key:
+    file: ${CASPER_SECRET_KEY_FILE:-/opt/apps/concordia/secrets/casper_secret_key.pem}

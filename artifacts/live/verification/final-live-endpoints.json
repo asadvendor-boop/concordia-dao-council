@@ -1,0 +1,197 @@
+{
+  "base_url": "https://concordia.47.84.232.193.sslip.io",
+  "generated_at": "2026-07-01T05:40:02Z",
+  "results": [
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 312,
+      "json_summary": {
+        "status": "ok"
+      },
+      "method": "GET",
+      "name": "health",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/health"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 314,
+      "json_summary": {
+        "status": "ready"
+      },
+      "method": "GET",
+      "name": "ready",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/ready"
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "elapsed_ms": 309,
+      "method": "GET",
+      "name": "judge",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge"
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "elapsed_ms": 317,
+      "method": "GET",
+      "name": "proof_center",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 315,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4995 (char 4994)')",
+      "method": "GET",
+      "name": "evidence",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 324,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4964 (char 4963)')",
+      "method": "GET",
+      "name": "proof_pack",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 324,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4964 (char 4963)')",
+      "method": "GET",
+      "name": "proof_pack_download",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download"
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "elapsed_ms": 332,
+      "method": "GET",
+      "name": "certificate",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/pdf",
+      "elapsed_ms": 869,
+      "method": "GET",
+      "name": "certificate_pdf",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 331,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4991 (char 4990)')",
+      "method": "GET",
+      "name": "trace",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/api/runs/DAO-PROP-6CB25C/trace"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 328,
+      "json_summary": {
+        "status": "passed"
+      },
+      "method": "GET",
+      "name": "consistency",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/canonical-proof/consistency"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 342,
+      "json_summary": {
+        "status": "passed"
+      },
+      "method": "GET",
+      "name": "redaction",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/redaction-check"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 333,
+      "json_summary": {
+        "payment_verified": true,
+        "report_hash_verified": true,
+        "status": "verified"
+      },
+      "method": "GET",
+      "name": "safepay",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/safepay-lite/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "text/plain; charset=utf-8",
+      "elapsed_ms": 342,
+      "method": "GET",
+      "name": "ipfs",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 314,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4994 (char 4993)')",
+      "method": "GET",
+      "name": "dynamic_evidence",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 450,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4990 (char 4989)')",
+      "method": "GET",
+      "name": "dynamic_unsigned",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/cspr-click/unsigned-receipt/DAO-PROP-DYN-001?signer_public_key=02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 318,
+      "json_parse_error": "JSONDecodeError('Unterminated string starting at: line 1 column 4972 (char 4971)')",
+      "method": "GET",
+      "name": "dynamic_quorum",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/cspr-click/quorum-receipt/DAO-PROP-DYN-001?signer_public_key=02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+    },
+    {
+      "body_prefix": "{\"status\":\"evidence_not_ready\",\"proposal_id\":\"DAO-PROP-UNKNOWN\",\"message\":\"Dynamic receipt preview requires sealed evidence cards.\"}",
+      "expected_error": true,
+      "method": "GET",
+      "name": "unknown_unsigned",
+      "status_code": 422,
+      "url": "https://concordia.47.84.232.193.sslip.io/cspr-click/unsigned-receipt/DAO-PROP-UNKNOWN?signer_public_key=02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+    },
+    {
+      "body_prefix": "{\"status\":\"evidence_not_ready\",\"proposal_id\":\"DAO-PROP-UNKNOWN\",\"message\":\"Dynamic quorum receipt preview requires sealed evidence cards.\"}",
+      "expected_error": true,
+      "method": "GET",
+      "name": "unknown_quorum",
+      "status_code": 422,
+      "url": "https://concordia.47.84.232.193.sslip.io/cspr-click/quorum-receipt/DAO-PROP-UNKNOWN?signer_public_key=02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+    },
+    {
+      "content_type": "application/json",
+      "elapsed_ms": 323,
+      "json_summary": {
+        "attempted_allocation_bps": 3000,
+        "casper_transaction_triggered": false,
+        "locke_result": "refused_to_sign",
+        "max_allowed_allocation_bps": 800,
+        "status": "blocked"
+      },
+      "method": "POST",
+      "name": "adversarial",
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/adversarial-replay/DAO-PROP-6CB25C"
+    }
+  ]
+}

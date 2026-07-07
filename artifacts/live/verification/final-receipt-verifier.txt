@@ -1,0 +1,8 @@
+Concordia receipt verification passed.
+proposal_id: DAO-PROP-6CB25C
+deploy_hash: e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852
+contract_hash: hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1
+entry_point: store_governance_receipt
+quorum_threshold: 2-of-3
+quorum_wallet_final_receipt: 9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928
+quorum_backend_final_receipt: 0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91

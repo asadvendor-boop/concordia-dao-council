@@ -1,0 +1,98 @@
+{
+  "chrome_signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+  "generated_at": "2026-07-01T06:35:08.061359+00:00",
+  "install_upgradable": true,
+  "modules": {
+    "TreasuryPolicy": {
+      "constructor_args": {
+        "max_high_risk_allocation_bps": {
+          "cl_type": "U32",
+          "value": 300
+        },
+        "max_single_allocation_bps": {
+          "cl_type": "U32",
+          "value": 800
+        }
+      },
+      "install_deploy_hash": "308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b",
+      "install_finality": {
+        "attempt": 2,
+        "block_hash": "cd07a96e16d6df24e9313603ffd531bf07220d876799a1949b9278a00cf277c4",
+        "block_height": 8358499,
+        "deploy_hash": "308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b",
+        "error_message": null,
+        "hash_kind": "deploy",
+        "rpc_method": "info_get_deploy",
+        "status": "finalized",
+        "success": true
+      },
+      "install_upgradable": true,
+      "module": "TreasuryPolicy",
+      "package_hash": "hash-67c927d14c3c88698673c2e517b49678411efe4c9f219d51b01bda0b950fec5c",
+      "package_key_name": "concordia_topology_20260701_v3_treasurypolicy_package_hash",
+      "wasm": {
+        "path": "/app/contracts/odra-governance-receipt/wasm/TreasuryPolicy.wasm",
+        "size_bytes": 196999
+      }
+    }
+  },
+  "node_address": "https://node.testnet.casper.network",
+  "proposal_id": "DAO-PROP-6CB25C",
+  "quorum": {
+    "status": "skipped_governance_receipt_not_requested",
+    "steps": {},
+    "threshold": 2
+  },
+  "requested_modules": [
+    "TreasuryPolicy"
+  ],
+  "schema": "concordia.live-odra-module-exercise.v1",
+  "server_signer": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151",
+  "standalone_calls": {
+    "TreasuryPolicy": {
+      "entry_point": "validate_allocation",
+      "result": {
+        "acceptance_passed": true,
+        "call_target": "package",
+        "contract_hash": "hash-67c927d14c3c88698673c2e517b49678411efe4c9f219d51b01bda0b950fec5c",
+        "contract_version": 1,
+        "deploy_hash": "0B7F58C4E7fc9338839f0A2ceb22Cfcb06c2A084F193498830aB254D84776Daf",
+        "duration_seconds": 7.05,
+        "entry_point": "validate_allocation",
+        "expected_failure": false,
+        "finality": {
+          "attempt": 2,
+          "block_hash": "07c0b4985f551b7e800c17edad5e29e5923d26f616798339da354ebc5dd7d295",
+          "block_height": 8358500,
+          "deploy_hash": "0B7F58C4E7fc9338839f0A2ceb22Cfcb06c2A084F193498830aB254D84776Daf",
+          "error_message": null,
+          "hash_kind": "deploy",
+          "rpc_method": "info_get_deploy",
+          "status": "finalized",
+          "success": true
+        },
+        "rpc_response": {
+          "id": "concordia-odra-1782887722364",
+          "jsonrpc": "2.0",
+          "result": {
+            "api_version": "2.0.0",
+            "deploy_hash": "0b7f58c4e7fc9338839f0a2ceb22cfcb06c2a084f193498830ab254d84776daf"
+          }
+        },
+        "status": "success",
+        "typed_runtime_args": {
+          "high_risk": {
+            "cl_type": "Bool",
+            "value": false
+          },
+          "requested_bps": {
+            "cl_type": "U32",
+            "value": 800
+          }
+        }
+      }
+    }
+  },
+  "status": "module_calls_complete",
+  "web_signer": "0203389c4766d3b122107f67c7f898f6f9a842c4419f8215b03d048393823a97c18e"
+}

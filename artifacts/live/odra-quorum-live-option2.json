@@ -1,0 +1,62 @@
+{
+  "_snapshot_captured_at_utc": "2026-06-30T14:02:59.584271+00:00",
+  "_snapshot_source_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C",
+  "acceptance_criteria": {
+    "browser_wallet_signer_approved": {
+      "block_hash": "7686c16fd1c2869a09b6658636031483884761b4e480f8949cc827c4ce65fb2c",
+      "block_height": 8349632,
+      "deploy_hash": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+      "entry_point": "approve_envelope",
+      "signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+      "status": "verified",
+      "url": "https://testnet.cspr.live/deploy/7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da"
+    },
+    "final_receipt_after_quorum": {
+      "block_hash": "994d3baff4c9ef2ff047465796ac8448b069abdf4aff4fdc0d822b7d8e6f8808",
+      "block_height": 8350034,
+      "deploy_hash": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+      "entry_point": "store_governance_receipt",
+      "error_message": null,
+      "package_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+      "signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+      "status": "verified",
+      "success": true,
+      "typed_arg_count": 17,
+      "url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928"
+    },
+    "pre_quorum_execution_blocked": {
+      "deploy_hash": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+      "expected_error": "QuorumNotMet",
+      "note": "The contract rejected store_governance_receipt before quorum threshold was reached.",
+      "status": "verified"
+    },
+    "server_signer_approved": {
+      "deploy_hash": "dd7c68fc3be3295261ed8ca41f51e5dd0840923dc83c1e67ca23ad6f5d6a31c5",
+      "entry_point": "approve_envelope",
+      "status": "verified"
+    }
+  },
+  "live_deploys": {
+    "approve_envelope_browser_wallet": "7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
+    "approve_envelope_server": "dd7c68fc3be3295261ed8ca41f51e5dd0840923dc83c1e67ca23ad6f5d6a31c5",
+    "backend_final_store_governance_receipt": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "configure_quorum": "2000d6725021cf066ed4e93c0fff173bbbb917a01c3660f45910f1752a534cc9",
+    "final_store_governance_receipt": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "pre_quorum_expected_failure": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+    "propose_envelope": "02fb4a8bef918990aaf7466c887200ccafb527de1e1cd92962fb5a3c619f900c"
+  },
+  "schema": "concordia.odra-quorum-exercise-proof.v1",
+  "status": "live_complete",
+  "summary": {
+    "acceptance": "complete",
+    "backend_signed_final_receipt": "0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "backend_signed_final_receipt_after_quorum": true,
+    "backend_signed_final_receipt_url": "https://testnet.cspr.live/deploy/0f1a50CE889886A2DAe022AF582E92e83C54cFDd33D72510A148B8817C37fb91",
+    "quorum_final_receipt": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "quorum_final_receipt_url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
+    "final_receipt_after_threshold": true,
+    "pre_quorum_blocked": true,
+    "quorum_threshold": "2-of-3",
+    "two_signers_approved": true
+  }
+}

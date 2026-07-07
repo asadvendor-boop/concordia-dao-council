@@ -1,0 +1,159 @@
+{
+  "acceptance": {
+    "canonical_receipt_unchanged": true,
+    "card_index_ledger_installed_and_called": true,
+    "council_registry_installed_and_called": true,
+    "treasury_policy_installed_with_constructor_caps_and_called": true
+  },
+  "generated_at": "2026-07-01T08:35:35.678104+00:00",
+  "historical_failed_attempts": [
+    {
+      "deploy_hash": "f5097b0fabba0f8a4fd31a4f4c32a6caada9345ab7194893c9d66606e037da0b",
+      "module": "CouncilRegistry",
+      "note": "Historical failed attempt retained for spend transparency; not part of the successful topology genesis proof.",
+      "reason": "out_of_gas",
+      "status": "failed"
+    },
+    {
+      "deploy_hash": "e046881a46b433b52d507399340a56322ce9cbbb560223a78517ed6ca3243478",
+      "module": "TreasuryPolicy",
+      "note": "Historical failed attempt before constructor caps were added; not part of the successful topology genesis proof.",
+      "reason": "missing_constructor_args_user_error_64658",
+      "status": "failed"
+    }
+  ],
+  "honesty_boundary": "Supplemental Odra topology genesis independently installed and exercised CouncilRegistry through a representative register_agent call, TreasuryPolicy through validate_allocation, and CardIndexLedger through seal_card_root on Casper Testnet. The canonical reviewer proof remains GovernanceReceipt deploy e926...d852; this topology proof is not a replacement for the canonical receipt and is not claimed as a fully productized four-contract DAO suite.",
+  "modules": {
+    "CardIndexLedger": {
+      "install": {
+        "block_hash": "e3016e59c13cdf2f6c9fb118febb45da65bc7236996498419ae48f93b7a57a9d",
+        "block_height": 8358506,
+        "constructor_args": {},
+        "deploy_hash": "9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e",
+        "explorer_url": "https://testnet.cspr.live/deploy/9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e",
+        "success": true
+      },
+      "module": "CardIndexLedger",
+      "package_hash": "hash-8c6dd5c4d0712c8dc05ce32673abc036fed54fd9ee72b8172a0f0391453872fc",
+      "package_key_name": "concordia_topology_20260701_v3_cardindexledger_package_hash",
+      "source_artifact": "artifacts/live/odra-topology-cardindexledger-v3-proof.json",
+      "standalone_call": {
+        "block_hash": "60d6adeb3ecb0339d7eab3d948560cfd6e78fd3a1feb7a803eec35377e060660",
+        "block_height": 8358507,
+        "deploy_hash": "02c94f29588eb00c71136feab2ea6dcfe3c91180ee552b942af2a48536f430a9",
+        "entry_point": "seal_card_root",
+        "explorer_url": "https://testnet.cspr.live/deploy/02c94f29588eb00c71136feab2ea6dcfe3c91180ee552b942af2a48536f430a9",
+        "success": true,
+        "typed_runtime_args": {
+          "card_root_hex": {
+            "cl_type": "String",
+            "value": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622"
+          },
+          "proposal_id": {
+            "cl_type": "String",
+            "value": "DAO-PROP-6CB25C"
+          },
+          "sequence": {
+            "cl_type": "U32",
+            "value": 6
+          }
+        }
+      },
+      "status": "live_complete"
+    },
+    "CouncilRegistry": {
+      "install": {
+        "block_hash": "97bdcbd57ec63795b578d30e18fb1ceaea4978f21db8fe75ea9ce16c2fe6b995",
+        "block_height": 8358402,
+        "constructor_args": {},
+        "deploy_hash": "9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0",
+        "explorer_url": "https://testnet.cspr.live/deploy/9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0",
+        "success": true
+      },
+      "module": "CouncilRegistry",
+      "package_hash": "hash-d498116d3544cba543470562ac844b1b33108f7980d0203c2bbe3e204fc97aa6",
+      "package_key_name": "concordia_topology_20260701_v2_councilregistry_package_hash",
+      "source_artifact": "artifacts/live/odra-topology-councilregistry-proof.json",
+      "standalone_call": {
+        "block_hash": "93ac3b220713d8351154e7ed9073a5c8fe2874d0c559458e808cae6a2695a10b",
+        "block_height": 8358403,
+        "deploy_hash": "eba1f45e3cf2b712f70aec18d71b5315db8c3be2f317b94c4b60acb8a2369774",
+        "entry_point": "register_agent",
+        "explorer_url": "https://testnet.cspr.live/deploy/eba1f45e3cf2b712f70aec18d71b5315db8c3be2f317b94c4b60acb8a2369774",
+        "success": true,
+        "typed_runtime_args": {
+          "agent_id": {
+            "cl_type": "String",
+            "value": "Locke"
+          },
+          "public_key_hex": {
+            "cl_type": "String",
+            "value": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151"
+          }
+        }
+      },
+      "status": "live_complete"
+    },
+    "TreasuryPolicy": {
+      "install": {
+        "block_hash": "cd07a96e16d6df24e9313603ffd531bf07220d876799a1949b9278a00cf277c4",
+        "block_height": 8358499,
+        "constructor_args": {
+          "max_high_risk_allocation_bps": {
+            "cl_type": "U32",
+            "value": 300
+          },
+          "max_single_allocation_bps": {
+            "cl_type": "U32",
+            "value": 800
+          }
+        },
+        "deploy_hash": "308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b",
+        "explorer_url": "https://testnet.cspr.live/deploy/308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b",
+        "success": true
+      },
+      "module": "TreasuryPolicy",
+      "package_hash": "hash-67c927d14c3c88698673c2e517b49678411efe4c9f219d51b01bda0b950fec5c",
+      "package_key_name": "concordia_topology_20260701_v3_treasurypolicy_package_hash",
+      "source_artifact": "artifacts/live/odra-topology-treasurypolicy-v3-proof.json",
+      "standalone_call": {
+        "block_hash": "07c0b4985f551b7e800c17edad5e29e5923d26f616798339da354ebc5dd7d295",
+        "block_height": 8358500,
+        "deploy_hash": "0b7f58c4e7fc9338839f0a2ceb22cfcb06c2a084f193498830ab254d84776daf",
+        "entry_point": "validate_allocation",
+        "explorer_url": "https://testnet.cspr.live/deploy/0b7f58c4e7fc9338839f0a2ceb22cfcb06c2a084f193498830ab254d84776daf",
+        "success": true,
+        "typed_runtime_args": {
+          "high_risk": {
+            "cl_type": "Bool",
+            "value": false
+          },
+          "requested_bps": {
+            "cl_type": "U32",
+            "value": 800
+          }
+        }
+      },
+      "status": "live_complete"
+    }
+  },
+  "proof_hierarchy": {
+    "canonical_reviewer_proof": {
+      "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+      "explorer_url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+      "note": "Frozen reviewer proof; this topology genesis is supplemental and does not replace it.",
+      "proposal_id": "DAO-PROP-6CB25C",
+      "receipt_deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
+    },
+    "supplemental_topology_genesis": {
+      "modules": [
+        "CouncilRegistry",
+        "TreasuryPolicy",
+        "CardIndexLedger"
+      ],
+      "status": "live_complete"
+    }
+  },
+  "schema": "concordia.odra-topology-genesis-proof.v1",
+  "status": "live_complete"
+}

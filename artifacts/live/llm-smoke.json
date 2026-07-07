@@ -1,0 +1,26 @@
+{
+  "base_url": "https://concordia.47.84.232.193.sslip.io",
+  "checks": {
+    "llm_ready": true,
+    "llm_required": true,
+    "provider": "llm",
+    "provider_request_id": null,
+    "readiness_status": "ready",
+        "model_identity_redacted_for_public_hygiene": true,
+        "requested_model": "configured-live-model",
+        "returned_model": "configured-live-model",
+    "status_code": 200,
+    "usage": {
+      "completion_tokens": 1245,
+      "prompt_tokens": 38,
+      "total_tokens": 1283
+    },
+    "yield_ms": 8293
+  },
+  "generated_at": "2026-06-28T23:22:21.800115+00:00",
+  "passed": true,
+  "project": "Concordia",
+  "proof_type": "live-llm-smoke",
+  "schema_version": 1,
+  "verified_live": true
+}
