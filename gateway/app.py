@@ -262,23 +262,18 @@ def _runtime_data_dir() -> Path:
 def _safe_data_path(base: Path, filename: str) -> Path:
     """Return ``base/filename`` for a filename with no directory component.
 
-    The untrusted ``filename`` is validated to be a bare basename — no path
-    separators and no traversal — before it is joined to ``base``, so no
-    uncontrolled data can steer the resulting filesystem path. The joined
-    result is then re-checked to stay within ``base`` as defence in depth.
+    The untrusted ``filename`` is reduced to its basename (killing any
+    directory component), rejected if it still looks like traversal, and the
+    normalized joined path is required to remain under ``base``.
     """
-    if (
-        filename in {"", ".", ".."}
-        or "/" in filename
-        or "\\" in filename
-        or filename != os.path.basename(filename)
-    ):
+    name = os.path.basename(filename)
+    if name != filename or name in {"", ".", ".."} or "\\" in name:
         raise ValueError("unsafe filename component")
-    base_resolved = base.resolve()
-    candidate = base_resolved / filename
-    if not candidate.resolve().is_relative_to(base_resolved):
+    base_dir = os.path.normpath(str(base.resolve()))
+    full = os.path.normpath(os.path.join(base_dir, name))
+    if not full.startswith(base_dir + os.sep):
         raise ValueError("resolved path escapes the permitted directory")
-    return candidate
+    return Path(full)
 
 
 def _ipfs_record_path(proposal_id: str) -> Path:
