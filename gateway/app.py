@@ -259,9 +259,26 @@ def _runtime_data_dir() -> Path:
     return db_path.parent if db_path.parent.as_posix() not in {"", "."} else Path(".")
 
 
+def _safe_data_path(base: Path, filename: str) -> Path:
+    """Return ``base/filename`` for a filename with no directory component.
+
+    The untrusted ``filename`` is reduced to its basename (killing any
+    directory component), rejected if it still looks like traversal, and the
+    normalized joined path is required to remain under ``base``.
+    """
+    name = os.path.basename(filename)
+    if name != filename or name in {"", ".", ".."} or "\\" in name:
+        raise ValueError("unsafe filename component")
+    base_dir = os.path.normpath(str(base.resolve()))
+    full = os.path.normpath(os.path.join(base_dir, name))
+    if not full.startswith(base_dir + os.sep):
+        raise ValueError("resolved path escapes the permitted directory")
+    return Path(full)
+
+
 def _ipfs_record_path(proposal_id: str) -> Path:
     safe = "".join(ch for ch in proposal_id if ch.isalnum() or ch in {"-", "_"}).strip()
-    return _runtime_data_dir() / f"ipfs-evidence-{safe or 'proposal'}.json"
+    return _safe_data_path(_runtime_data_dir(), f"ipfs-evidence-{safe or 'proposal'}.json")
 
 
 def _load_ipfs_record(proposal_id: str) -> dict[str, Any] | None:
@@ -305,7 +322,7 @@ def _attach_ipfs_record(packet: dict[str, Any], proposal_id: str) -> dict[str, A
 
 def _adversarial_record_path(proposal_id: str) -> Path:
     safe = "".join(ch for ch in proposal_id if ch.isalnum() or ch in {"-", "_"}).strip()
-    return _runtime_data_dir() / f"adversarial-safety-{safe or 'proposal'}.json"
+    return _safe_data_path(_runtime_data_dir(), f"adversarial-safety-{safe or 'proposal'}.json")
 
 
 def _load_adversarial_record(proposal_id: str) -> dict[str, Any] | None:
@@ -1215,7 +1232,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         if "/" in filename or "\\" in filename or not filename.endswith(".json"):
             raise HTTPException(status_code=404, detail="RWA artifact not found")
-        path = Path("artifacts/rwa") / filename
+        try:
+            path = _safe_data_path(Path("artifacts/rwa"), filename)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="RWA artifact not found")
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="RWA artifact not found")
         return FileResponse(path, media_type="application/json")

@@ -750,7 +750,9 @@ def build_dynamic_receipt_preview(proposal_id: str, evidence: dict[str, Any]) ->
 
 
 def _allocation_from_prompt(prompt: str) -> int:
-    text = str(prompt or "").lower()
+    # Bound the scanned text so the numeric regexes below run in linear time on
+    # adversarial input (defends against polynomial-backtracking DoS).
+    text = str(prompt or "").lower()[:4096]
     percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
     if percent_match:
         return int(float(percent_match.group(1)) * 100)
@@ -1315,7 +1317,7 @@ def check_canonical_text(surface: str, text: str) -> list[dict[str, str]]:
     for label, expected in required.items():
         if expected not in text:
             missing.append({"surface": surface, "field": label, "expected": expected, "reason": "missing"})
-    if f"http://concordia.47.84.232.193.sslip.io" in text:
+    if re.search(r"http://concordia\.47\.84\.232\.193\.sslip\.io(?![\w.-])", text):
         missing.append({"surface": surface, "field": "public URL", "expected": PUBLIC_BASE_URL, "reason": "non_https_link"})
     bad_contract_url = (
         "testnet.cspr.live/contract-" + "package/"
