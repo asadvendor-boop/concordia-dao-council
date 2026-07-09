@@ -42,3 +42,8 @@ packages = ["shared", "gateway", "agents", "x402_provider"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.uv]
+constraint-dependencies = [
+    "langsmith>=0.8.18",
+]
