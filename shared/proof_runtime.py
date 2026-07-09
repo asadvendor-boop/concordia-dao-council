@@ -750,10 +750,11 @@ def build_dynamic_receipt_preview(proposal_id: str, evidence: dict[str, Any]) ->
 
 
 def _allocation_from_prompt(prompt: str) -> int:
-    # Bound the scanned text so the numeric regexes below run in linear time on
-    # adversarial input (defends against polynomial-backtracking DoS).
+    # Bound both the scanned text and the numeric quantifiers so the regexes
+    # below have linear (non-backtracking) worst-case complexity on adversarial
+    # input. Allocation figures are small, so bounded digit runs lose nothing.
     text = str(prompt or "").lower()[:4096]
-    percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+    percent_match = re.search(r"(\d{1,9}(?:\.\d{1,4})?)\s*%", text)
     if percent_match:
         return int(float(percent_match.group(1)) * 100)
     bps_match = re.search(r"(\d{2,5})\s*(?:bps|basis points)", text)
