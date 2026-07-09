@@ -1317,7 +1317,7 @@ def check_canonical_text(surface: str, text: str) -> list[dict[str, str]]:
     for label, expected in required.items():
         if expected not in text:
             missing.append({"surface": surface, "field": label, "expected": expected, "reason": "missing"})
-    if f"http://concordia.47.84.232.193.sslip.io" in text:
+    if re.search(r"http://concordia\.47\.84\.232\.193\.sslip\.io(?![\w.-])", text):
         missing.append({"surface": surface, "field": "public URL", "expected": PUBLIC_BASE_URL, "reason": "non_https_link"})
     bad_contract_url = (
         "testnet.cspr.live/contract-" + "package/"
