@@ -260,15 +260,23 @@ def _runtime_data_dir() -> Path:
 
 
 def _safe_data_path(base: Path, filename: str) -> Path:
-    """Resolve ``base/filename`` and refuse any result that escapes ``base``.
+    """Return ``base/filename`` for a filename with no directory component.
 
-    Defence in depth: callers already restrict the interpolated component to a
-    small character class, but resolving the final path and asserting it stays
-    within the base directory removes any residual traversal risk.
+    The untrusted ``filename`` is validated to be a bare basename — no path
+    separators and no traversal — before it is joined to ``base``, so no
+    uncontrolled data can steer the resulting filesystem path. The joined
+    result is then re-checked to stay within ``base`` as defence in depth.
     """
+    if (
+        filename in {"", ".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or filename != os.path.basename(filename)
+    ):
+        raise ValueError("unsafe filename component")
     base_resolved = base.resolve()
-    candidate = (base_resolved / filename).resolve()
-    if not candidate.is_relative_to(base_resolved):
+    candidate = base_resolved / filename
+    if not candidate.resolve().is_relative_to(base_resolved):
         raise ValueError("resolved path escapes the permitted directory")
     return candidate
 
