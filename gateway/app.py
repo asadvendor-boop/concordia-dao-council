@@ -259,9 +259,23 @@ def _runtime_data_dir() -> Path:
     return db_path.parent if db_path.parent.as_posix() not in {"", "."} else Path(".")
 
 
+def _safe_data_path(base: Path, filename: str) -> Path:
+    """Resolve ``base/filename`` and refuse any result that escapes ``base``.
+
+    Defence in depth: callers already restrict the interpolated component to a
+    small character class, but resolving the final path and asserting it stays
+    within the base directory removes any residual traversal risk.
+    """
+    base_resolved = base.resolve()
+    candidate = (base_resolved / filename).resolve()
+    if not candidate.is_relative_to(base_resolved):
+        raise ValueError("resolved path escapes the permitted directory")
+    return candidate
+
+
 def _ipfs_record_path(proposal_id: str) -> Path:
     safe = "".join(ch for ch in proposal_id if ch.isalnum() or ch in {"-", "_"}).strip()
-    return _runtime_data_dir() / f"ipfs-evidence-{safe or 'proposal'}.json"
+    return _safe_data_path(_runtime_data_dir(), f"ipfs-evidence-{safe or 'proposal'}.json")
 
 
 def _load_ipfs_record(proposal_id: str) -> dict[str, Any] | None:
@@ -305,7 +319,7 @@ def _attach_ipfs_record(packet: dict[str, Any], proposal_id: str) -> dict[str, A
 
 def _adversarial_record_path(proposal_id: str) -> Path:
     safe = "".join(ch for ch in proposal_id if ch.isalnum() or ch in {"-", "_"}).strip()
-    return _runtime_data_dir() / f"adversarial-safety-{safe or 'proposal'}.json"
+    return _safe_data_path(_runtime_data_dir(), f"adversarial-safety-{safe or 'proposal'}.json")
 
 
 def _load_adversarial_record(proposal_id: str) -> dict[str, Any] | None:
@@ -1215,7 +1229,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         if "/" in filename or "\\" in filename or not filename.endswith(".json"):
             raise HTTPException(status_code=404, detail="RWA artifact not found")
-        path = Path("artifacts/rwa") / filename
+        try:
+            path = _safe_data_path(Path("artifacts/rwa"), filename)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="RWA artifact not found")
         if not path.exists() or not path.is_file():
             raise HTTPException(status_code=404, detail="RWA artifact not found")
         return FileResponse(path, media_type="application/json")

@@ -750,7 +750,9 @@ def build_dynamic_receipt_preview(proposal_id: str, evidence: dict[str, Any]) ->
 
 
 def _allocation_from_prompt(prompt: str) -> int:
-    text = str(prompt or "").lower()
+    # Bound the scanned text so the numeric regexes below run in linear time on
+    # adversarial input (defends against polynomial-backtracking DoS).
+    text = str(prompt or "").lower()[:4096]
     percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
     if percent_match:
         return int(float(percent_match.group(1)) * 100)
