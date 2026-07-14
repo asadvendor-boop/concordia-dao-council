@@ -2184,7 +2184,7 @@ function JudgeWalkthroughPage({ data }) {
           <span>4. Optional testnet sign</span>
         </div>
         <div className="wallet-action-row">
-          <PrimaryButton icon="lock" href="/dashboard/proof?tab=onchain">Open Wallet Sandbox</PrimaryButton>
+          <PrimaryButton icon="lock" href="/proof?tab=onchain">Open Wallet Sandbox</PrimaryButton>
           <PrimaryButton tone="secondary" icon="external" href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} target="_blank" rel="noreferrer">Recorded Wallet Receipt</PrimaryButton>
         </div>
       </div>
