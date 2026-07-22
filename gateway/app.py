@@ -73,6 +73,7 @@ from shared.proof_registry import (
     ProofRegistryRepository,
     RegistryNotFound,
 )
+from gateway.auth import validate_agent_identity_configuration
 from shared.approval import compute_action_hash
 from shared.runtime_secrets import read_secret
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
@@ -80,7 +81,6 @@ from shared.x402_payments import (
     build_payment_request,
     payment_required_headers,
     settle_x402_payment_with_retry,
-    verify_demo_payment_proof,
     x402_payment_correlation_id,
     x402_receiver_public_key,
     x402_status,
@@ -393,6 +393,7 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup."""
     import logging
 
+    validate_agent_identity_configuration()
     db_path = getattr(app.state, "_db_path", None) or os.getenv("GATEWAY_DB_PATH", "concordia.db")
     app.state.db = init_db(db_path)
     csrf = os.getenv("APPROVAL_UI_CSRF_SECRET", "")
