@@ -166,7 +166,7 @@ class ActionReceipt(CardBase):
 
 
 class GovernanceSummary(CardBase):
-    """Scribe's proposal summary."""
+    """Optional presentation summary with no authorization or execution role."""
     card_type: Literal["GovernanceSummary"] = "GovernanceSummary"
     proposal_id: str
     timeline_summary: str = ""

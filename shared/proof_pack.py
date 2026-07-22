@@ -271,6 +271,7 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
     execution_count = 0
     live_read_count = 0
     archive_count = 0
+    optional_summary_count = 0
 
     for card in cards:
         data = card.get("data") or {}
@@ -284,6 +285,9 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
         if card_type == "ResponsePlan" and int(data.get("revision") or 0) >= 1:
             revision_count += 1
         if card_type == "CasperExecutionReceipt":
+            archive = data.get("governance_archive") or {}
+            if isinstance(archive, dict) and archive.get("archive_hash"):
+                archive_count += 1
             for action in data.get("actions_taken") or []:
                 if action.get("status") == "success" and (
                     action.get("deploy_hash") or action.get("transaction_hash")
@@ -294,7 +298,7 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
             if status:
                 live_read_count += 1
         if card_type == "GovernanceSummary":
-            archive_count += 1
+            optional_summary_count += 1
 
     blocked_count = 1 if tamper.get("status") == "blocked" else 0
     return [
@@ -329,10 +333,16 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
             "signal": "Node status and state-root source surfaced" if live_read_count else "No live read surfaced",
         },
         {
-            "agent": "Wells",
+            "agent": "Concordia Core",
             "metric": "Archives sealed",
             "value": archive_count,
-            "signal": "Governance archive packet available" if archive_count else "No archive card recorded",
+            "signal": "Deterministic archive packet available" if archive_count else "No sealed archive recorded",
+        },
+        {
+            "agent": "Wells",
+            "metric": "Optional summaries",
+            "value": optional_summary_count,
+            "signal": "Presentation summary available" if optional_summary_count else "No optional summary recorded",
         },
     ]
 

@@ -543,7 +543,7 @@ async def submit_action_receipt(
         )
         ctx.timeline.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": "wells_governance_archive_created",
+            "event": "core_governance_archive_created",
             "archive_hash": governance_archive.get("archive_hash"),
             "evidence_uri": governance_archive.get("evidence_uri"),
         })
@@ -637,7 +637,9 @@ async def submit_action_receipt(
             f"actions={len(ctx.actions_taken)}"
         )
 
-        # Invite Wells, the Governance Archivist for a conversational summary (best-effort)
+        # Register Wells only as a non-authoritative presentation persona
+        # (best-effort). Core already built the archive and Locke already sealed
+        # it; no response from Wells is part of the authority path.
         scribe_id = os.getenv("SCRIBE_AGENT_ID", "")
         if scribe_id and publish_room:
             try:
@@ -660,16 +662,21 @@ async def submit_action_receipt(
                         (
                             f"@Wells — Execution completed for proposal {proposal_id}. "
                             f"Actions taken: {len(ctx.actions_taken)}. "
-                            f"Please generate an optional governance archive summary."
+                            "Wells is the non-authoritative presentation persona for "
+                            "this already sealed governance archive."
                         ),
                         mentions=[scribe_id],
-                        message_type="governance_summary_request",
-                        metadata={"publisher": "operator", "governance_summary": True},
+                        message_type="archive_presentation_notice",
+                        metadata={
+                            "publisher": "operator",
+                            "presentation_only": True,
+                            "response_expected": False,
+                        },
                     )
                 finally:
                     await scribe_room_client.aclose()
                 logger.info(
-                    f"[operator] Wells invited to room {publish_room[:12]}..."
+                    f"[operator] Wells presentation persona registered in room {publish_room[:12]}..."
                 )
             except Exception as exc:
                 # Best-effort: CasperExecutionReceipt is already certified/sealed

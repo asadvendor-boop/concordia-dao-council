@@ -1,8 +1,8 @@
-"""Deterministic Wells governance archive builder.
+"""Deterministic governance archive builder.
 
-Wells can still provide narrative enrichment, but the judge-facing archive must
-not depend on an optional chat turn. This module creates the structured archive
-that is embedded in Locke's sealed CasperExecutionReceipt after Casper success.
+Concordia Core builds the structured archive and Locke seals it inside the
+CasperExecutionReceipt after Casper success. Wells is presentation-only; the
+authority-bearing archive never depends on an optional persona or model turn.
 """
 from __future__ import annotations
 
@@ -17,13 +17,35 @@ def _hash_payload(payload: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _observed_at(timeline: list[dict[str, Any]]) -> str:
+    """Return the latest input event time as canonical UTC-Z.
+
+    The archive timestamp is part of its hash. Deriving it from the sealed
+    input timeline keeps repeated builds byte-stable; silently substituting the
+    wall clock would make the same evidence produce different archives.
+    """
+
+    for item in reversed(timeline):
+        raw = item.get("timestamp")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("archive requires a valid UTC timeline timestamp") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+            raise ValueError("archive requires a valid UTC timeline timestamp")
+        return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    raise ValueError("archive requires a valid UTC timeline timestamp")
+
+
 def build_governance_archive(
     *,
     proposal_id: str,
     actions_taken: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build Wells' terminal archive from the successful Casper action."""
+    """Build Core's deterministic archive for Locke to seal."""
     casper_action = next(
         (
             action for action in reversed(actions_taken)
@@ -37,8 +59,10 @@ def build_governance_archive(
         "archive_type": "ConcordiaGovernanceArchive",
         "proposal_id": proposal_id,
         "decision": receipt_payload.get("decision", ""),
-        "created_by": "Wells",
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_by": "Concordia Core",
+        "sealed_by": "Locke",
+        "presentation_persona": "Wells",
+        "created_at": _observed_at(timeline),
         "network": casper_action.get("network") or receipt_payload.get("casper_network", "casper-test"),
         "contract_hash": casper_action.get("contract_hash", ""),
         "entry_point": casper_action.get("entry_point", "store_governance_receipt"),
