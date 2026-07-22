@@ -5,18 +5,25 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import sqlite3
+import stat
+from collections.abc import Mapping
 from datetime import datetime, timedelta
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
 
 SCHEMA_VERSION = "concordia.card_chain.v1"
+ROOTS_SCHEMA_VERSION = "concordia.card_chain_roots.v1"
 MAX_CARD_COUNT = 256
 MAX_CARD_JSON_BYTES = 1024 * 1024
 MAX_TOTAL_PREIMAGE_BYTES = 8 * 1024 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_ROOTS_FILE_BYTES = 64 * 1024
 _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _RFC3339_UTC_RE = re.compile(
@@ -35,13 +42,22 @@ _SECRET_FIELD_NAMES = frozenset(
         "authorization",
         "bearer",
         "client_secret",
+        "credential",
+        "credentials",
         "docker_secret",
         "jwt",
+        "key",
         "llm_api_key",
         "openai_api_key",
+        "passphrase",
+        "passwd",
+        "password",
         "private_key",
+        "refresh_token",
         "secret",
         "secret_key",
+        "session_token",
+        "token",
         "wallet_secret",
     }
 )
@@ -72,6 +88,10 @@ class CardChainNotFound(CardChainArtifactError):
     """The requested proposal does not exist."""
 
 
+class CardChainRootsError(CardChainArtifactError):
+    """The immutable release-root configuration is absent or malformed."""
+
+
 class _DuplicateJsonKey(ValueError):
     pass
 
@@ -87,6 +107,64 @@ def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON constant: {value}")
+
+
+def load_card_chain_release_roots(path_value: object) -> Mapping[str, str]:
+    """Load a bounded, strict root mapping once for immutable process use."""
+
+    if type(path_value) is not str or not path_value.strip():
+        raise CardChainRootsError("card-chain roots file is not configured")
+    path = Path(path_value)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise CardChainRootsError("card-chain roots file is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CardChainRootsError("card-chain roots file must be a regular file")
+        if metadata.st_size > MAX_ROOTS_FILE_BYTES:
+            raise CardChainRootsError("card-chain roots file exceeds size limit")
+        chunks: list[bytes] = []
+        remaining = MAX_ROOTS_FILE_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    except OSError as exc:
+        raise CardChainRootsError("card-chain roots file is unreadable") from exc
+    finally:
+        os.close(descriptor)
+    if len(raw) > MAX_ROOTS_FILE_BYTES:
+        raise CardChainRootsError("card-chain roots file exceeds size limit")
+    try:
+        text = raw.decode("utf-8")
+        document = json.loads(
+            text,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise CardChainRootsError("card-chain roots file is invalid JSON") from exc
+    if type(document) is not dict or set(document) != {"schema_version", "roots"}:
+        raise CardChainRootsError("card-chain roots file has invalid shape")
+    if document.get("schema_version") != ROOTS_SCHEMA_VERSION:
+        raise CardChainRootsError("card-chain roots schema_version is invalid")
+    raw_roots = document.get("roots")
+    if type(raw_roots) is not dict or len(raw_roots) > MAX_CARD_COUNT:
+        raise CardChainRootsError("card-chain roots mapping is invalid")
+    roots: dict[str, str] = {}
+    for proposal_id, final_card_hash in raw_roots.items():
+        if _PROPOSAL_ID_RE.fullmatch(proposal_id) is None:
+            raise CardChainRootsError("card-chain root proposal_id is invalid")
+        if type(final_card_hash) is not str or _HEX32_RE.fullmatch(final_card_hash) is None:
+            raise CardChainRootsError("card-chain final root is invalid")
+        roots[proposal_id] = final_card_hash
+    return MappingProxyType(roots)
 
 
 def _parse_preimage(raw: object, sequence_number: int) -> tuple[str, dict[str, Any]]:
@@ -160,9 +238,15 @@ def _validate_public_metadata(
     if type(proposal_id) is not str or _PROPOSAL_ID_RE.fullmatch(proposal_id) is None:
         raise CardChainArtifactError("proposal_id is invalid")
     captured = _require_rfc3339_utc(captured_at, "captured_at")
-    if type(source_url) is not str or len(source_url.encode("utf-8")) > 2048:
+    if type(source_url) is not str:
         raise CardChainArtifactError("source_url is invalid")
-    parsed = urlsplit(source_url)
+    try:
+        source_url_bytes = source_url.encode("utf-8")
+        parsed = urlsplit(source_url)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise CardChainArtifactError("source_url is invalid") from exc
+    if len(source_url_bytes) > 2048:
+        raise CardChainArtifactError("source_url is invalid")
     expected_path = f"/proof-artifacts/v1/{proposal_id}/card-chain"
     if (
         parsed.scheme != "https"
@@ -211,6 +295,8 @@ def _validate_row(
         raise CardChainArtifactError(f"card {sequence_number}: card_type does not match wrapper")
     if expected_sequence == 1 and card_type != "ProposalCard":
         raise CardChainArtifactError("card 1 must be ProposalCard")
+    if expected_sequence > 1 and card_type == "ProposalCard":
+        raise CardChainArtifactError("only card 1 may be ProposalCard")
     identity_field = _HISTORICAL_IDENTITY_FIELD.get(card_type)
     if identity_field is None:
         raise CardChainArtifactError(
@@ -250,16 +336,51 @@ def _validate_row(
 def _read_rows(db: sqlite3.Connection, proposal_id: str) -> list[sqlite3.Row]:
     db.execute("BEGIN DEFERRED")
     try:
-        rows = db.execute(
+        cursor = db.execute(
+            "SELECT known_proposal_id, sequence_number, card_type, card_hash, "
+            "CASE WHEN card_json_bytes <= ? AND cumulative_card_json_bytes <= ? "
+            "THEN card_json ELSE NULL END AS card_json, published_at, "
+            "card_json_bytes, cumulative_card_json_bytes "
+            "FROM ("
             "SELECT p.proposal_id AS known_proposal_id, c.sequence_number, "
-            "c.card_type, c.card_hash, c.card_json, c.published_at "
+            "c.card_type, c.card_hash, c.card_json, c.published_at, "
+            "length(CAST(c.card_json AS BLOB)) AS card_json_bytes, "
+            "sum(COALESCE(length(CAST(c.card_json AS BLOB)), 0)) OVER ("
+            "PARTITION BY p.proposal_id ORDER BY c.sequence_number "
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+            ") AS cumulative_card_json_bytes "
             "FROM proposals AS p "
             "LEFT JOIN cards AS c ON c.proposal_id = p.proposal_id "
-            "WHERE p.proposal_id=? "
-            "ORDER BY c.sequence_number ASC "
+            "WHERE p.proposal_id=?"
+            ") AS bounded_cards "
+            "ORDER BY sequence_number ASC "
             "LIMIT ?",
-            (proposal_id, MAX_CARD_COUNT + 1),
-        ).fetchall()
+            (
+                MAX_CARD_JSON_BYTES,
+                MAX_TOTAL_PREIMAGE_BYTES,
+                proposal_id,
+                MAX_CARD_COUNT + 1,
+            ),
+        )
+        rows: list[sqlite3.Row] = []
+        for row in cursor:
+            if row["sequence_number"] is not None:
+                card_bytes = row["card_json_bytes"]
+                cumulative_bytes = row["cumulative_card_json_bytes"]
+                if type(card_bytes) is not int or card_bytes > MAX_CARD_JSON_BYTES:
+                    raise CardChainArtifactError(
+                        f"card {row['sequence_number']}: card_json size limit exceeded"
+                    )
+                if (
+                    type(cumulative_bytes) is not int
+                    or cumulative_bytes > MAX_TOTAL_PREIMAGE_BYTES
+                ):
+                    raise CardChainArtifactError("total card_json size limit exceeded")
+                if row["card_json"] is None:
+                    raise CardChainArtifactError(
+                        f"card {row['sequence_number']}: bounded card_json unavailable"
+                    )
+            rows.append(row)
         db.execute("COMMIT")
         return rows
     except Exception:
@@ -273,6 +394,7 @@ def build_card_chain_artifact(
     proposal_id: str,
     captured_at: str,
     source_url: str,
+    expected_final_card_hash: str,
 ) -> dict[str, object]:
     """Return exact stored card preimages without parsing or reserializing them."""
 
@@ -284,6 +406,11 @@ def build_card_chain_artifact(
     rows = _read_rows(db, proposal_id)
     if not rows:
         raise CardChainNotFound("proposal not found")
+    if (
+        type(expected_final_card_hash) is not str
+        or _HEX32_RE.fullmatch(expected_final_card_hash) is None
+    ):
+        raise CardChainArtifactError("expected_final_card_hash is invalid")
     card_rows = [row for row in rows if row["sequence_number"] is not None]
     if not card_rows:
         raise CardChainArtifactError("card chain must be non-empty")
@@ -304,6 +431,8 @@ def build_card_chain_artifact(
             raise CardChainArtifactError("total card_json size limit exceeded")
         cards.append(card)
         previous_hash = str(card["card_hash"])
+    if not hmac.compare_digest(previous_hash or "", expected_final_card_hash):
+        raise CardChainArtifactError("expected_final_card_hash does not match terminal card")
     artifact: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "proposal_id": proposal_id,

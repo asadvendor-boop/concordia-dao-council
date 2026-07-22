@@ -42,7 +42,9 @@ from shared.casper_mcp import cspr_trade_status, get_cspr_trade_quote
 from shared.card_chain_artifact import (
     CardChainArtifactError,
     CardChainNotFound,
+    CardChainRootsError,
     build_card_chain_artifact,
+    load_card_chain_release_roots,
 )
 from shared.config import MODELS, get_llm_api_key, get_llm_base_url, llm_readiness_status, public_llm_readiness_status
 from shared.cspr_cloud import cspr_cloud_status
@@ -433,6 +435,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     new_app.state.proof_registry = ProofRegistryRepository(
         os.getenv("CONCORDIA_PROOF_REGISTRY_DIR", "artifacts/live/proof-registry")
     )
+    try:
+        new_app.state.card_chain_release_roots = load_card_chain_release_roots(
+            os.getenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE")
+        )
+    except CardChainRootsError:
+        new_app.state.card_chain_release_roots = None
     instrument_fastapi_app(new_app)
 
     new_app.add_middleware(
@@ -490,12 +498,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
 
     @new_app.get("/proof-artifacts/v1/{proposal_id}/card-chain")
-    async def public_card_chain_artifact(proposal_id: str, request: Request):
+    async def public_card_chain_artifact(proposal_id: str):
         """Publish exact stored card-hash preimages without mutating the chain."""
 
         no_store = {"Cache-Control": "no-store"}
-        base_url = public_base_url or f"{request.url.scheme}://{request.url.netloc}"
-        source_url = f"{base_url}/proof-artifacts/v1/{proposal_id}/card-chain"
+        if not public_base_url:
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        source_url = f"{public_base_url}/proof-artifacts/v1/{proposal_id}/card-chain"
+        roots = new_app.state.card_chain_release_roots
+        expected_final_card_hash = roots.get(proposal_id) if roots is not None else None
         captured_at = datetime.now(UTC).isoformat(timespec="microseconds").replace(
             "+00:00", "Z"
         )
@@ -505,6 +520,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 proposal_id=proposal_id,
                 captured_at=captured_at,
                 source_url=source_url,
+                expected_final_card_hash=expected_final_card_hash,
             )
         except CardChainNotFound:
             return JSONResponse(
