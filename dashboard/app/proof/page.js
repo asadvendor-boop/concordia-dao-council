@@ -17,10 +17,10 @@ const staticProof = {
   dynamicLifecycleReceipt:
     "68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0",
   dynamicArgumentSource: "supplemental_dynamic_execution_artifact",
-  x402Payment:
+  safePayHistoricalPayment:
     "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
   ipfsCid: "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
-  technicalJuryNote: "https://concordia.47.84.232.193.sslip.io/technical-jury-note",
+  technicalJuryNote: "/technical-jury-note",
 };
 
 export default function ProofPage() {
@@ -47,7 +47,7 @@ export default function ProofPage() {
         <p>Final quorum receipt {staticProof.finalQuorumReceipt}</p>
         <p>Supplemental dynamic lifecycle receipt DAO-PROP-DYN-002 {staticProof.dynamicLifecycleReceipt}</p>
         <p>Supplemental dynamic argument source {staticProof.dynamicArgumentSource}</p>
-        <p>x402 SafePay Lite payment {staticProof.x402Payment}</p>
+        <p>SafePay Lite (native CSPR) historical payment {staticProof.safePayHistoricalPayment}</p>
         <p>IPFS evidence CID {staticProof.ipfsCid}</p>
         <p>Technical jury note {staticProof.technicalJuryNote}</p>
         <p>Concordia DAO Council is the Casper governance firewall for AI-run DAOs: Dissent Receipts preserve Verity&apos;s objection, Locke is bound to the exact approved hash, and browser-wallet quorum is proven on-chain when execution is reverted before quorum and accepted after quorum.</p>

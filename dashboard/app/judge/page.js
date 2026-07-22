@@ -13,10 +13,10 @@ const staticJudgeProof = {
   dynamicArgumentSource: "supplemental_dynamic_execution_artifact",
   walletReceipt:
     "56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf",
-  x402Payment:
+  safePayHistoricalPayment:
     "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
   ipfsCid: "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
-  technicalJuryNote: "https://concordia.47.84.232.193.sslip.io/technical-jury-note",
+  technicalJuryNote: "/technical-jury-note",
 };
 
 export default function JudgePage() {
@@ -41,7 +41,7 @@ export default function JudgePage() {
         <p>Supplemental dynamic lifecycle proof DAO-PROP-DYN-002 {staticJudgeProof.dynamicLifecycleReceipt}</p>
         <p>Supplemental dynamic argument source {staticJudgeProof.dynamicArgumentSource}</p>
         <p>Browser wallet receipt {staticJudgeProof.walletReceipt}</p>
-        <p>x402 payment {staticJudgeProof.x402Payment}</p>
+        <p>SafePay Lite (native CSPR) historical payment {staticJudgeProof.safePayHistoricalPayment}</p>
         <p>IPFS CID {staticJudgeProof.ipfsCid}</p>
         <p>Technical jury note {staticJudgeProof.technicalJuryNote}</p>
         <p>Canonical proof is frozen for reproducibility; dynamic proposals are preview/execution-ready unless fully evidenced and signed; full cross-contract production enforcement is roadmap, not overclaimed.</p>
