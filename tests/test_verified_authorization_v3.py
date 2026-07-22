@@ -9,13 +9,14 @@ from pathlib import Path
 import pytest
 
 from shared.v3_authorization import (
-    CanonicalTreasurySnapshot,
     V3AuthorizationError,
     V3ChainReadback,
     V3DeploymentIdentity,
     validate_verified_authorization,
     verify_native_authorization,
 )
+from shared.casper_state_proof import verify_account_balance_at_block
+from tests.v3_readback_fixtures import sealed_v3_readback
 
 
 VECTOR = (
@@ -49,37 +50,93 @@ def _deployment(header: dict[str, object]) -> V3DeploymentIdentity:
 def _readback(
     header: dict[str, object],
     deployment: V3DeploymentIdentity,
+    *,
+    observed_block_height: int = 8_600_000,
 ) -> V3ChainReadback:
     envelope_hash = bytes.fromhex(
         json.loads(VECTOR.read_text(encoding="utf-8"))["hashes"]["envelope_hash"]
     )
-    return V3ChainReadback(
-        network="casper-test",
+    return sealed_v3_readback(
         package_hash=deployment.package_hash,
         contract_hash=deployment.contract_hash,
-        schema_version=3,
         deployment_domain=deployment.deployment_domain,
-        casper_chain_name="casper-test",
         proposal_id=str(header["proposal_id"]),
-        proposed_envelope=envelope_hash,
-        finalized=True,
-        finalized_envelope=envelope_hash,
+        envelope_hash=envelope_hash,
         action_id=bytes.fromhex(str(header["action_id"])),
-        action_authorized=True,
         observed_block_hash=bytes.fromhex("96" * 32),
-        observed_block_height=8_600_000,
+        observed_block_height=observed_block_height,
         observed_state_root_hash=bytes.fromhex("97" * 32),
     )
 
 
-def _snapshot(body: dict[str, object]) -> CanonicalTreasurySnapshot:
-    return CanonicalTreasurySnapshot(
-        network="casper-test",
-        block_hash=bytes.fromhex(str(body["snapshot_block_hash"])),
-        block_height=int(str(body["snapshot_block_height"])),
-        state_root_hash=bytes.fromhex("98" * 32),
-        source_account=bytes.fromhex(str(body["source_account"])),
-        source_balance_motes=int(str(body["treasury_snapshot_balance_motes"])),
+def _snapshot(body: dict[str, object]):
+    block_hash = str(body["snapshot_block_hash"])
+    block_height = int(str(body["snapshot_block_height"]))
+    state_root = "98" * 32
+    account_hash = bytes.fromhex(str(body["source_account"]))
+    balance = int(str(body["treasury_snapshot_balance_motes"]))
+    return verify_account_balance_at_block(
+        chain_status_request={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "info_get_status",
+            "params": {},
+        },
+        chain_status_payload={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"chainspec_name": "casper-test"},
+        },
+        canonical_block_request={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "chain_get_block",
+            "params": {"block_identifier": {"Hash": block_hash}},
+        },
+        canonical_block_payload={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "block": {
+                    "hash": block_hash,
+                    "header": {
+                        "height": block_height,
+                        "state_root_hash": state_root,
+                    },
+                    "body": {},
+                }
+            },
+        },
+        balance_request={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "query_balance_details",
+            "params": {
+                "state_identifier": {"StateRootHash": state_root},
+                "purse_identifier": {
+                    "main_purse_under_account_hash": f"account-hash-{account_hash.hex()}"
+                },
+            },
+        },
+        balance_response={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {
+                "name": "query_balance_details_result",
+                "value": {
+                    "api_version": "2.0.0",
+                    "total_balance": str(balance),
+                    "available_balance": str(balance),
+                    "total_balance_proof": "01" + ("ab" * 96),
+                    "holds": [],
+                },
+            },
+        },
+        expected_account_hash=account_hash,
+        expected_block_hash=bytes.fromhex(block_hash),
+        expected_block_height=block_height,
+        expected_state_root_hash=bytes.fromhex(state_root),
+        expected_balance_motes=balance,
     )
 
 
@@ -128,9 +185,10 @@ def test_factory_rejects_every_mismatched_chain_binding(
 ) -> None:
     header, body = _inputs()
     deployment = _deployment(header)
-    readback = replace(_readback(header, deployment), **{field: bad_value})
+    readback = _readback(header, deployment)
+    object.__setattr__(readback, field, bad_value)
 
-    with pytest.raises(V3AuthorizationError, match=field):
+    with pytest.raises(V3AuthorizationError, match="readback"):
         verify_native_authorization(
             header=header,
             body=body,
@@ -146,8 +204,8 @@ def test_factory_rejects_every_mismatched_chain_binding(
         ("network", "casper-testnet"),
         ("block_hash", bytes.fromhex("b1" * 32)),
         ("block_height", 8_590_557),
-        ("source_account", bytes.fromhex("b2" * 32)),
-        ("source_balance_motes", 625_000_000_001),
+        ("account_hash", bytes.fromhex("b2" * 32)),
+        ("balance_motes", 625_000_000_001),
     ],
 )
 def test_factory_rejects_every_mismatched_snapshot_binding(
@@ -156,9 +214,10 @@ def test_factory_rejects_every_mismatched_snapshot_binding(
 ) -> None:
     header, body = _inputs()
     deployment = _deployment(header)
-    snapshot = replace(_snapshot(body), **{field: bad_value})
+    snapshot = _snapshot(body)
+    object.__setattr__(snapshot, field, bad_value)
 
-    with pytest.raises(V3AuthorizationError, match=field):
+    with pytest.raises(V3AuthorizationError, match="parser-verified"):
         verify_native_authorization(
             header=header,
             body=body,
@@ -171,7 +230,11 @@ def test_factory_rejects_every_mismatched_snapshot_binding(
 def test_snapshot_must_precede_finalization_readback() -> None:
     header, body = _inputs()
     deployment = _deployment(header)
-    readback = replace(_readback(header, deployment), observed_block_height=8_590_556)
+    readback = _readback(
+        header,
+        deployment,
+        observed_block_height=8_590_556,
+    )
 
     with pytest.raises(V3AuthorizationError, match="precede"):
         verify_native_authorization(
@@ -197,5 +260,26 @@ def test_verified_authorization_integrity_seal_rejects_post_factory_mutation() -
     validate_verified_authorization(verified)
     forged = replace(verified, approved_allocation_bps=1_000)
 
-    with pytest.raises(V3AuthorizationError, match="integrity seal"):
+    with pytest.raises(V3AuthorizationError, match="recomputed typed envelope"):
+        validate_verified_authorization(forged)
+
+
+def test_verified_authorization_reparses_raw_snapshot_transcript() -> None:
+    header, body = _inputs()
+    deployment = _deployment(header)
+    verified = verify_native_authorization(
+        header=header,
+        body=body,
+        deployment=deployment,
+        readback=_readback(header, deployment),
+        snapshot=_snapshot(body),
+    )
+    forged = replace(
+        verified,
+        snapshot_balance_response_json=verified.snapshot_balance_response_json.replace(
+            "625000000000", "625000000001"
+        ),
+    )
+
+    with pytest.raises(V3AuthorizationError, match="authorization transcript"):
         validate_verified_authorization(forged)
