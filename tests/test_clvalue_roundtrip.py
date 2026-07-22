@@ -1044,6 +1044,16 @@ def test_offline_verifier_rejects_reversed_finality_observation_time() -> None:
         verify_v3_proof_document(proof)
 
 
+def test_offline_verifier_rejects_observation_chronology_reversed_across_steps() -> None:
+    proof, _, _ = _bound_v3_proof()
+    proof["run"]["steps"][0]["finality_block_evidence"]["observed_at"] = (
+        "2099-01-01T00:00:00.000Z"
+    )
+
+    with pytest.raises(ProofVerificationError, match="observation chronology"):
+        verify_v3_proof_document(proof)
+
+
 def test_offline_verifier_accepts_lost_broadcast_only_after_hash_reconciliation() -> None:
     proof, _, _ = _bound_v3_proof()
     record = proof["run"]["steps"][0]

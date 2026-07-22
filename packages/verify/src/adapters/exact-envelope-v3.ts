@@ -44,7 +44,7 @@ const INSTALL_ARGUMENT_NAMES = Object.freeze([
   "casper_chain_name",
   "installation_nonce",
 ]);
-const STEP_FIELDS = Object.freeze([
+const STEP_BASE_FIELDS = Object.freeze([
   "name",
   "role",
   "custody",
@@ -53,7 +53,6 @@ const STEP_FIELDS = Object.freeze([
   "expected_error",
   "deploy_hash",
   "deploy",
-  "broadcast_transcript",
   "finality_transcript",
   "observed_outcome",
   "submission_state",
@@ -111,7 +110,12 @@ export type ExactEnvelopeV3Facts = Readonly<{
   installBlockHeight: number;
   sourceCommit: string;
   deploymentCommit: string;
-  contractStepOutcomes: Readonly<Record<string, Readonly<{ success: boolean; userError: number | null }>>>;
+  contractStepOutcomes: Readonly<Record<string, Readonly<{
+    success: boolean;
+    userError: number | null;
+    finalizedAt: string;
+    observedAt: string;
+  }>>>;
 }>;
 
 type DeploymentFacts = Readonly<{
@@ -421,6 +425,7 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     "verified_install_deploy",
     "raw_rpc",
   ];
+  if (Object.hasOwn(manifest, "two_node_finality")) dynamicFields.push("two_node_finality");
   exactOwnKeys(manifest, [...Object.keys(packaged), ...dynamicFields], "v3 deployment manifest");
   for (const name of ["schema_id", "network", "package_key_name", "contract_name", "locked_install", "toolchain", "build", "source", "historical_isolation", "abi", "note"] as const) {
     equalCanonical(own(manifest, name), own(packaged, name), `v3 deployment ${name}`);
@@ -460,17 +465,29 @@ function verifyDeployment(value: unknown): DeploymentFacts {
   exactOwnKeys(raw, ["broadcast_response", "install_deploy", "state_root", "installer_account", "package", "contract"], "v3 deployment raw RPC");
   const installDeployHash = hash32Insensitive(own(manifest, "install_deploy_hash"), "v3 install deploy hash");
   const broadcast = record(own(raw, "broadcast_response"), "v3 install broadcast response");
-  exactOwnKeys(broadcast, ["jsonrpc", "id", "result"], "v3 install broadcast response");
-  if (own(broadcast, "jsonrpc") !== "2.0" || own(broadcast, "id") !== "concordia-v3-install") {
-    throw new Error("v3 install broadcast response identity is invalid");
-  }
-  const broadcastResult = record(own(broadcast, "result"), "v3 install broadcast result");
-  exactOwnKeys(broadcastResult, ["api_version", "deploy_hash"], "v3 install broadcast result");
-  if (typeof own(broadcastResult, "api_version") !== "string" || (own(broadcastResult, "api_version") as string).length === 0) {
-    throw new Error("v3 install broadcast api_version is invalid");
-  }
-  if (hash32Insensitive(own(broadcastResult, "deploy_hash"), "v3 install broadcast deploy hash") !== installDeployHash) {
-    throw new Error("v3 install broadcast returned another deploy hash");
+  let installBroadcastWasReconciled = false;
+  if (Object.hasOwn(broadcast, "jsonrpc")) {
+    exactOwnKeys(broadcast, ["jsonrpc", "id", "result"], "v3 install broadcast response");
+    if (own(broadcast, "jsonrpc") !== "2.0" || own(broadcast, "id") !== "concordia-v3-install") {
+      throw new Error("v3 install broadcast response identity is invalid");
+    }
+    const broadcastResult = record(own(broadcast, "result"), "v3 install broadcast result");
+    exactOwnKeys(broadcastResult, ["api_version", "deploy_hash"], "v3 install broadcast result");
+    if (typeof own(broadcastResult, "api_version") !== "string" || (own(broadcastResult, "api_version") as string).length === 0) {
+      throw new Error("v3 install broadcast api_version is invalid");
+    }
+    if (hash32Insensitive(own(broadcastResult, "deploy_hash"), "v3 install broadcast deploy hash") !== installDeployHash) {
+      throw new Error("v3 install broadcast returned another deploy hash");
+    }
+  } else {
+    exactOwnKeys(broadcast, ["status", "deploy_hash"], "v3 reconciled install broadcast evidence");
+    if (
+      own(broadcast, "status") !== "response_lost_reconciled_by_hash" ||
+      hash32Insensitive(own(broadcast, "deploy_hash"), "v3 reconciled install deploy hash") !== installDeployHash
+    ) {
+      throw new Error("v3 reconciled install broadcast evidence is invalid");
+    }
+    installBroadcastWasReconciled = true;
   }
   const installRpc = exactRpc(own(raw, "install_deploy"), "info_get_deploy", "v3 install finality RPC");
   const installRequest = record(own(installRpc, "request"), "v3 install finality request");
@@ -542,6 +559,29 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     throw new Error("v3 install finality summary differs from raw finality evidence");
   }
 
+  let installTwoNode: StepOutcome | null = null;
+  if (Object.hasOwn(manifest, "two_node_finality")) {
+    installTwoNode = verifyFinalityBlockEvidence(
+      own(manifest, "two_node_finality"),
+      {
+        deployHash: installDeployHash,
+        recordedDeploy: own(installResult, "deploy"),
+        publicKey: installerPublicKey,
+        expectedUserError: null,
+        rawOutcome: Object.freeze({
+          deployHash: installDeployHash,
+          success: true,
+          userError: null,
+          blockHash: installBlockHash,
+          blockHeight: installBlockHeight,
+        }),
+        label: "v3 install",
+      },
+    );
+  } else if (installBroadcastWasReconciled) {
+    throw new Error("v3 reconciled install broadcast requires two-node finality evidence");
+  }
+
   const stateRootRpc = exactRpc(own(raw, "state_root"), "chain_get_state_root_hash", "v3 install state-root RPC");
   const stateRootRequest = record(own(stateRootRpc, "request"), "v3 install state-root request");
   equalCanonical(own(stateRootRequest, "params"), { block_identifier: { Hash: installBlockHash } }, "v3 install state-root params");
@@ -553,6 +593,9 @@ function verifyDeployment(value: unknown): DeploymentFacts {
   }
   const stateRoot = hash32(own(stateRootResult, "state_root_hash"), "v3 install state root");
   if (own(manifest, "install_state_root_hash") !== stateRoot) throw new Error("v3 install state root summary mismatch");
+  if (installTwoNode !== null && installTwoNode.stateRootHash !== stateRoot) {
+    throw new Error("v3 install two-node finality state root disagrees with block-pinned state readback");
+  }
   const stateIdentifier = { StateRootHash: stateRoot };
   const accountRpc = exactRpc(own(raw, "installer_account"), "query_global_state", "v3 installer account RPC");
   const accountRequest = record(own(accountRpc, "request"), "v3 installer account request");
@@ -650,7 +693,10 @@ function exactFinalizeArgs(
   for (const name of names) {
     const argument = mapped[name];
     if (!argument) throw new Error(`${label} argument ${name} is missing`);
-    const expectedValue = mutated && name === "approved_allocation_bps" ? "3000" : expected[name];
+    const approvedAllocation = String(expected.approved_allocation_bps);
+    const expectedValue = mutated && name === "approved_allocation_bps"
+      ? (approvedAllocation === "3000" ? "2999" : "3000")
+      : expected[name];
     clValueEquals(argument, expectedValue, `${label} ${name}`);
   }
 }
@@ -977,11 +1023,21 @@ function verifyLiveRun(
   const outcomes: Record<string, StepOutcome> = Object.create(null);
   let previousBlockHeight = -1;
   let previousBlockHash: string | null = null;
+  let previousObservedAt: string | null = null;
   for (let index = 0; index < specs.length; index += 1) {
     const spec = specs[index] as (typeof specs)[number];
     const [name, role, entryPoint, expectedLabel, expectedError, argKind] = spec;
     const step = record(steps[index], `v3 live step ${name}`);
-    exactOwnKeys(step, STEP_FIELDS, `v3 live step ${name}`);
+    const hasBroadcastTranscript = Object.hasOwn(step, "broadcast_transcript");
+    const hasBroadcastEvidence = Object.hasOwn(step, "broadcast_evidence");
+    if (hasBroadcastTranscript === hasBroadcastEvidence) {
+      throw new Error(`v3 live step ${name} must contain exactly one broadcast evidence form`);
+    }
+    exactOwnKeys(
+      step,
+      [...STEP_BASE_FIELDS, hasBroadcastTranscript ? "broadcast_transcript" : "broadcast_evidence"],
+      `v3 live step ${name}`,
+    );
     if (
       own(step, "name") !== name || own(step, "role") !== role || own(step, "entry_point") !== entryPoint ||
       own(step, "expected") !== expectedLabel || own(step, "expected_error") !== expectedError
@@ -1001,13 +1057,24 @@ function verifyLiveRun(
     if (own(step, "submission_state") !== "finalized") {
       throw new Error(`v3 live step ${name} durable submission state is not finalized`);
     }
-    const broadcast = transcript(own(step, "broadcast_transcript"), "account_put_deploy", `v3 live step ${name} broadcast`);
-    equalCanonical(own(broadcast, "params"), { deploy: own(step, "deploy") }, `v3 live step ${name} broadcast params`);
-    const broadcastResponse = record(own(broadcast, "response"), `v3 live step ${name} broadcast response`);
-    const broadcastResult = record(own(broadcastResponse, "result"), `v3 live step ${name} broadcast result`);
-    exactOwnKeys(broadcastResult, ["api_version", "deploy_hash"], `v3 live step ${name} broadcast result`);
-    if (hash32Insensitive(own(broadcastResult, "deploy_hash"), `v3 live step ${name} broadcast hash`) !== deployHash) {
-      throw new Error(`v3 live step ${name} broadcast hash mismatch`);
+    if (hasBroadcastTranscript) {
+      const broadcast = transcript(own(step, "broadcast_transcript"), "account_put_deploy", `v3 live step ${name} broadcast`);
+      equalCanonical(own(broadcast, "params"), { deploy: own(step, "deploy") }, `v3 live step ${name} broadcast params`);
+      const broadcastResponse = record(own(broadcast, "response"), `v3 live step ${name} broadcast response`);
+      const broadcastResult = record(own(broadcastResponse, "result"), `v3 live step ${name} broadcast result`);
+      exactOwnKeys(broadcastResult, ["api_version", "deploy_hash"], `v3 live step ${name} broadcast result`);
+      if (hash32Insensitive(own(broadcastResult, "deploy_hash"), `v3 live step ${name} broadcast hash`) !== deployHash) {
+        throw new Error(`v3 live step ${name} broadcast hash mismatch`);
+      }
+    } else {
+      const reconciled = record(own(step, "broadcast_evidence"), `v3 live step ${name} reconciled broadcast evidence`);
+      exactOwnKeys(reconciled, ["status", "deploy_hash"], `v3 live step ${name} reconciled broadcast evidence`);
+      if (
+        own(reconciled, "status") !== "response_lost_reconciled_by_hash" ||
+        hash32Insensitive(own(reconciled, "deploy_hash"), `v3 live step ${name} reconciled deploy hash`) !== deployHash
+      ) {
+        throw new Error(`v3 live step ${name} reconciled broadcast evidence is invalid`);
+      }
     }
     const rawOutcome = finalityOutcome(own(step, "finality_transcript"), deployHash, own(step, "deploy"), publicKeys[role] as string, `v3 live step ${name}`);
     const outcome = verifyFinalityBlockEvidence(
@@ -1031,8 +1098,12 @@ function verifyLiveRun(
     ) {
       throw new Error(`v3 live step ${name} conflicts with another block at the same height`);
     }
+    if (previousObservedAt !== null && Date.parse(outcome.observedAt) < Date.parse(previousObservedAt)) {
+      throw new Error(`v3 live step ${name} finality observation chronology predates the preceding step`);
+    }
     previousBlockHeight = outcome.blockHeight;
     previousBlockHash = outcome.blockHash;
+    previousObservedAt = outcome.observedAt;
     if ((expectedError === null && !outcome.success) || (expectedError !== null && (outcome.success || outcome.userError !== expectedError))) {
       throw new Error(`v3 live step ${name} raw finality differs from expected outcome`);
     }
@@ -1146,9 +1217,19 @@ export function verifyExactEnvelopeV3Artifact(input: unknown): ExactEnvelopeV3Fa
   ) {
     throw new Error("v3 chain readback conflicts with the exact finalization block at the same height");
   }
-  const publicOutcomes: Record<string, Readonly<{ success: boolean; userError: number | null }>> = Object.create(null);
+  const publicOutcomes: Record<string, Readonly<{
+    success: boolean;
+    userError: number | null;
+    finalizedAt: string;
+    observedAt: string;
+  }>> = Object.create(null);
   for (const [name, outcome] of Object.entries(run.outcomes)) {
-    publicOutcomes[name] = Object.freeze({ success: outcome.success, userError: outcome.userError });
+    publicOutcomes[name] = Object.freeze({
+      success: outcome.success,
+      userError: outcome.userError,
+      finalizedAt: outcome.finalizedAt,
+      observedAt: outcome.observedAt,
+    });
   }
   return Object.freeze({
     schemaId: "concordia.v3-proof-verification.v1",

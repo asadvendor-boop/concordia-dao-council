@@ -15,6 +15,53 @@ function sha256Canonical(value) {
     .digest("hex");
 }
 
+function addInstallTwoNodeFinality(proof) {
+  const deployment = proof.deployment;
+  const installHash = deployment.install_deploy_hash.toLowerCase();
+  const installResult = deployment.raw_rpc.install_deploy.response.result;
+  const blockHash = deployment.install_block_hash;
+  const blockHeight = deployment.install_block_height;
+  const stateRootHash = deployment.install_state_root_hash;
+  const blockTimestamp = "2026-01-23T12:34:58.000Z";
+  const observations = proof.run.steps[0].finality_block_evidence.node_observations.map(
+    (source, index) => {
+      const item = structuredClone(source);
+      item.deploy_request.id = `install-finality-${index}`;
+      item.deploy_request.params = { deploy_hash: installHash };
+      item.deploy_response = {
+        jsonrpc: "2.0",
+        id: item.deploy_request.id,
+        result: structuredClone(installResult),
+      };
+      item.block_request.id = `install-block-${index}`;
+      item.block_request.params = { block_identifier: { Hash: blockHash } };
+      item.block_response.id = item.block_request.id;
+      const block = item.block_response.result.block_with_signatures.block.Version2;
+      block.hash = blockHash;
+      block.header.height = blockHeight;
+      block.header.state_root_hash = stateRootHash;
+      block.header.timestamp = blockTimestamp;
+      block.body.transactions = { "0": [{ Deploy: installHash }] };
+      return item;
+    },
+  );
+  deployment.two_node_finality = {
+    status: "finalized",
+    block_hash: blockHash,
+    block_height: blockHeight,
+    state_root_hash: stateRootHash,
+    block_timestamp: blockTimestamp,
+    finalized_at: blockTimestamp,
+    observed_at: "2026-01-23T12:34:59.000Z",
+    deploy_hash: installHash,
+    corroboration_count: 2,
+    success: true,
+    user_error: null,
+    node_observations: observations,
+    endpoint_identities: observations.map((item) => item.node_url),
+  };
+}
+
 before(() => {
   const script = [
     "import json",
@@ -46,6 +93,60 @@ test("exact-envelope v3 adapter independently verifies the frozen seven-step pro
   assert.equal(facts.contractStepOutcomes.finalize_exact.success, true);
   assert.equal(facts.contractStepOutcomes.finalize_again.userError, 12);
   assert.ok(facts.finalizationBlockHeight <= facts.observedBlockHeight);
+});
+
+test("exact-envelope v3 adapter accepts and verifies producer two-node install finality", () => {
+  const proof = structuredClone(baseline);
+  addInstallTwoNodeFinality(proof);
+  assert.equal(verifyExactEnvelopeV3Artifact(proof).installBlockHash, proof.deployment.install_block_hash);
+
+  proof.deployment.two_node_finality.node_observations[1]
+    .block_response.result.block_with_signatures.block.Version2.header.state_root_hash = "ff".repeat(32);
+  assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /two-node|node facts|state root|finality/i);
+});
+
+test("exact-envelope v3 adapter accepts only hash-reconciled lost broadcast evidence", () => {
+  const proof = structuredClone(baseline);
+  addInstallTwoNodeFinality(proof);
+  proof.deployment.raw_rpc.broadcast_response = {
+    status: "response_lost_reconciled_by_hash",
+    deploy_hash: proof.deployment.install_deploy_hash,
+  };
+  const step = proof.run.steps[0];
+  delete step.broadcast_transcript;
+  step.broadcast_evidence = {
+    status: "response_lost_reconciled_by_hash",
+    deploy_hash: step.deploy_hash.toLowerCase(),
+  };
+  assert.equal(verifyExactEnvelopeV3Artifact(proof).contractStepOutcomes.propose_exact.success, true);
+
+  proof.run.steps[0].broadcast_evidence.deploy_hash = "ff".repeat(32);
+  assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /broadcast.*evidence|deploy hash/i);
+});
+
+test("exact-envelope v3 adapter matches the producer's 3000-bps negative mutation branch", () => {
+  const script = [
+    "import json",
+    "import tests.test_clvalue_roundtrip as fixtures",
+    "from shared.actions_v3 import build_native_material",
+    "document = fixtures._native_document()",
+    "document['header']['requested_allocation_bps'] = '4000'",
+    "document['header']['approved_allocation_bps'] = '3000'",
+    "document['body']['amount_motes'] = '187500000000'",
+    "document['header'], document['body'], _ = build_native_material(document['header'], document['body'])",
+    "fixtures._native_document = lambda: document",
+    "proof, _, _ = fixtures._bound_v3_proof()",
+    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
+  ].join("\n");
+  const raw = execFileSync("uv", ["run", "--frozen", "python", "-c", script], {
+    cwd: REPOSITORY,
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const proof = parseJsonStrict(raw);
+  assert.equal(proof.run.steps[4].deploy.session.StoredContractByHash.args
+    .find(([name]) => name === "approved_allocation_bps")[1].parsed, 2999);
+  assert.equal(verifyExactEnvelopeV3Artifact(proof).contractStepOutcomes.finalize_mutated_3000_bps.userError, 10);
 });
 
 test("exact-envelope v3 adapter rejects every unbound summary or raw-evidence mutation", () => {
@@ -84,6 +185,9 @@ test("exact-envelope v3 adapter rejects every unbound summary or raw-evidence mu
     ["observation before canonical finalization", (proof) => {
       proof.run.steps[0].finality_block_evidence.observed_at = "2026-01-23T12:34:55.000Z";
     }, /predates canonical finalization/i],
+    ["reversed observation chronology", (proof) => {
+      proof.run.steps[0].finality_block_evidence.observed_at = "2099-01-01T00:00:00.000Z";
+    }, /observation chronology/i],
     ["second-node competing block", (proof) => {
       const node = proof.run.steps[0].finality_block_evidence.node_observations[1];
       node.block_response.result.block_with_signatures.block.Version2.hash = "ef".repeat(32);

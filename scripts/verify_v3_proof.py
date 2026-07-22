@@ -661,6 +661,7 @@ def _verify_live_run(
     outcomes: dict[str, Any] = {}
     previous_block_height = install_block_height
     previous_block_hash: str | None = None
+    previous_observed_time: datetime | None = None
     for record, expected in zip(steps, expected_steps, strict=True):
         name, role, entry_point, success_label, error_code, expected_args = expected
         required = {
@@ -789,6 +790,11 @@ def _verify_live_run(
             raise ProofVerificationError(
                 f"{name}: finality observation predates canonical finalization"
             )
+        if previous_observed_time is not None and observed_time < previous_observed_time:
+            raise ProofVerificationError(
+                f"{name}: finality observation chronology predates the preceding step"
+            )
+        previous_observed_time = observed_time
         outcome["finalized_at"] = block_evidence["finalized_at"]
         outcome["observed_at"] = block_evidence["observed_at"]
         observed_result = {
