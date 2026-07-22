@@ -134,3 +134,14 @@ def test_gateway_describes_the_actual_role_taxonomy() -> None:
     assert "authorization-bound Locke" in source
     assert "presentation-only Wells" in source
     assert "Wells, the Governance Archivist, produces" not in source
+
+
+def test_future_reconciliation_attributes_deterministic_output_to_core() -> None:
+    source = (ROOT / "scripts" / "reconcile_final_casper_proof.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"event": "core_governance_archive_created"' in source
+    assert 'role="recorder"' in source
+    assert "Wells sealed" not in source
+    assert "wells_governance_archive_created" not in source

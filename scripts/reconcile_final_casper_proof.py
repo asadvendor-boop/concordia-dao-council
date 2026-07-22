@@ -3,7 +3,7 @@
 
 This is intentionally not a mock-data loader. It imports a real CSPR.live proof
 for a specific proposal and appends the missing terminal Concordia cards:
-human approval, Locke execution receipt, and Wells archive summary.
+human approval, Locke execution receipt, and a Core-built archive summary.
 """
 from __future__ import annotations
 
@@ -300,7 +300,7 @@ def reconcile(
         authorization_id=authorization_id,
         actions_taken=actions_taken,
         timeline=timeline + [{
-            "event": "wells_governance_archive_created",
+            "event": "core_governance_archive_created",
             "status": "archived",
             "archive_hash": archive["archive_hash"],
         }],
@@ -346,10 +346,10 @@ def reconcile(
         db,
         proposal_id=proposal_id,
         card=summary,
-        role="scribe",
-        message_id=f"msg-{proposal_id}-wells-archive",
+        role="recorder",
+        message_id=f"msg-{proposal_id}-core-archive-summary",
         room_id=proposal["room_id"],
-        content="Wells sealed the final governance archive and public review trail.",
+        content="Concordia Core published the deterministic archive summary; Locke sealed the receipt.",
     )
 
     now = _iso_now()
