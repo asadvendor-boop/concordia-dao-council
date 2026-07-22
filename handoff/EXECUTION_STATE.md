@@ -31,11 +31,12 @@ every handoff or live mutation. Claims require the evidence listed here.
 | Official settlement compatibility | BLOCKED_FAIL_CLOSED | public JS/Go use runtime `amount`; live v8 requires `value`; only a real finalized canary can lift |
 | G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
-| WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `b6b2c98`; G1-C6/C8 enforce raw temporal and fork identity; 172 affected Python tests and the prior full/Rust/Wasm gates are green; live deployment remains WP10 |
+| WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `83972a8`; the strict independent audit found no contract defect, and Python now matches the frozen Rust `InvalidActionField` precedence with both action ABIs regression-checked. Fresh gates: 688 Python and 29 Rust tests; live deployment remains WP10 |
 | WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, bounded exact card-chain export, and offline historical receipt verification are committed. Independent C10 review passed the 64 MiB/RSS and nested credential-bypass probes. Only v1 currently has a matching canonical card chain; no root or combined artifact is fabricated locally, and live capture/registry publication remain WP10 |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
-| WP8 verifier | IN_PROGRESS_BLOCKED_ON_PRODUCERS | package implementation and cross-language audit found G1-C6 through C13, missing independent adapters, unusable/unsafe live scope, provenance relabelling and attacker-controlled chronology; card/historical/live-observer work is active, while SafePay/x402 completion waits on corrected producer schemas |
-| WP10 live/release | PENDING | no mutations before local/integration gates |
+| WP8 verifier | PASS_LOCAL_PENDING_PRODUCERS | `8f5ac4a` + truth correction `7aadeca`; independent audit found no P0/P1/P2. Serialized npm gate passes 142/142, lint, audit 0, 132-file pack, temp install/import/bin. Historical v1, exact-v3, native treasury and two-node live corroboration fail closed; WP2/WP3/WP5 adapters await corrected producer schemas. No npm publication yet |
+| WP10 live/release | BLOCKED_ON_LOCAL_SAFETY_REMEDIATION | no live mutation. Read-only audit found non-durable install/step broadcast paths, mutation-by-default runner behavior, single-node step finality, unsafe RPC URL acceptance, and incomplete operator choreography. Durable pre-broadcast journals, two-node block inclusion, safe defaults, exact resume, and a production treasury adapter are required before Testnet |
+| Integration branch | READY_EMPTY | `codex/finals-integration` exists in an isolated worktree at exact freeze commit `b24c040`; no implementation commit has been merged yet |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
 | Claude WP7 | BLOCKED_ON_CORRECTIONS | `dfa3cd2` visual direction approved, implementation NO-GO: stale cross-proposal state, wrong demo protocol/reset, fail-open evidence/approval states, false SafePay fallback, hardcoded proof, role and accessibility defects; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP7.md` |
@@ -53,6 +54,23 @@ every handoff or live mutation. Claims require the evidence listed here.
 - CAIP/EIP-712 domain is `casper:casper-test`, not `casper-test`.
 
 ## Latest checkpoint
+
+WP8 is independently GO at `8f5ac4a` plus `7aadeca`. The package recomputes
+historical-v1, exact-v3, card-chain and native-treasury evidence, upgrades live
+scope only through two explicit corroborating Casper RPC endpoints, and keeps
+unsupported producer proof types unavailable. A fresh serialized run passed
+142 tests, lint and npm audit; the 132-file public tarball installed and ran in
+a clean consumer. The first release deliberately makes no provenance claim and
+remains an interactive public publish by the npm owner; future releases may use
+trusted publishing after the package exists.
+
+The full Python suite now passes 688 tests after the final WP1 parity fix, and
+the v3 crate passes 29 Rust tests. The integration worktree has been created
+from the exact G1 tag but remains empty until all producer branches pass their
+own review. A first read-only WP10 audit is intentionally NO-GO: the existing
+live runner does not yet durably persist every signed deploy before network I/O
+or independently corroborate each step's block inclusion. Remediation is local
+and active; production and Testnet remain untouched.
 
 At the current Codex checkpoint, WP1 and WP6 are committed and independently
 cleared for integration. WP1's typed exact-envelope sibling contract rejects
