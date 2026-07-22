@@ -210,6 +210,19 @@ def test_reg_04_each_current_artifact_class_has_a_distinct_required_check_set() 
     assert len({tuple(REQUIRED_CHECKS_BY_PROOF_TYPE[name]) for name in expected}) == 4
 
 
+def test_reg_04b_treasury_checks_state_the_bounded_rpc_observation_scope() -> None:
+    checks = REQUIRED_CHECKS_BY_PROOF_TYPE["native_treasury_execution_v1"]
+
+    assert "snapshot_block_hash_height_and_state_root_observed_from_casper_rpc" in checks
+    assert (
+        "source_balance_observed_at_snapshot_root_equals_treasury_snapshot_balance_motes"
+        in checks
+    )
+    assert "successful_inclusion_observed_by_two_named_casper_rpc_nodes" in checks
+    assert "no_second_native_transaction_observed_through_block" in checks
+    assert all("for_action_id" not in check for check in checks)
+
+
 def test_reg_05_snapshot_requires_capture_source_hash_and_staleness_observations() -> None:
     assert REQUIRED_CHECKS_BY_PROOF_TYPE["snapshot"] == (
         "artifact_sha256_recomputed",
