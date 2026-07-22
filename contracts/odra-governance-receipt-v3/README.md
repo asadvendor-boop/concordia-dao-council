@@ -1,0 +1,107 @@
+# Concordia Governance Receipt v3
+
+This sibling Odra contract implements the frozen typed exact-envelope v3 ABI.
+It does not modify or upgrade the historical v1/v2 packages, and it does not
+transfer or custody assets. A successful finalization is an on-chain
+authorization receipt for one exact typed action.
+
+Normative interfaces and encodings are frozen at the repository tag
+`concordia-g1-freeze-v2.0-a` in `handoff/G1_INTERFACE_SPEC.md` and
+`handoff/G1_FREEZE_MANIFEST.json`.
+
+## Reproducible local gates
+
+```sh
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --locked
+ODRA_MODULE=GovernanceReceiptV3 \
+  RUSTFLAGS='-C link-arg=--allow-undefined' \
+  cargo build --locked --target wasm32-unknown-unknown --release \
+  --bin concordia_odra_governance_receipt_v3_build_contract
+ODRA_MODULE=GovernanceReceiptV3 \
+  cargo run --locked --bin concordia_odra_governance_receipt_v3_build_schema
+```
+
+The installation transaction must supply these Odra configuration arguments
+exactly:
+
+- `odra_cfg_package_hash_key_name=concordia_governance_receipt_v3`
+- `odra_cfg_is_upgradable=false`
+- `odra_cfg_allow_key_override=false`
+- `odra_cfg_is_upgrade=false`
+
+The package-key name is part of the deployment-domain preimage. A deployment
+using a different value is invalid even if the Wasm itself is unchanged.
+
+The flattened constructor ABI represents account identities as `ByteArray(32)`.
+It cannot recover whether arbitrary bytes originally came from an account,
+contract, or package. Every release install must therefore be assembled by
+`scripts/install_governance_receipt_v3.py` (or the Rust
+`validated_deployment_init_args` boundary), which proves account provenance,
+role separation, threshold, chain, nonce, and all four locked Odra flags before
+building the deploy. Hand-written installer arguments are unsupported.
+
+The generated schema's `call.wasm_file_name` is authoritative. The validated
+release artifact is `wasm/GovernanceReceiptV3.wasm`; `target/` is a disposable,
+ignored cache and must never be staged.
+
+## Release and mixed-custody tooling
+
+The installer requires both the reviewed source commit and the exact commit
+used by the release operator. They are persisted independently and later bound
+by the post-deployment release manifest:
+
+```sh
+uv run python scripts/install_governance_receipt_v3.py \
+  --secret-key /run/secrets/v3_installer \
+  --key-algorithm ED25519 \
+  --roles artifacts/private/v3-roles.json \
+  --installation-nonce NONZERO_32_BYTE_LOWERCASE_HEX \
+  --wasm contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm \
+  --schema contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/governance_receiptv3_schema.json \
+  --source-commit REVIEWED_40_HEX_COMMIT \
+  --deployment-commit RELEASE_40_HEX_COMMIT \
+  --manifest-out artifacts/private/v3-deployment.json
+```
+
+Do not put browser-wallet private keys in that role file. A browser role uses
+only `{ "custody": "browser", "public_key": "..." }`; a server role names a
+mounted key path and algorithm. The live runner stops before every browser
+step and atomically writes a sealed checkpoint containing:
+
+- the exact unsigned deploy;
+- the signer role and public key;
+- network, package, contract, entry point, and argument digest;
+- the completed finalized-step prefix; and
+- a raw, hash-pinned block/contract/package state readback.
+
+Start the sequence with:
+
+```sh
+uv run python scripts/run_v3_live_proof.py artifacts/private/native-input.json \
+  --roles artifacts/private/v3-role-custody.json \
+  --package-hash EXACT_PACKAGE_HASH \
+  --contract-hash EXACT_CONTRACT_HASH \
+  --out artifacts/private/v3-run.checkpoint.json
+```
+
+Sign only the checkpoint's `run.steps[next_step_index].deploy` in the named
+wallet, export the resulting raw signed deploy JSON, then resume while updating
+the same checkpoint path:
+
+```sh
+uv run python scripts/run_v3_live_proof.py artifacts/private/native-input.json \
+  --roles artifacts/private/v3-role-custody.json \
+  --package-hash EXACT_PACKAGE_HASH \
+  --contract-hash EXACT_CONTRACT_HASH \
+  --resume-checkpoint artifacts/private/v3-run.checkpoint.json \
+  --signed-deploy artifacts/private/browser-signed-deploy.json \
+  --out artifacts/private/v3-run.checkpoint.json
+```
+
+An imported deploy is single-use. Wrong or stale checkpoints, changed roles,
+network aliases, package/contract drift, changed entry points or arguments,
+invalid signatures, and duplicate imports fail before broadcast. The runner
+persists the staged signed deploy before broadcasting it, so a restart can
+resume from the checkpoint without requesting or accepting a second import.

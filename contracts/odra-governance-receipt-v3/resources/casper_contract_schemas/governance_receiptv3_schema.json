@@ -1,0 +1,1124 @@
+{
+  "casper_contract_schema_version": 1,
+  "toolchain": "rustc 1.86.0-nightly (854f22563 2025-01-31)",
+  "authors": [],
+  "repository": null,
+  "homepage": null,
+  "contract_name": "GovernanceReceiptV3",
+  "contract_version": "0.1.0",
+  "types": [
+    {
+      "struct": {
+        "name": "EnvelopeApproved",
+        "description": null,
+        "members": [
+          {
+            "name": "proposal_id",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "envelope_hash",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "signer",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "approval_count",
+            "description": null,
+            "ty": "U8"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "EnvelopeFinalized",
+        "description": null,
+        "members": [
+          {
+            "name": "proposal_id",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "envelope_hash",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "action_id",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "finalizer",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "approval_count",
+            "description": null,
+            "ty": "U8"
+          },
+          {
+            "name": "schema_version",
+            "description": null,
+            "ty": "U32"
+          },
+          {
+            "name": "action_kind",
+            "description": null,
+            "ty": "U8"
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "EnvelopeProposed",
+        "description": null,
+        "members": [
+          {
+            "name": "proposal_id",
+            "description": null,
+            "ty": "String"
+          },
+          {
+            "name": "envelope_hash",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "proposer",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "struct": {
+        "name": "V3Initialized",
+        "description": null,
+        "members": [
+          {
+            "name": "schema_version",
+            "description": null,
+            "ty": "U32"
+          },
+          {
+            "name": "deployment_domain",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "proposer",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "finalizer",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "signer_a",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "signer_b",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "signer_c",
+            "description": null,
+            "ty": {
+              "ByteArray": 32
+            }
+          },
+          {
+            "name": "threshold",
+            "description": null,
+            "ty": "U8"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "name": "ActionAlreadyAuthorized",
+      "description": "",
+      "discriminant": 13
+    },
+    {
+      "name": "AlreadyApproved",
+      "description": "",
+      "discriminant": 11
+    },
+    {
+      "name": "AlreadyFinalized",
+      "description": "",
+      "discriminant": 12
+    },
+    {
+      "name": "EnvelopeHashMismatch",
+      "description": "",
+      "discriminant": 10
+    },
+    {
+      "name": "InvalidActionField",
+      "description": "",
+      "discriminant": 16
+    },
+    {
+      "name": "InvalidEnvelopeField",
+      "description": "",
+      "discriminant": 15
+    },
+    {
+      "name": "InvalidProposalId",
+      "description": "",
+      "discriminant": 14
+    },
+    {
+      "name": "InvalidRoleAddress",
+      "description": "",
+      "discriminant": 3
+    },
+    {
+      "name": "InvalidSignerSet",
+      "description": "",
+      "discriminant": 1
+    },
+    {
+      "name": "InvalidThreshold",
+      "description": "",
+      "discriminant": 2
+    },
+    {
+      "name": "ProposalAlreadyExists",
+      "description": "",
+      "discriminant": 7
+    },
+    {
+      "name": "ProposalMissing",
+      "description": "",
+      "discriminant": 9
+    },
+    {
+      "name": "QuorumNotMet",
+      "description": "",
+      "discriminant": 8
+    },
+    {
+      "name": "UnauthorizedFinalizer",
+      "description": "",
+      "discriminant": 6
+    },
+    {
+      "name": "UnauthorizedProposer",
+      "description": "",
+      "discriminant": 4
+    },
+    {
+      "name": "UnauthorizedSigner",
+      "description": "",
+      "discriminant": 5
+    }
+  ],
+  "entry_points": [
+    {
+      "name": "propose_envelope",
+      "description": "",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "envelope_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "approve_envelope",
+      "description": "",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "envelope_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        }
+      ],
+      "return_ty": "Unit",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "finalize_native_transfer",
+      "description": "",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "proposal_nonce",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "decision_code",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "requested_allocation_bps",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "approved_allocation_bps",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "action_kind",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "action_version",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "action_id",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "proposal_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "policy_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "plan_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "final_card_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "dissent_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "agent_action_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "preauth_evidence_root",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "authorized_metadata_root",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "asset_kind",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "source_account",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "recipient_account",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "amount_motes",
+          "description": null,
+          "ty": "U512",
+          "optional": false
+        },
+        {
+          "name": "treasury_snapshot_balance_motes",
+          "description": null,
+          "ty": "U512",
+          "optional": false
+        },
+        {
+          "name": "snapshot_block_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "snapshot_block_height",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "transfer_id",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "action_nonce",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "execution_target",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "execution_version",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "finalize_official_x402",
+      "description": "",
+      "is_mutable": true,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "proposal_nonce",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "decision_code",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "requested_allocation_bps",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "approved_allocation_bps",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "action_kind",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "action_version",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "action_id",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "proposal_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "policy_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "plan_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "final_card_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "dissent_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "agent_action_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "preauth_evidence_root",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "authorized_metadata_root",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "x402_version",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "scheme",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "caip2_network",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "wcspr_package",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "wcspr_contract",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "token_name",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "token_symbol",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "eip712_domain_version",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "token_decimals",
+          "description": null,
+          "ty": "U8",
+          "optional": false
+        },
+        {
+          "name": "payer",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "payee",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "value",
+          "description": null,
+          "ty": "U256",
+          "optional": false
+        },
+        {
+          "name": "resource_url_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "report_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "payment_requirements_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "signed_payment_payload_hash",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "eip712_auth_nonce",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "valid_after",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "valid_before",
+          "description": null,
+          "ty": "U64",
+          "optional": false
+        },
+        {
+          "name": "action_nonce",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        },
+        {
+          "name": "settlement_target",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "settlement_version",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "schema_version",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": "U32",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "deployment_domain",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "casper_chain_name",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": "String",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "proposer",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "finalizer",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "signer_a",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "signer_b",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "signer_c",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": {
+        "ByteArray": 32
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "threshold",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": "U8",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "proposed_envelope",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "Option": {
+          "ByteArray": 32
+        }
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "approval_count",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": "U8",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "has_approved",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        },
+        {
+          "name": "signer",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        }
+      ],
+      "return_ty": "Bool",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "quorum_met",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": "Bool",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "finalized",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": "Bool",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "finalized_envelope",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "proposal_id",
+          "description": null,
+          "ty": "String",
+          "optional": false
+        }
+      ],
+      "return_ty": {
+        "Option": {
+          "ByteArray": 32
+        }
+      },
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "action_authorized",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "action_id",
+          "description": null,
+          "ty": {
+            "ByteArray": 32
+          },
+          "optional": false
+        }
+      ],
+      "return_ty": "Bool",
+      "is_contract_context": true,
+      "access": "public"
+    }
+  ],
+  "events": [
+    {
+      "name": "EnvelopeApproved",
+      "ty": "EnvelopeApproved"
+    },
+    {
+      "name": "EnvelopeFinalized",
+      "ty": "EnvelopeFinalized"
+    },
+    {
+      "name": "EnvelopeProposed",
+      "ty": "EnvelopeProposed"
+    },
+    {
+      "name": "V3Initialized",
+      "ty": "V3Initialized"
+    }
+  ],
+  "call": {
+    "wasm_file_name": "GovernanceReceiptV3.wasm",
+    "description": "",
+    "arguments": [
+      {
+        "name": "odra_cfg_package_hash_key_name",
+        "description": "The arg name for the package hash key name.",
+        "ty": "String",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_allow_key_override",
+        "description": "If true and the key specified in odra_cfg_package_hash_key_name already exists, it will be overwritten.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgradable",
+        "description": "The arg name for the contract upgradeability setting.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgrade",
+        "description": "The arg name for telling the installer that the contract is being upgraded.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "proposer",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      },
+      {
+        "name": "finalizer",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      },
+      {
+        "name": "signer_a",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      },
+      {
+        "name": "signer_b",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      },
+      {
+        "name": "signer_c",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      },
+      {
+        "name": "threshold",
+        "description": null,
+        "ty": "U8",
+        "optional": false
+      },
+      {
+        "name": "casper_chain_name",
+        "description": null,
+        "ty": "String",
+        "optional": false
+      },
+      {
+        "name": "installation_nonce",
+        "description": null,
+        "ty": {
+          "ByteArray": 32
+        },
+        "optional": false
+      }
+    ]
+  }
+}
