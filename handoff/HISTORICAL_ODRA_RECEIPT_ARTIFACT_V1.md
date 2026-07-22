@@ -13,11 +13,15 @@ historical receipt or card.
 - Public route:
   `GET /proof-artifacts/v1/{proposal_id}/historical-odra-receipt`
 - Network: exactly `casper-test`
-- Supported generation: exactly `v1` or `v2`
+- Schema-capable generations: exactly `v1` or `v2`, with distinct frozen
+  session variants and argument orders.
+- Currently publishable combined generation: exactly `v1`. A `v2` combined
+  artifact remains unavailable until an independently exported card chain
+  terminates at its different signed `final_card_hash`.
 - Frozen inventory asset:
   `handoff/HISTORICAL_ODRA_RECEIPTS_V1.json`
 - Frozen inventory SHA-256 (including its terminal LF):
-  `2d5010e71f3dcea9c706c3d2ae00fbc604507e97e58241f2b0ea772815e5d13a`
+  `3c73db58180d19e3d91e360d650c6765023487e3c5b11b3a266d40e85dc26e4d`
 
 ## Exact top-level shape
 
@@ -85,13 +89,20 @@ Exact keys:
   "contract_wasm_state_hash": "hex32",
   "contract_version": 1,
   "protocol_version_major": 2,
-  "entry_point": "store_governance_receipt"
+  "entry_point": "store_governance_receipt",
+  "session_variant": "StoredContractByHash",
+  "session_target_kind": "contract",
+  "session_target_hash": "hex32",
+  "session_version": null
 }
 ```
 
 Every value must equal the selected generation in the packaged frozen
 inventory. No `hash-`, `contract-`, or `contract-package-` prefixes appear in
-the artifact values.
+the artifact values. For `v1`, the session target is the frozen contract and
+`session_version` is null. For `v2`, the session target is the frozen package,
+the variant is `StoredVersionedContractByHash`, and `session_version` is `1`.
+The two forms are not interchangeable.
 
 ## Card chain
 
@@ -99,7 +110,16 @@ the artifact values.
 card is `ProposalCard` with `signal_id == proposal_id`; no later card may be a
 `ProposalCard`; every later frozen card type carries
 `proposal_id == artifact.proposal_id`. The terminal recomputed `card_hash`
-must equal the signed receipt's exact `final_card_hash` runtime argument.
+must equal the selected generation's signed `final_card_hash` runtime argument
+and the frozen inventory value.
+
+The canonical exported chain terminates at the `v1` root
+`710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622`.
+The accepted `v2` receipt signed the different root
+`710b9ad9885458fe4a381be50b1c0f7c077189774f150ef9110cb4de1ed7ad66`.
+Those roots must never be spliced together. Until a separate exact v2 chain is
+exported, v2 remains valid supplemental quorum evidence but is unavailable as
+this combined receipt-and-card-chain artifact.
 
 ## Raw RPC transcripts
 
@@ -141,12 +161,17 @@ The independent adapter must:
    verify every approval signature against the recomputed deploy hash.
 2. Require one finalized execution observation with no execution error.
 3. Bind its block hash/height to the returned canonical block and state root.
-4. Require a stored-contract-by-hash session targeting the exact frozen
-   contract and `store_governance_receipt`.
-5. Decode exactly the frozen 17 receipt runtime arguments and types; missing,
-   duplicate, additional, reordered-where-order-is-semantic, or mismatched
-   arguments are invalid.
-6. Bind `proposal_id` and `final_card_hash` to the artifact/card chain.
+4. Require the selected generation's exact frozen session form: v1 uses
+   `StoredContractByHash` targeting the contract; v2 uses
+   `StoredVersionedContractByHash` targeting the package at version `1`.
+   Both call `store_governance_receipt`.
+5. Decode exactly the selected generation's frozen 17 receipt runtime
+   arguments, order, and types. The v1 and v2 orders differ. Missing,
+   duplicate, additional, reordered, or mismatched arguments are invalid; the
+   verifier must not normalize into a shared presentation order before deploy
+   hash or receipt-argument-digest verification.
+6. Bind `proposal_id` and `final_card_hash` to the artifact/card chain and the
+   selected generation's frozen inventory value.
 7. Prove the package state contains the exact selected version/contract and
    on-chain Wasm state hash, and the contract state points back to that exact
    package.
@@ -163,11 +188,14 @@ Only after every check passes may the adapter return:
 
 - `proposalId`, `generation`;
 - `deployHash`, `blockHash`, `blockHeight`, `stateRootHash`;
-- `packageHash`, `contractHash`, `contractWasmStateHash`;
+- `packageHash`, `contractHash`, `contractWasmStateHash`, `sessionVariant`,
+  `sessionTargetKind`, `sessionTargetHash`, `sessionVersion`;
 - `finalCardHash`, `receiptArgumentDigest`;
 - `sourceCommit`, `deploymentCommit`, `capturedAt`;
 - `sourceDeploymentEquivalence: "unproven"`;
 - explicit `verificationScope` and `observationSources`.
 
 The historical public registry item remains historical. Passing this adapter
-does not retroactively prove v3 exact-envelope enforcement.
+does not retroactively prove v3 exact-envelope enforcement. A valid v2 receipt
+without its separately matching card-chain export must be reported as
+supplemental raw on-chain evidence, never as a passing combined artifact.
