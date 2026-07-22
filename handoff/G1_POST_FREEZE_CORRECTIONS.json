@@ -3,7 +3,7 @@
   "status": "required",
   "authority_tag": "concordia-g1-freeze-v2.0-a",
   "authority_commit": "b24c0409023e6c4b56287d4fddc17bdb42d9b1ac",
-  "reason": "Independent cross-language verification found two fail-open omissions after the immutable G1 tag was published. The tag remains the common branch root; these corrections are mandatory release deltas and may not be relaxed by either lane.",
+  "reason": "Independent cross-language verification found fail-open omissions after the immutable G1 tag was published. The tag remains the common branch root; these corrections are mandatory release deltas and may not be relaxed by either lane.",
   "corrections": [
     {
       "id": "G1-C6-v3-temporal-order",
@@ -31,6 +31,34 @@
       "acceptance_tests": [
         "test_reg_04c_v3_execution_items_require_deployment_domain",
         "WP8 cross-artifact exact-envelope/treasury parity tests"
+      ]
+    },
+    {
+      "id": "G1-C8-v3-canonical-block-order",
+      "affected_schema": "concordia.v3-proof.v1",
+      "rules": [
+        "Every contract-step finality block height is strictly greater than the installation block height.",
+        "Consecutive contract-step observations at an equal height must carry the identical canonical block hash.",
+        "A state readback at the exact-finalization height must carry the identical canonical block hash as finalize_exact."
+      ],
+      "acceptance_tests": [
+        "test_offline_verifier_rejects_contract_step_at_install_height",
+        "test_offline_verifier_rejects_equal_height_steps_on_different_blocks",
+        "test_offline_verifier_rejects_equal_height_readback_on_different_block"
+      ]
+    },
+    {
+      "id": "G1-C9-treasury-authorization-block-hash",
+      "affected_schema": "concordia.native_treasury_execution.v1",
+      "rules": [
+        "The bounded native-transfer scan exposes the canonical hash observed at authorization_block_height.",
+        "The scan authorization block hash must equal the exact-v3 finalization block hash as well as matching its height.",
+        "A treasury execution on a competing block at the same height is invalid."
+      ],
+      "acceptance_tests": [
+        "test_exact_contiguous_scan_proves_one_transfer_only",
+        "test_proof_gate_rejects_competing_block_at_v3_authorization_height",
+        "WP8 cross-proof competing-fork rejection tests"
       ]
     }
   ]

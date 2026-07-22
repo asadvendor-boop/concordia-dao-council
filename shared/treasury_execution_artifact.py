@@ -8,6 +8,7 @@ caller-supplied ``passed`` or ``verified`` boolean is serialized.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from datetime import timedelta, datetime
@@ -270,6 +271,10 @@ def _reparse_emitted_evidence(
         reparsed_scan != scan
         or reparsed_scan.authorization_block_height
         != authorization.finalization_block_height
+        or not hmac.compare_digest(
+            reparsed_scan.authorization_block_hash,
+            authorization.finalization_block_hash.hex(),
+        )
     ):
         raise TreasuryExecutionArtifactError(
             "emitted scan transcript does not match sealed proof"
@@ -475,6 +480,7 @@ def build_native_treasury_execution_artifact(
         "balance_evidence": balance_evidence,
         "bounded_transfer_scan": {
             "authorization_block_height": scan.authorization_block_height,
+            "authorization_block_hash": scan.authorization_block_hash,
             "observed_through_block_height": scan.observed_through_block_height,
             "observed_through_block_hash": scan.observed_through_block_hash,
             "scanned_block_count": scan.scanned_block_count,

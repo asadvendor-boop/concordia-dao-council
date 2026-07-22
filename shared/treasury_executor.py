@@ -14,6 +14,7 @@ tests supply deterministic callables and perform no network mutation.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import sqlite3
@@ -667,6 +668,13 @@ class TreasuryExecutor:
                     raise NativeTransferScanError(
                         "scan does not begin at the v3 authorization block"
                     )
+                if not hmac.compare_digest(
+                    no_duplicate_proof.authorization_block_hash,
+                    authorization.finalization_block_hash.hex(),
+                ):
+                    raise NativeTransferScanError(
+                        "scan authorization block hash differs from v3 finalization"
+                    )
                 digest = _execution_proof_digest(
                     canonical_post,
                     str(no_duplicate_scan_json),
@@ -1111,6 +1119,13 @@ class TreasuryExecutor:
             ):
                 raise JournalConflict(
                     "no-duplicate scan does not begin at the v3 authorization block"
+                )
+            if not hmac.compare_digest(
+                reparsed_scan.authorization_block_hash,
+                authorization.finalization_block_hash.hex(),
+            ):
+                raise JournalConflict(
+                    "no-duplicate scan authorization block hash differs from v3 authorization block hash"
                 )
 
             post_bundle = {

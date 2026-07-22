@@ -339,6 +339,8 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "threshold": threshold,
         "roles": ordered_roles,
         "install_deploy_hash": install_facts["deploy_hash"],
+        "install_block_hash": install_facts["block_hash"],
+        "install_block_height": install_facts["block_height"],
     }
 
 
@@ -550,7 +552,13 @@ def _prepared_args(prepared: Mapping[str, Any], *, mutated: bool = False) -> lis
     return values
 
 
-def _verify_live_run(run: object, prepared: Mapping[str, Any], readback_artifact: object) -> dict[str, Any]:
+def _verify_live_run(
+    run: object,
+    prepared: Mapping[str, Any],
+    readback_artifact: object,
+    *,
+    install_block_height: int,
+) -> dict[str, Any]:
     if not isinstance(run, Mapping) or run.get("schema_id") != "concordia.v3-live-proof-run.v1":
         raise ProofVerificationError("live contract run is missing")
     if run.get("status") != "contract_sequence_verified" or run.get("network") != "casper-test":
@@ -599,7 +607,8 @@ def _verify_live_run(run: object, prepared: Mapping[str, Any], readback_artifact
     if not isinstance(steps, list) or len(steps) != len(expected_steps):
         raise ProofVerificationError("run must contain exactly seven ordered contract steps")
     outcomes: dict[str, Any] = {}
-    previous_block_height = -1
+    previous_block_height = install_block_height
+    previous_block_hash: str | None = None
     for record, expected in zip(steps, expected_steps, strict=True):
         name, role, entry_point, success_label, error_code, expected_args = expected
         required = {
@@ -647,11 +656,24 @@ def _verify_live_run(run: object, prepared: Mapping[str, Any], readback_artifact
             raise ProofVerificationError(f"{name}: raw finality is not successful")
         if error_code is not None and observed_result != {"success": False, "user_error": error_code}:
             raise ProofVerificationError(f"{name}: raw finality does not prove User error {error_code}")
+        if outcome["block_height"] <= install_block_height:
+            raise ProofVerificationError(
+                f"{name}: contract step must follow contract installation"
+            )
         if outcome["block_height"] < previous_block_height:
             raise ProofVerificationError(
                 f"{name}: finality block height predates the preceding contract step"
             )
+        if (
+            outcome["block_height"] == previous_block_height
+            and previous_block_hash is not None
+            and not hmac.compare_digest(outcome["block_hash"], previous_block_hash)
+        ):
+            raise ProofVerificationError(
+                f"{name}: consecutive finality observations claim the same height on different blocks"
+            )
         previous_block_height = outcome["block_height"]
+        previous_block_hash = outcome["block_hash"]
         outcomes[name] = outcome
     return {
         "package_hash": package_hash,
@@ -679,7 +701,12 @@ def verify_v3_proof_document(value: object) -> dict[str, Any]:
     except (ValueError, KeyError, TypeError) as exc:
         raise ProofVerificationError(f"typed envelope is invalid: {exc}") from exc
     _same("prepared envelope", value["prepared"], recomputed)
-    live_run = _verify_live_run(value["run"], recomputed, value["readback"])
+    live_run = _verify_live_run(
+        value["run"],
+        recomputed,
+        value["readback"],
+        install_block_height=deployment["install_block_height"],
+    )
     try:
         readback = validate_verified_readback(
             verify_and_seal_readback_artifact(value["readback"])
@@ -703,8 +730,18 @@ def verify_v3_proof_document(value: object) -> dict[str, Any]:
         raise ProofVerificationError("on-chain action is not finalized and authorized")
     if readback.approval_count < readback.threshold:
         raise ProofVerificationError("on-chain approval count is below its configured threshold")
-    if readback.observed_block_height < live_run["outcomes"]["finalize_exact"]["block_height"]:
+    exact_finalization = live_run["outcomes"]["finalize_exact"]
+    if readback.observed_block_height < exact_finalization["block_height"]:
         raise ProofVerificationError("state readback predates exact finalization")
+    if (
+        readback.observed_block_height == exact_finalization["block_height"]
+        and not hmac.compare_digest(
+            readback.observed_block_hash.hex(), exact_finalization["block_hash"]
+        )
+    ):
+        raise ProofVerificationError(
+            "state readback observes a different block at exact finalization height"
+        )
     if not hmac.compare_digest(readback.proposed_envelope, readback.finalized_envelope):
         raise ProofVerificationError("proposed/finalized envelope mismatch")
     _same("run package_hash", live_run["package_hash"], readback.package_hash.hex())
