@@ -772,7 +772,8 @@ def test_branch_protocol_and_claim_state_are_fail_closed() -> None:
     assert g0r["ecs_snapshot"]["completed"] is True
     execution_state = (HANDOFF / "EXECUTION_STATE.md").read_text(encoding="utf-8")
     assert "| G0-R fallback verification | PASS |" in execution_state
-    assert "| G1 interface freeze | READY_FOR_ANNOTATED_TAG |" in execution_state
+    assert "| G1 interface freeze | PASS |" in execution_state
+    assert "`concordia-g1-freeze-v2.0-a` peels to `b24c040`" in execution_state
 
 
 def test_annotated_tag_if_required_or_present_is_self_consistent() -> None:
