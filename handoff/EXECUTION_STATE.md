@@ -39,6 +39,7 @@ every handoff or live mutation. Claims require the evidence listed here.
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
 | Claude WP7 | BLOCKED_ON_CORRECTIONS | `dfa3cd2` visual direction approved, implementation NO-GO: stale cross-proposal state, wrong demo protocol/reset, fail-open evidence/approval states, false SafePay fallback, hardcoded proof, role and accessibility defects; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP7.md` |
+| Claude WP9/WP11 | BLOCKED_ON_CORRECTIONS | `abd46d1` docs foundation builds strictly, but current copy overstates unmerged/live behavior and the cited Python verifier; `f199062` is an incomplete WP11 copy pass with incorrect role/archive wording. Exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP9_WP11.md` |
 | Final release | PENDING | no claim until hosted/live gates pass |
 
 ## Upstream x402 blocker details
@@ -100,6 +101,15 @@ as authorized, false SafePay narration in recording mode, hardcoded accessible
 proof summaries, incorrect Wells/agent taxonomy, and incomplete tab/ledger
 accessibility. The correction gate is recorded in
 `handoff/CODEX_REVIEW_CLAUDE_WP7.md`.
+
+Claude WP9/WP11 also remain isolated. The curated MkDocs tree, locked
+dependencies, strict build, and Pages workflow are a sound foundation, but the
+site currently describes unmerged SafePay/x402/security behavior as
+implemented, assigns Wells deterministic archive work it does not perform,
+calls Locke a fifth advisory/reasoning agent, and overstates the legacy Python
+verifier. WP11 has not yet produced the required BUIDL copy or video materials.
+The correction and publication gate is recorded in
+`handoff/CODEX_REVIEW_CLAUDE_WP9_WP11.md`.
 
 No VM, Caddy, DNS, Compose, Testnet, npm, live artifact, or `main` mutation has
 occurred since G1.
