@@ -32,7 +32,7 @@ every handoff or live mutation. Claims require the evidence listed here.
 | G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
 | WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `b6b2c98`; G1-C6/C8 enforce raw temporal and fork identity; 172 affected Python tests and the prior full/Rust/Wasm gates are green; live deployment remains WP10 |
-| WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, exact card-chain export bound to a trusted external terminal root, and frozen raw historical-receipt contract are committed; no canonical card/root or combined receipt artifact is fabricated locally, and live capture/registry publication remain WP10 |
+| WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, bounded exact card-chain export, and offline historical receipt verification are committed. Independent C10 review passed the 64 MiB/RSS and nested credential-bypass probes. Only v1 currently has a matching canonical card chain; no root or combined artifact is fabricated locally, and live capture/registry publication remain WP10 |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
 | WP8 verifier | IN_PROGRESS_BLOCKED_ON_PRODUCERS | package implementation and cross-language audit found G1-C6 through C13, missing independent adapters, unusable/unsafe live scope, provenance relabelling and attacker-controlled chronology; card/historical/live-observer work is active, while SafePay/x402 completion waits on corrected producer schemas |
 | WP10 live/release | PENDING | no mutations before local/integration gates |
@@ -99,6 +99,17 @@ terminal card roots. The frozen correction is now generation-specific. Only
 v1 currently has a matching canonical card-chain export; v2 remains separate
 supplemental quorum evidence until its different exact chain is exported. No
 fake root or cross-generation combined historical artifact has been created.
+
+The final C10 adversarial re-review is GO. A separate-process 64 MiB hostile
+SQLite row failed closed while increasing `ru_maxrss` by only 655,360 bytes;
+the connection length limit and transaction state were restored. Exact and
+nested `authorization_id` / `token_usage` attempts carrying both `ghp_` and
+`github_pat_` credentials were rejected. The historical offline adapter now
+labels its scope `artifact_transcript_consistency` and exposes no observation
+sources; only explicit independent live RPC corroboration may upgrade that
+scope. Future archive attribution is also corrected in code: Core builds,
+Locke seals, and Wells is a non-reasoning presentation heartbeat. The current
+full Python gate passes 684 tests with one known Starlette deprecation warning.
 
 Claude WP5 also remains isolated. Its existing 128 tests pass, but independent
 review proved that omitted/partial WCSPR argument values can pass post-settle
