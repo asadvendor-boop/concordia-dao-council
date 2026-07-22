@@ -66,12 +66,39 @@ asserted boolean and derive all results:
 7. Reject a parsed `card_hash` field: the preimage stored by `seal_card`
    deliberately excludes it.
 8. Require the terminal wrapper `card_hash` to equal the historical receipt's
-   `final_card_hash` when the registry item supplies that receipt binding.
+   `final_card_hash` from an externally verified immutable release-root file.
+9. Require card 1 to be `ProposalCard` with `signal_id == proposal_id`; reject
+   any later `ProposalCard`, and require every later frozen card type's
+   `proposal_id` to equal the artifact proposal.
+
+## Immutable release-root input
+
+The producer never accepts the terminal hash from the request, Host header,
+card chain, or legacy receipt summary. At process startup it reads the
+operator-selected `CONCORDIA_CARD_CHAIN_ROOTS_FILE` exactly once with no symlink
+following, duplicate keys, unknown fields, or unbounded input. The file is
+generated only after the combined raw-RPC historical receipt verifier passes:
+
+```json
+{
+  "schema_version": "concordia.card_chain_roots.v1",
+  "roots": {
+    "DAO-PROP-6CB25C": "lowercase receipt final_card_hash hex32"
+  }
+}
+```
+
+The release path is `artifacts/live/card-chain-roots-v1.json`. No placeholder
+or self-asserted root is committed before live capture. If `PUBLIC_BASE_URL`,
+the root file, or the requested proposal root is absent or invalid, the public
+route returns a no-store 503.
 
 ## Publication and registry rules
 
 - The Gateway applies response-size and card-count limits and emits
   `Cache-Control: no-store` until the release capture is frozen.
+- SQL bounds each card and cumulative preimage bytes before the text is
+  materialized into Python; an oversized stored row fails closed.
 - Before public deployment, the exact historical preimages must pass the
   repository secret/redaction scanner. Any secret-like value blocks release;
   the preimages may not be altered to make the scan pass.
