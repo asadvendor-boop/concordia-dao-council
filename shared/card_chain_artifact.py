@@ -26,6 +26,11 @@ MAX_TOTAL_PREIMAGE_BYTES = 8 * 1024 * 1024
 # the total artifact budget, even for the one overflow row used to detect an
 # excessive card count.
 MAX_CARD_JSON_BYTES = MAX_TOTAL_PREIMAGE_BYTES // (MAX_CARD_COUNT + 1)
+# SQLite applies SQLITE_LIMIT_LENGTH to each string/BLOB and to an encoded
+# result row.  This leaves ample room above one bounded card preimage for the
+# small wrapper columns while preventing length(CAST(card_json AS BLOB)) from
+# materializing an attacker-sized stored value during the bounded SELECT.
+SQLITE_CARD_QUERY_LENGTH_LIMIT = 256 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_ROOTS_FILE_BYTES = 64 * 1024
 _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -65,21 +70,19 @@ _SECRET_KEY_SUBSTRINGS = (
     "wallet_secret",
 )
 _SECRET_EXACT_FIELD_NAMES = frozenset({"key"})
-_PUBLIC_SECRETISH_FIELD_WHITELIST = frozenset(
-    {
-        "authorization_id",
-        # Frozen CasperExecutionReceipt schema: public enum, never a credential.
-        "authorization_type",
-        "token_usage",
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-    }
+_PUBLIC_AUTHORIZATION_ID_CARD_TYPES = frozenset(
+    {"PolicyAuthorization", "CasperExecutionReceipt"}
 )
+_PUBLIC_TOKEN_USAGE_CARD_TYPES = frozenset({"CasperExecutionReceipt"})
+_TOKEN_USAGE_FIELDS = frozenset(
+    {"prompt_tokens", "completion_tokens", "total_tokens"}
+)
+_PUBLIC_AUTHORIZATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)\b(sk|pk|ak|eyJ)[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})\b"),
     re.compile(r"/(?:opt|etc|home|Users)/[^\s\"']*(?:secret|key|env|pem)[^\s\"']*", re.I),
 )
 _HISTORICAL_IDENTITY_FIELD = {
@@ -217,28 +220,101 @@ def _parse_preimage(raw: object, sequence_number: int) -> tuple[str, dict[str, A
     return encoded.decode("utf-8"), parsed
 
 
-def _secret_scan_findings(value: object, path: str = "$") -> list[str]:
+def _secret_path(path: tuple[str | int, ...]) -> str:
+    rendered = "$"
+    for part in path:
+        rendered += f"[{part}]" if type(part) is int else f".{part}"
+    return rendered
+
+
+def _valid_token_usage(value: object) -> bool:
+    return (
+        type(value) is dict
+        and 0 < len(value) <= len(_TOKEN_USAGE_FIELDS)
+        and set(value).issubset(_TOKEN_USAGE_FIELDS)
+        and all(type(count) is int and 0 <= count <= 2**63 - 1 for count in value.values())
+    )
+
+
+def _is_public_secretish_field(
+    *,
+    card_type: object,
+    parent_path: tuple[str | int, ...],
+    raw_field_name: str,
+    field_name: str,
+    value: object,
+) -> bool:
+    if raw_field_name != field_name:
+        return False
+    if field_name == "authorization_id":
+        return (
+            parent_path == ()
+            and card_type in _PUBLIC_AUTHORIZATION_ID_CARD_TYPES
+            and type(value) is str
+            and _PUBLIC_AUTHORIZATION_ID_RE.fullmatch(value) is not None
+        )
+    if field_name == "authorization_type":
+        return (
+            parent_path == ()
+            and card_type == "CasperExecutionReceipt"
+            and type(value) is str
+            and value in {"human_approval", "policy"}
+        )
+    if field_name == "token_usage":
+        return (
+            parent_path == ()
+            and card_type in _PUBLIC_TOKEN_USAGE_CARD_TYPES
+            and _valid_token_usage(value)
+        )
+    if field_name in _TOKEN_USAGE_FIELDS:
+        return (
+            parent_path == ("token_usage",)
+            and card_type in _PUBLIC_TOKEN_USAGE_CARD_TYPES
+            and type(value) is int
+            and 0 <= value <= 2**63 - 1
+        )
+    return False
+
+
+def _secret_scan_findings(
+    value: object,
+    path: tuple[str | int, ...] = (),
+    *,
+    card_type: object = None,
+) -> list[str]:
     findings: list[str] = []
     if type(value) is dict:
+        if path == ():
+            card_type = value.get("card_type")
         for key, raw in value.items():
             normalized = str(key).strip().lower().replace("-", "_")
-            child = f"{path}.{key}"
+            child = (*path, str(key))
             secretish_name = normalized in _SECRET_EXACT_FIELD_NAMES or any(
                 pattern in normalized for pattern in _SECRET_KEY_SUBSTRINGS
             )
             if (
-                normalized not in _PUBLIC_SECRETISH_FIELD_WHITELIST
-                and secretish_name
+                secretish_name
+                and not _is_public_secretish_field(
+                    card_type=card_type,
+                    parent_path=path,
+                    raw_field_name=str(key),
+                    field_name=normalized,
+                    value=raw,
+                )
                 and raw not in (None, "[REDACTED]")
             ):
-                findings.append(f"{child}: secret-like key")
-            findings.extend(_secret_scan_findings(raw, child))
+                findings.append(f"{_secret_path(child)}: secret-like key")
+            # Values are always scanned recursively, including values of the
+            # narrowly whitelisted public metadata fields above.
+            findings.extend(_secret_scan_findings(raw, child, card_type=card_type))
     elif type(value) is list:
         for index, item in enumerate(value):
-            findings.extend(_secret_scan_findings(item, f"{path}[{index}]"))
+            findings.extend(
+                _secret_scan_findings(item, (*path, index), card_type=card_type)
+            )
     elif type(value) is str:
         if any(pattern.search(value) for pattern in _SECRET_VALUE_PATTERNS):
-            findings.append(f"{path}: secret-like value")
+            findings.append(f"{_secret_path(path)}: secret-like value")
     return findings
 
 
@@ -374,8 +450,19 @@ def _validate_row(
 
 
 def _read_rows(db: sqlite3.Connection, proposal_id: str) -> list[sqlite3.Row]:
-    db.execute("BEGIN DEFERRED")
+    original_length_limit = db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    bounded_length_limit = min(
+        original_length_limit,
+        SQLITE_CARD_QUERY_LENGTH_LIMIT,
+    )
+    previous_length_limit = db.setlimit(
+        sqlite3.SQLITE_LIMIT_LENGTH,
+        bounded_length_limit,
+    )
+    transaction_started = False
     try:
+        db.execute("BEGIN DEFERRED")
+        transaction_started = True
         cursor = db.execute(
             "WITH limited_cards AS MATERIALIZED ("
             "SELECT sequence_number, card_type, card_hash, "
@@ -415,10 +502,20 @@ def _read_rows(db: sqlite3.Connection, proposal_id: str) -> list[sqlite3.Row]:
                     )
             rows.append(row)
         db.execute("COMMIT")
+        transaction_started = False
         return rows
+    except sqlite3.DataError as exc:
+        if transaction_started:
+            db.execute("ROLLBACK")
+            transaction_started = False
+        raise CardChainArtifactError("card_json size limit exceeded") from exc
     except Exception:
-        db.execute("ROLLBACK")
+        if transaction_started:
+            db.execute("ROLLBACK")
+            transaction_started = False
         raise
+    finally:
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_length_limit)
 
 
 def build_card_chain_artifact(
