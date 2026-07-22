@@ -60,6 +60,7 @@ def _snapshot_item() -> dict:
         "network": None,
         "package_hash": None,
         "contract_hash": None,
+        "deployment_domain": None,
         "schema_version": "snapshot-v1",
         "captured_at": NOW,
         "payment_requirements_hash": None,
@@ -221,6 +222,33 @@ def test_reg_04b_treasury_checks_state_the_bounded_rpc_observation_scope() -> No
     assert "successful_inclusion_observed_by_two_named_casper_rpc_nodes" in checks
     assert "no_second_native_transaction_observed_through_block" in checks
     assert all("for_action_id" not in check for check in checks)
+
+
+@pytest.mark.parametrize("proof_type", ["exact_envelope_v3", "native_treasury_execution_v1"])
+def test_reg_04c_v3_execution_items_require_deployment_domain(proof_type: str) -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": f"{proof_type}-current",
+            "proof_type": proof_type,
+            "generation": "v3",
+            "observation_mode": "live",
+            "proposal_id": "DAO-PROP-TEST",
+            "action_id": "01" * 32,
+            "envelope_hash": "02" * 32,
+            "network": "casper:casper-test",
+            "package_hash": "03" * 32,
+            "contract_hash": "04" * 32,
+            "deployment_domain": "05" * 32,
+            "deployment_commit": "2" * 40,
+            "checks": _checks(proof_type),
+        }
+    )
+    assert proof_item_is_green(item) is True
+
+    item["deployment_domain"] = None
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
 
 
 def test_reg_05_snapshot_requires_capture_source_hash_and_staleness_observations() -> None:

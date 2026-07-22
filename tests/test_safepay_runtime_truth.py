@@ -44,6 +44,7 @@ def _safepay_item(*, failed_check: str | None = None) -> dict[str, object]:
         "network": "casper:casper-test",
         "package_hash": None,
         "contract_hash": None,
+        "deployment_domain": None,
         "schema_version": "safepay-v2",
         "captured_at": NOW,
         "payment_requirements_hash": None,

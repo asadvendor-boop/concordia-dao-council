@@ -1,0 +1,37 @@
+{
+  "schema_id": "concordia.g1-post-freeze-corrections.v1",
+  "status": "required",
+  "authority_tag": "concordia-g1-freeze-v2.0-a",
+  "authority_commit": "b24c0409023e6c4b56287d4fddc17bdb42d9b1ac",
+  "reason": "Independent cross-language verification found two fail-open omissions after the immutable G1 tag was published. The tag remains the common branch root; these corrections are mandatory release deltas and may not be relaxed by either lane.",
+  "corrections": [
+    {
+      "id": "G1-C6-v3-temporal-order",
+      "affected_schema": "concordia.v3-proof.v1",
+      "rules": [
+        "Every raw contract-step finality observation carries its validated block_hash and block_height into the verifier result.",
+        "Ordered contract-step block heights must be nondecreasing.",
+        "The state readback observed_block_height must be greater than or equal to the successful finalize_exact block_height.",
+        "A self-consistent state-readback artifact captured before finalize_exact is invalid even when its hashes and state fields otherwise verify."
+      ],
+      "acceptance_tests": [
+        "test_offline_verifier_rejects_state_readback_before_exact_finalization",
+        "test_offline_verifier_rejects_nonmonotonic_contract_step_finality"
+      ]
+    },
+    {
+      "id": "G1-C7-proof-registry-deployment-domain",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Every public proof item contains deployment_domain, nullable for proof types without a v3 deployment identity.",
+        "A verified exact_envelope_v3 or native_treasury_execution_v1 item requires deployment_domain as lowercase 32-byte hex.",
+        "Two-pass exact-envelope and treasury verification requires exact equality of proposal_id, action_id, envelope_hash, network, package_hash, contract_hash, and deployment_domain.",
+        "Treasury temporal binding is snapshot_block_height < exact_v3_finalization_block_height == treasury_authorization_block_height <= native_execution_block_height."
+      ],
+      "acceptance_tests": [
+        "test_reg_04c_v3_execution_items_require_deployment_domain",
+        "WP8 cross-artifact exact-envelope/treasury parity tests"
+      ]
+    }
+  ]
+}

@@ -178,6 +178,7 @@ PUBLIC_ITEM_REQUIRED_FIELDS = (
     "network",
     "package_hash",
     "contract_hash",
+    "deployment_domain",
     "schema_version",
     "captured_at",
     "payment_requirements_hash",
@@ -331,6 +332,7 @@ def _public_item_errors(item: Any) -> list[str]:
         "artifact_sha256",
         "package_hash",
         "contract_hash",
+        "deployment_domain",
         "payment_requirements_hash",
         "signed_payment_payload_hash",
         "report_hash",
@@ -371,6 +373,7 @@ def _public_item_errors(item: Any) -> list[str]:
                 "network",
                 "package_hash",
                 "contract_hash",
+                "deployment_domain",
             ):
                 if item.get(field) is None:
                     errors.append(f"execution_identity_missing:{field}")

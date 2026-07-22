@@ -374,7 +374,7 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
                     "block": {
                         "Version2": {
                             "hash": ids["block"],
-                            "header": {"height": 9_001, "state_root_hash": ids["state_root"]},
+                            "header": {"height": 9_003, "state_root_hash": ids["state_root"]},
                             "body": {},
                         }
                     },
@@ -838,7 +838,7 @@ def test_rb_01_through_10_reparse_raw_state_root_pinned_transcripts_into_opaque_
     assert facts.finalized_envelope.hex() == ids["envelope"]
     assert facts.action_id.hex() == ids["action"]
     assert facts.action_authorized is True
-    assert facts.observed_block_height == 9_001
+    assert facts.observed_block_height == 9_003
     assert facts.observed_state_root_hash.hex() == ids["state_root"]
 
 
@@ -867,7 +867,7 @@ def test_readback_accepts_exact_casper_v1_and_v2_block_with_signatures_wrappers(
         action_id=ids["action"],
     )
 
-    assert artifact["facts"]["observed_block_height"] == 9_001
+    assert artifact["facts"]["observed_block_height"] == 9_003
 
 
 def test_readback_rejects_flags_echoes_unpinned_queries_and_tampered_transcripts() -> None:
@@ -932,6 +932,55 @@ def test_offline_verifier_recomputes_envelope_and_readback_instead_of_trusting_b
     proof["passed"] = True
     proof["prepared"]["envelope_hash"] = "ff" * 32
     with pytest.raises(ProofVerificationError):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_rejects_state_readback_before_exact_finalization() -> None:
+    proof, _, ids = _bound_v3_proof()
+    transcripts = copy.deepcopy(proof["readback"]["transcripts"])
+    readback_header = transcripts[0]["response"]["result"]["block_with_signatures"][
+        "block"
+    ]["Version2"]["header"]
+    readback_header["height"] = 9_001
+    transcripts[0]["canonical_sha256"] = hashlib.sha256(
+        json.dumps(
+            {
+                "request": transcripts[0]["request"],
+                "response": transcripts[0]["response"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    readback = build_readback_artifact_from_transcripts(
+        transcripts=transcripts,
+        expected_network="casper-test",
+        expected_package_hash=ids["package"],
+        expected_contract_hash=ids["contract"],
+        proposal_id=proof["prepared"]["proposal_id"],
+        action_id=proof["prepared"]["action_id"],
+    )
+    proof["readback"] = readback
+    proof["run"]["readback"] = copy.deepcopy(readback)
+
+    with pytest.raises(ProofVerificationError, match="predates exact finalization"):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_rejects_nonmonotonic_contract_step_finality() -> None:
+    proof, _, _ = _bound_v3_proof()
+    final_step = proof["run"]["steps"][-1]
+    finality = final_step["finality_transcript"]
+    finality["response"]["result"]["execution_info"]["block_height"] = 9_001
+    finality["canonical_sha256"] = hashlib.sha256(
+        json.dumps(
+            {"request": finality["request"], "response": finality["response"]},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    with pytest.raises(ProofVerificationError, match="preceding contract step"):
         verify_v3_proof_document(proof)
 
 

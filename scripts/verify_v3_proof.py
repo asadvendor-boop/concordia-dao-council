@@ -457,7 +457,10 @@ def _finality_outcome(
     block_hash = _lower_hash(execution_info["block_hash"], "execution block hash")
     if block_hash == "00" * 32:
         raise ProofVerificationError("execution block hash cannot be zero")
-    if type(execution_info["block_height"]) is not int or execution_info["block_height"] < 0:
+    if (
+        type(execution_info["block_height"]) is not int
+        or not 0 <= execution_info["block_height"] < 1 << 64
+    ):
         raise ProofVerificationError("execution block height is invalid")
     execution_result = execution_info["execution_result"]
     if not isinstance(execution_result, Mapping) or set(execution_result) != {"Version2"}:
@@ -490,8 +493,18 @@ def _finality_outcome(
         if not isinstance(error_message, str):
             raise ProofVerificationError("execution error_message must be text or null")
         match = _USER_ERROR.search(error_message)
-        return {"success": False, "user_error": int(match.group(1)) if match else None}
-    return {"success": True, "user_error": None}
+        return {
+            "success": False,
+            "user_error": int(match.group(1)) if match else None,
+            "block_hash": block_hash,
+            "block_height": execution_info["block_height"],
+        }
+    return {
+        "success": True,
+        "user_error": None,
+        "block_hash": block_hash,
+        "block_height": execution_info["block_height"],
+    }
 
 
 def _session(deploy: object, *, contract_hash: str, entry_point: str) -> list[list[Any]]:
@@ -586,6 +599,7 @@ def _verify_live_run(run: object, prepared: Mapping[str, Any], readback_artifact
     if not isinstance(steps, list) or len(steps) != len(expected_steps):
         raise ProofVerificationError("run must contain exactly seven ordered contract steps")
     outcomes: dict[str, Any] = {}
+    previous_block_height = -1
     for record, expected in zip(steps, expected_steps, strict=True):
         name, role, entry_point, success_label, error_code, expected_args = expected
         required = {
@@ -625,10 +639,19 @@ def _verify_live_run(run: object, prepared: Mapping[str, Any], readback_artifact
             recorded_deploy=deploy,
             expected_public_key=str(roles[role]["public_key"]),
         )
-        if error_code is None and outcome != {"success": True, "user_error": None}:
+        observed_result = {
+            "success": outcome["success"],
+            "user_error": outcome["user_error"],
+        }
+        if error_code is None and observed_result != {"success": True, "user_error": None}:
             raise ProofVerificationError(f"{name}: raw finality is not successful")
-        if error_code is not None and outcome != {"success": False, "user_error": error_code}:
+        if error_code is not None and observed_result != {"success": False, "user_error": error_code}:
             raise ProofVerificationError(f"{name}: raw finality does not prove User error {error_code}")
+        if outcome["block_height"] < previous_block_height:
+            raise ProofVerificationError(
+                f"{name}: finality block height predates the preceding contract step"
+            )
+        previous_block_height = outcome["block_height"]
         outcomes[name] = outcome
     return {
         "package_hash": package_hash,
@@ -680,6 +703,8 @@ def verify_v3_proof_document(value: object) -> dict[str, Any]:
         raise ProofVerificationError("on-chain action is not finalized and authorized")
     if readback.approval_count < readback.threshold:
         raise ProofVerificationError("on-chain approval count is below its configured threshold")
+    if readback.observed_block_height < live_run["outcomes"]["finalize_exact"]["block_height"]:
+        raise ProofVerificationError("state readback predates exact finalization")
     if not hmac.compare_digest(readback.proposed_envelope, readback.finalized_envelope):
         raise ProofVerificationError("proposed/finalized envelope mismatch")
     _same("run package_hash", live_run["package_hash"], readback.package_hash.hex())
