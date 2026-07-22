@@ -3,8 +3,12 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import re
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -269,7 +273,11 @@ def test_card_chain_artifact_uses_one_read_transaction_and_does_not_mutate() -> 
         for statement in statements
         if statement.strip().upper().startswith(("BEGIN", "COMMIT", "ROLLBACK"))
     ]
-    reads = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    reads = [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+    ]
     mutations = [
         statement
         for statement in statements
@@ -652,10 +660,14 @@ def test_card_chain_artifact_bounds_card_json_inside_the_select() -> None:
     db.set_trace_callback(None)
 
     select = next(
-        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith(("SELECT", "WITH"))
     )
     assert "CASE" in select.upper()
     assert "LENGTH(CAST" in select.upper()
+    assert "MATERIALIZED" in select.upper()
+    assert "OVER (" not in select.upper()
     assert observed_card_json == [None]
 
 
@@ -766,3 +778,194 @@ def test_release_root_file_is_strict_duplicate_safe_and_loaded_read_only(
     assert roots == {"DAO-PROP-CARDS": "3" * 64}
     with pytest.raises(TypeError):
         roots["DAO-PROP-CARDS"] = "4" * 64
+
+
+@pytest.mark.parametrize(
+    ("nested_key", "nested_value"),
+    [
+        ("github_token", "ordinary-github-value"),
+        ("database_password", "ordinary-database-value"),
+        ("service_api_key", "ordinary-service-value"),
+        ("backup_credentials", "ordinary-credential-value"),
+    ],
+)
+def test_card_chain_artifact_blocks_namespaced_secret_fields(
+    nested_key: str,
+    nested_value: str,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 1,
+            "card_type": "ProposalCard",
+            "previous_card_hash": None,
+            "signal_id": "DAO-PROP-CARDS",
+            "raw_payload": {nested_key: nested_value},
+        },
+        separators=(",", ":"),
+    )
+    root = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute("DELETE FROM cards WHERE sequence_number=2")
+    db.execute(
+        "UPDATE cards SET card_json=?, card_hash=? WHERE sequence_number=1",
+        (raw, root),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=root,
+        )
+
+
+def _query_progress_steps(module, card_count: int) -> int:
+    db = init_db(":memory:")
+    db.execute(
+        "INSERT INTO proposals (proposal_id, state, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        ("DAO-PROP-MANY", "RESOLVED", NOW, NOW),
+    )
+    raw = json.dumps(
+        {
+            "sequence_number": 1,
+            "card_type": "ProposalCard",
+            "previous_card_hash": None,
+            "signal_id": "DAO-PROP-MANY",
+        },
+        separators=(",", ":"),
+    )
+    card_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute("BEGIN IMMEDIATE")
+    db.executemany(
+        "INSERT INTO cards ("
+        "proposal_id, sequence_number, card_type, card_hash, card_json, created_at"
+        ") VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            ("DAO-PROP-MANY", sequence, "ProposalCard", card_hash, raw, NOW)
+            for sequence in range(1, card_count + 1)
+        ),
+    )
+    db.execute("COMMIT")
+    progress_callbacks = 0
+
+    def progress() -> int:
+        nonlocal progress_callbacks
+        progress_callbacks += 1
+        return 0
+
+    db.set_progress_handler(progress, 100)
+    with pytest.raises(module.CardChainArtifactError, match="card-count"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-MANY",
+            captured_at=NOW,
+            source_url="https://concordia.example/proof-artifacts/v1/DAO-PROP-MANY/card-chain",
+            expected_final_card_hash=card_hash,
+        )
+    db.set_progress_handler(None, 0)
+    return progress_callbacks
+
+
+def test_card_chain_query_work_is_bounded_before_ordering_or_materialization() -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+
+    near_limit_steps = _query_progress_steps(module, module.MAX_CARD_COUNT + 10)
+    five_thousand_steps = _query_progress_steps(module, 5_000)
+
+    assert five_thousand_steps <= near_limit_steps * 2 + 20
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://concordia.example:notaport/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+        "https://bad host.example/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+        "https://bad\x00host.example/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+        "https://-bad-label.example/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+        "https://concordia.example:70000/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+    ],
+)
+def test_card_chain_artifact_rejects_malformed_source_hosts(source_url: str) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+
+    with pytest.raises(module.CardChainArtifactError, match="source_url"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=source_url,
+            expected_final_card_hash=expected[-1][1],
+        )
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "concordia.47.84.232.193.sslip.io",
+        "concordiadao.xyz",
+        "docs.concordiadao.xyz:443",
+    ],
+)
+def test_card_chain_artifact_accepts_canonical_sslip_and_domain_hosts(host: str) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    artifact = module.build_card_chain_artifact(
+        db,
+        proposal_id="DAO-PROP-CARDS",
+        captured_at=NOW,
+        source_url=f"https://{host}/proof-artifacts/v1/DAO-PROP-CARDS/card-chain",
+        expected_final_card_hash=expected[-1][1],
+    )
+    assert artifact["source_url"].startswith(f"https://{host}/")
+
+
+def test_release_root_loader_rejects_fifo_symlink_directory_oversize_and_invalid_bytes(
+    tmp_path,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    valid = tmp_path / "valid.json"
+    _write_roots(valid, "DAO-PROP-CARDS", "3" * 64)
+
+    fifo = tmp_path / "roots.fifo"
+    os.mkfifo(fifo)
+    symlink = tmp_path / "roots-link.json"
+    symlink.symlink_to(valid)
+    directory = tmp_path / "roots-dir"
+    directory.mkdir()
+    oversize = tmp_path / "oversize.json"
+    oversize.write_bytes(b"x" * (module.MAX_ROOTS_FILE_BYTES + 1))
+    invalid_utf8 = tmp_path / "invalid-utf8.json"
+    invalid_utf8.write_bytes(b"\xff\xfe")
+    wrong_shape = tmp_path / "wrong-shape.json"
+    wrong_shape.write_text('{"roots":{}}', encoding="utf-8")
+
+    fifo_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from shared.card_chain_artifact import "
+                "CardChainRootsError, load_card_chain_release_roots; "
+                "\ntry: load_card_chain_release_roots(r'" + str(fifo) + "')"
+                "\nexcept CardChainRootsError: raise SystemExit(0)"
+                "\nraise SystemExit(1)"
+            ),
+        ],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+    assert fifo_probe.returncode == 0
+
+    for path in (symlink, directory, oversize, invalid_utf8, wrong_shape):
+        with pytest.raises(module.CardChainRootsError):
+            module.load_card_chain_release_roots(str(path))
