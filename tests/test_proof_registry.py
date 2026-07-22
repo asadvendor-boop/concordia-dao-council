@@ -457,6 +457,40 @@ def test_reg_05_snapshot_requires_capture_source_hash_and_staleness_observations
     assert normalize_proof_item(item)["verification_status"] == "invalid"
 
 
+def test_reg_05b_check_observation_cannot_follow_item_capture() -> None:
+    item = _snapshot_item()
+    item["captured_at"] = "2026-07-22T20:00:00Z"
+    item["checks"][0]["observed_at"] = "2026-07-22T20:00:01Z"
+
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+def test_reg_05c_item_capture_cannot_follow_registry_generation() -> None:
+    item = _snapshot_item()
+    item["captured_at"] = "2026-07-22T20:00:01Z"
+
+    document = build_public_registry(
+        "DAO-PROP-TEST",
+        [item],
+        generated_at="2026-07-22T20:00:00Z",
+        reference_time="2026-07-22T20:00:02Z",
+    )
+
+    assert document["items"][0]["verification_status"] == "invalid"
+    assert proof_item_is_green(document["items"][0]) is False
+
+
+def test_reg_05d_registry_generation_cannot_be_in_the_verifier_future() -> None:
+    with pytest.raises(ValueError, match="generated_at cannot be after reference_time"):
+        build_public_registry(
+            "DAO-PROP-TEST",
+            [_snapshot_item()],
+            generated_at="2099-01-01T00:00:00Z",
+            reference_time="2026-07-22T20:00:00Z",
+        )
+
+
 @pytest.mark.parametrize("artifact_path", ["/tmp/secret.json", "../secret.json", "artifacts/../secret.json"])
 def test_reg_05_artifact_paths_are_repository_relative_without_traversal(artifact_path: str) -> None:
     item = _snapshot_item()
