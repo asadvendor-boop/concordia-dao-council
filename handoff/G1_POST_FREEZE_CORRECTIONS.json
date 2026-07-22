@@ -68,7 +68,8 @@
         "The humanized public evidence view is not a cryptographic card-hash preimage.",
         "Independent card verification consumes the exact stored canonical_card_json bytes for each immutable historical card.",
         "The adapter recomputes every card hash and previous-card link and ignores asserted chain-validity booleans.",
-        "The exact frozen preimages pass a secret scan before public release and are never modified during publication."
+        "The exact frozen preimages pass a secret scan before public release and are never modified during publication.",
+        "The producer requires a strict immutable release-root mapping generated only from the verified historical receipt final_card_hash; missing, request-selected, Host-derived, or self-asserted roots fail closed."
       ],
       "acceptance_tests": [
         "WP4 card-chain artifact byte-preservation and non-mutation tests",
