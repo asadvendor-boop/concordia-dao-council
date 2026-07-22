@@ -68,6 +68,11 @@ from shared.proof_pack import (
     canonicalize_public_evidence,
     requested_and_approved_bps,
 )
+from shared.proof_registry import (
+    AmbiguousGovernanceBinding,
+    ProofRegistryRepository,
+    RegistryNotFound,
+)
 from shared.approval import compute_action_hash
 from shared.runtime_secrets import read_secret
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
@@ -419,6 +424,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     new_app.state._db_path = db_path
+    new_app.state.proof_registry = ProofRegistryRepository(
+        os.getenv("CONCORDIA_PROOF_REGISTRY_DIR", "artifacts/live/proof-registry")
+    )
     instrument_fastapi_app(new_app)
 
     new_app.add_middleware(
@@ -452,6 +460,67 @@ def create_app(db_path: str | None = None) -> FastAPI:
             },
             status_code=status_code,
         )
+
+    @new_app.get("/proof-registry/v1/{proposal_id}")
+    async def public_proof_registry(proposal_id: str):
+        """Return provenance-separated proof observations for one proposal."""
+
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            known = proposal_id == CANONICAL_PROPOSAL_ID or repository.has_public_proposal(proposal_id)
+            if not known:
+                db = new_app.state.db
+                known = db.execute(
+                    "SELECT 1 FROM proposals WHERE proposal_id=?",
+                    (proposal_id,),
+                ).fetchone() is not None
+            if not known:
+                known = load_dynamic_evidence(proposal_id) is not None
+            return repository.public_document(proposal_id, known=known)
+        except RegistryNotFound:
+            return JSONResponse({"error": "proposal_not_found"}, status_code=404)
+        except ValueError:
+            logger.exception("proof_registry_public_load_failed", extra={"proposal_id": proposal_id})
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    def _proof_registry_service_authorized(request: Request) -> bool:
+        expected = read_secret("X402_GATEWAY_TOKEN")
+        supplied = request.headers.get("X-Concordia-Service-Token", "")
+        return bool(expected and supplied) and hmac.compare_digest(expected, supplied)
+
+    @new_app.get("/internal/proof-registry/v1/actions/{action_id_hex}")
+    async def internal_proof_registry_action(action_id_hex: str, request: Request):
+        """Internal exact-action lookup; authentication never reveals existence."""
+
+        if not _proof_registry_service_authorized(request):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            return repository.by_action_id(action_id_hex)
+        except RegistryNotFound:
+            return JSONResponse({"error": "action_not_found"}, status_code=404)
+        except AmbiguousGovernanceBinding:
+            return JSONResponse({"error": "ambiguous_governance_binding"}, status_code=409)
+        except ValueError:
+            logger.exception("proof_registry_action_load_failed")
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    @new_app.get("/internal/proof-registry/v1/x402/{signed_payment_payload_hash}")
+    async def internal_proof_registry_x402(signed_payment_payload_hash: str, request: Request):
+        """Internal x402 lookup with exact current-verified uniqueness."""
+
+        if not _proof_registry_service_authorized(request):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            return repository.by_signed_payment_payload_hash(signed_payment_payload_hash)
+        except RegistryNotFound:
+            return JSONResponse({"error": "action_not_found"}, status_code=404)
+        except AmbiguousGovernanceBinding:
+            return JSONResponse({"error": "ambiguous_governance_binding"}, status_code=409)
+        except ValueError:
+            logger.exception("proof_registry_x402_load_failed")
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
 
     @new_app.get("/x402/governance-report")
     async def x402_governance_report(request: Request, proposal_id: str = "demo"):
