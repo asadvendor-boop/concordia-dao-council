@@ -60,6 +60,21 @@
         "test_proof_gate_rejects_competing_block_at_v3_authorization_height",
         "WP8 cross-proof competing-fork rejection tests"
       ]
+    },
+    {
+      "id": "G1-C10-independent-card-chain-artifact",
+      "affected_schema": "concordia.card_chain.v1",
+      "rules": [
+        "The humanized public evidence view is not a cryptographic card-hash preimage.",
+        "Independent card verification consumes the exact stored canonical_card_json bytes for each immutable historical card.",
+        "The adapter recomputes every card hash and previous-card link and ignores asserted chain-validity booleans.",
+        "The exact frozen preimages pass a secret scan before public release and are never modified during publication."
+      ],
+      "acceptance_tests": [
+        "WP4 card-chain artifact byte-preservation and non-mutation tests",
+        "WP8 card-chain exact hash and linkage tests",
+        "WP8 forged chain_valid boolean guard"
+      ]
     }
   ]
 }

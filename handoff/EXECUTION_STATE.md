@@ -31,13 +31,14 @@ every handoff or live mutation. Claims require the evidence listed here.
 | Official settlement compatibility | BLOCKED_FAIL_CLOSED | public JS/Go use runtime `amount`; live v8 requires `value`; only a real finalized canary can lift |
 | G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
-| WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling committed through `588507d`; cross-language temporal correction G1-C6 is locally green; 554 Python + 29 Rust tests, fmt/clippy, reproducible Wasm/schema, mixed-custody checkpoints, and historical hash inventory all green; live deployment remains WP10 |
+| WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `b6b2c98`; G1-C6/C8 enforce raw temporal and fork identity; 172 affected Python tests and the prior full/Rust/Wasm gates are green; live deployment remains WP10 |
 | WP4 registry | PASS_LOCAL_PENDING_PRODUCERS | fail-closed registry/API and legacy SafePay truth rewire committed; live v3/SafePay/x402 registry artifacts wait on the corresponding verified executions |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
-| WP8 verifier | IN_PROGRESS | package implementation and cross-language semantic audit in progress; its independent adapter found and now enforces post-freeze corrections G1-C6/C7 |
+| WP8 verifier | IN_PROGRESS_BLOCKED_ON_PRODUCERS | package implementation and cross-language audit found G1-C6/C7/C8/C9 plus missing independent card/SafePay/x402 adapters, boolean-only live mode, and attacker-controlled freshness; clock/live/card work is active, SafePay/x402 completion waits on corrected producer schemas |
 | WP10 live/release | PENDING | no mutations before local/integration gates |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
+| Claude WP7 | BLOCKED_ON_CORRECTIONS | `dfa3cd2` visual direction approved, implementation NO-GO: stale cross-proposal state, wrong demo protocol/reset, fail-open evidence/approval states, false SafePay fallback, hardcoded proof, role and accessibility defects; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP7.md` |
 | Final release | PENDING | no claim until hosted/live gates pass |
 
 ## Upstream x402 blocker details
@@ -74,13 +75,14 @@ release-blocking invariants not covered by those tests. Those commits remain
 isolated and unmerged. WP8 continues concurrently; Claude WP5 is undergoing an
 independent read-only release audit before any cherry-pick.
 
-The WP8 cross-language adapter found two omissions after the immutable G1 tag:
-the Python v3 verifier did not compare readback height with exact-finalization
-height, and public registry items lacked the v3 deployment domain needed for
-exact/treasury parity. Both are now mandatory deltas in
-`handoff/G1_POST_FREEZE_CORRECTIONS.json`; 554 Python tests pass with the new
-adversarial cases. The original tag remains the common branch root and is not
-silently rewritten.
+The WP8 cross-language adapter found additional omissions after the immutable
+G1 tag. Python now rejects contract steps at/before installation, competing
+block hashes at an equal step/readback height, and treasury scans whose starting
+block hash differs from the exact-v3 finalization block. Those fixes are
+committed at `b6b2c98`; 172 affected tests pass. G1-C10 also freezes a new exact
+sealed-card publication because the existing humanized evidence view is not a
+cryptographic hash preimage. The original tag remains the common branch root
+and is not silently rewritten.
 
 Claude WP5 also remains isolated. Its existing 128 tests pass, but independent
 review proved that omitted/partial WCSPR argument values can pass post-settle
@@ -88,6 +90,16 @@ readback, pending finality is made terminal, lost responses cannot be recovered
 without a transaction hash, frozen credential-bearing origins are overridable,
 and terminal retries rerun expiring/live gates. The complete rework gate is in
 `handoff/CODEX_REVIEW_CLAUDE_WP5.md`.
+
+Claude WP7 also remains isolated. A real browser audit confirmed that its
+control-room redesign, quorum centerpiece, responsive Judge route, and exact
+authorization composition are visually strong. Source/runtime verification
+nevertheless found stale cross-proposal data races, the obsolete public demo
+protocol/reset, green fallbacks from card presence, rejected approvals rendered
+as authorized, false SafePay narration in recording mode, hardcoded accessible
+proof summaries, incorrect Wells/agent taxonomy, and incomplete tab/ledger
+accessibility. The correction gate is recorded in
+`handoff/CODEX_REVIEW_CLAUDE_WP7.md`.
 
 No VM, Caddy, DNS, Compose, Testnet, npm, live artifact, or `main` mutation has
 occurred since G1.
