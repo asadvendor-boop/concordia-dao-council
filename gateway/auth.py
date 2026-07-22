@@ -11,7 +11,7 @@ Usage:
         return JSONResponse({"error": "unauthorized"}, 403)
 """
 
-import os
+from shared.runtime_secrets import read_secret
 
 _ROLES = [
     "recorder",
@@ -37,21 +37,29 @@ def _load() -> None:
     _key_to_role = {}
     _role_to_key = {}
 
+    ambiguous_keys: set[str] = set()
+
+    def register(key: str, role: str) -> None:
+        if not key or key in ambiguous_keys:
+            return
+        existing = _key_to_role.get(key)
+        if existing is not None and existing != role:
+            ambiguous_keys.add(key)
+            _key_to_role.pop(key, None)
+            _role_to_key.pop(existing, None)
+            _role_to_key.pop(role, None)
+            return
+        _key_to_role[key] = role
+        _role_to_key[role] = key
+
     for role in _ROLES:
-        key = os.getenv(f"{role.upper()}_SUBMISSION_KEY", "")
+        key = read_secret(f"{role.upper()}_SUBMISSION_KEY")
         if key:
-            _key_to_role[key] = role
-            _role_to_key[role] = key
+            register(key, role)
 
-    scribe_fallback = os.getenv("PROPOSAL_ROOM_API_KEY", "")
+    scribe_fallback = read_secret("PROPOSAL_ROOM_API_KEY")
     if scribe_fallback and "scribe" not in _role_to_key:
-        _key_to_role[scribe_fallback] = "scribe"
-        _role_to_key["scribe"] = scribe_fallback
-
-    # Shared-key fallback: maps to "gateway" role (full ACL).
-    fallback = os.getenv("GATEWAY_SECRET", "")
-    if fallback and fallback not in _key_to_role:
-        _key_to_role[fallback] = "gateway"
+        register(scribe_fallback, "scribe")
 
 
 def get_role_for_key(agent_key: str) -> str | None:

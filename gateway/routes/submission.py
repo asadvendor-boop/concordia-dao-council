@@ -19,6 +19,7 @@ from shared.approval import requires_human_approval
 from shared.dao_policy import load_constitution
 from shared.integrity import seal_card, IdempotencyConflict, request_fingerprint
 from shared.models import CARD_TYPES
+from shared.runtime_secrets import read_secret
 
 logger = logging.getLogger("concordia.submission")
 router = APIRouter()
@@ -178,31 +179,42 @@ _agent_keys: dict[str, str] | None = None
 
 
 def _load_agent_keys() -> dict[str, str]:
-    """Load per-agent submission keys from env. Falls back to GATEWAY_SECRET
-    as 'gateway' role (full ACL) for agents without dedicated keys."""
+    """Load unambiguous, role-bound submission keys.
+
+    ``GATEWAY_SECRET`` is deliberately not accepted as an agent credential.
+    Gateway-owned card paths call the sealing primitives directly; network
+    agents receive only their dedicated least-privilege keys.
+    """
     global _agent_keys
     if _agent_keys is not None:
         return _agent_keys
 
-    fallback = os.getenv("GATEWAY_SECRET", "")
     keys: dict[str, str] = {}
+    ambiguous_keys: set[str] = set()
 
     # Load per-agent dedicated keys
     for role in _ROLE_ACL:
+        if role == "gateway":
+            continue
         env_key = f"{role.upper()}_SUBMISSION_KEY"
-        key_val = os.getenv(env_key, "")
-        if key_val:
-            keys[key_val] = role
-
-    # Shared-key fallback: maps to "gateway" role (full ACL).
-    # MUST be outside the loop — otherwise the fallback binds to
-    # whichever role iterates first (was "recorder", breaking all
-    # non-ProposalCard submissions in shared-key mode).
-    if fallback and fallback not in keys:
-        keys[fallback] = "gateway"
+        key_val = read_secret(env_key)
+        if not key_val or key_val in ambiguous_keys:
+            continue
+        existing = keys.get(key_val)
+        if existing is not None and existing != role:
+            ambiguous_keys.add(key_val)
+            keys.pop(key_val, None)
+            continue
+        keys[key_val] = role
 
     _agent_keys = keys
     return _agent_keys
+
+
+def _reset_agent_keys_for_testing() -> None:
+    """Clear the process-local auth cache for isolated test fixtures."""
+    global _agent_keys
+    _agent_keys = None
 
 
 def _authenticate_agent(key: str, card_type: str) -> tuple[bool, str]:
