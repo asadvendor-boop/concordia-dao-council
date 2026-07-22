@@ -8,14 +8,19 @@ from pathlib import Path
 import pytest
 
 from shared.actions_v3 import (
+    X402_CORE_SCHEMA,
     build_native_material,
     derive_native_material,
     derive_x402_material,
 )
 from shared.envelope_v3 import (
+    ACTION_ID_DOMAIN_SEPARATOR,
     EnvelopeEncodingError,
+    blake2b256,
+    bytes32,
     canonical_value,
     derive_deployment_domain,
+    encode_fields,
     encode_header,
 )
 
@@ -146,6 +151,56 @@ def test_invalid_x402_window_fails_closed() -> None:
 
     assert exc_info.value.error_name == "InvalidActionField"
     assert exc_info.value.field_name in vector["failed_fields"]
+
+
+@pytest.mark.parametrize("field", ["source_account", "recipient_account"])
+def test_native_transfer_rejects_zero_financial_account(field: str) -> None:
+    vector = _load("native_transfer/GV-NT-01.json")
+    header = _values(vector["typed_input"]["header"])
+    body = _values(vector["typed_input"]["body"])
+    body[field] = "00" * 32
+
+    with pytest.raises(EnvelopeEncodingError) as exc_info:
+        build_native_material(header, body)
+
+    assert exc_info.value.error_name == "InvalidActionField"
+    assert exc_info.value.field_name == field
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "eip712_auth_nonce",
+        "payer",
+        "payee",
+    ],
+)
+def test_x402_rejects_zero_binding_hashes_before_deploy(field: str) -> None:
+    vector = _load("x402_settlement/GV-X4-01.json")
+    header = _values(vector["typed_input"]["header"])
+    body = _values(vector["typed_input"]["body"])
+    body[field] = "00" * 32
+    core = encode_fields(
+        {name: body[name] for name, _type_name in X402_CORE_SCHEMA},
+        X402_CORE_SCHEMA,
+    )
+    action_id = blake2b256(
+        ACTION_ID_DOMAIN_SEPARATOR
+        + bytes([2])
+        + bytes32(body["action_nonce"], "action_nonce")
+        + core
+    )
+    header["action_id"] = action_id.hex()
+
+    with pytest.raises(EnvelopeEncodingError) as exc_info:
+        derive_x402_material(header, body)
+
+    assert exc_info.value.error_name == "InvalidActionField"
+    assert exc_info.value.field_name == field
 
 
 def test_native_builder_derives_ids_before_strict_verification() -> None:
