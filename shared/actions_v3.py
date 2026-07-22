@@ -116,6 +116,10 @@ def _validate_native_semantics(header: Mapping[str, Any], body: Mapping[str, Any
         raise _action_error("asset_kind", "native CSPR must use discriminant 0")
     source = bytes32(body["source_account"], "source_account")
     recipient = bytes32(body["recipient_account"], "recipient_account")
+    if source == bytes(32):
+        raise _action_error("source_account", "must be non-zero")
+    if recipient == bytes(32):
+        raise _action_error("recipient_account", "must be non-zero")
     if source == recipient:
         raise _action_error("recipient_account", "source and recipient must differ")
     amount = uint_value(body["amount_motes"], 512, "amount_motes")
@@ -237,10 +241,25 @@ def _validate_x402_semantics(header: Mapping[str, Any], body: Mapping[str, Any])
             value = uint_value(value, 32 if field not in {"token_decimals"} else 8, field)
         if value != expected:
             raise _action_error(field, f"must equal {expected}")
-    if bytes32(body["payer"], "payer") == bytes32(body["payee"], "payee"):
+    payer = bytes32(body["payer"], "payer")
+    payee = bytes32(body["payee"], "payee")
+    if payer == bytes(32):
+        raise _action_error("payer", "must be non-zero")
+    if payee == bytes(32):
+        raise _action_error("payee", "must be non-zero")
+    if payer == payee:
         raise _action_error("payee", "payer and payee must differ")
     if uint_value(body["value"], 256, "value") == 0:
         raise _action_error("value", "must be non-zero")
+    for field in (
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "eip712_auth_nonce",
+    ):
+        if bytes32(body[field], field) == bytes(32):
+            raise _action_error(field, "must be non-zero")
     valid_after = uint_value(body["valid_after"], 64, "valid_after")
     valid_before = uint_value(body["valid_before"], 64, "valid_before")
     if valid_before <= valid_after:
