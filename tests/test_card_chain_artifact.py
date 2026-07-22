@@ -327,21 +327,22 @@ def test_card_chain_artifact_rejects_secret_like_exact_preimage_without_rewritin
 def test_card_chain_artifact_allows_public_authorization_ids_and_token_usage_counts() -> None:
     module = importlib.import_module("shared.card_chain_artifact")
     db = init_db(":memory:")
-    _insert_chain(db)
+    expected = _insert_chain(db)
     raw = json.dumps(
         {
-            "sequence_number": 1,
-            "card_type": "ProposalCard",
-            "previous_card_hash": None,
-            "signal_id": "DAO-PROP-CARDS",
+            "sequence_number": 2,
+            "card_type": "CasperExecutionReceipt",
+            "previous_card_hash": expected[0][1],
+            "proposal_id": "DAO-PROP-CARDS",
             "authorization_id": "public-approval-id",
+            "authorization_type": "human_approval",
             "token_usage": {"prompt_tokens": 12},
         },
         separators=(",", ":"),
     )
-    db.execute("DELETE FROM cards WHERE sequence_number=2")
     db.execute(
-        "UPDATE cards SET card_json=?, card_hash=? WHERE sequence_number=1",
+        "UPDATE cards SET card_type='CasperExecutionReceipt', card_json=?, card_hash=? "
+        "WHERE sequence_number=2",
         (raw, hashlib.sha256(raw.encode("utf-8")).hexdigest()),
     )
 
@@ -353,7 +354,161 @@ def test_card_chain_artifact_allows_public_authorization_ids_and_token_usage_cou
         expected_final_card_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
     )
 
-    assert artifact["cards"][0]["canonical_card_json"] == raw
+    assert artifact["cards"][1]["canonical_card_json"] == raw
+
+
+@pytest.mark.parametrize(
+    ("spoofed_field", "spoofed_value"),
+    [
+        ("Authorization-ID", "public-approval-id"),
+        ("Token-Usage", {"prompt_tokens": 12}),
+    ],
+)
+def test_card_chain_artifact_requires_exact_public_field_schema_names(
+    spoofed_field: str,
+    spoofed_value: object,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 2,
+            "card_type": "CasperExecutionReceipt",
+            "previous_card_hash": expected[0][1],
+            "proposal_id": "DAO-PROP-CARDS",
+            "authorization_type": "human_approval",
+            "authorization_id": "public-approval-id",
+            spoofed_field: spoofed_value,
+        },
+        separators=(",", ":"),
+    )
+    root = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute(
+        "UPDATE cards SET card_type='CasperExecutionReceipt', card_json=?, card_hash=? "
+        "WHERE sequence_number=2",
+        (raw, root),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=root,
+        )
+
+
+def test_card_chain_artifact_rejects_non_scalar_public_authorization_type() -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 2,
+            "card_type": "CasperExecutionReceipt",
+            "previous_card_hash": expected[0][1],
+            "proposal_id": "DAO-PROP-CARDS",
+            "authorization_type": {"value": "human_approval"},
+            "authorization_id": "public-approval-id",
+        },
+        separators=(",", ":"),
+    )
+    root = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute(
+        "UPDATE cards SET card_type='CasperExecutionReceipt', card_json=?, card_hash=? "
+        "WHERE sequence_number=2",
+        (raw, root),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=root,
+        )
+
+
+@pytest.mark.parametrize(
+    ("nested_field", "nested_value"),
+    [
+        ("authorization_id", "public-approval-id"),
+        ("token_usage", {"prompt_tokens": 12}),
+    ],
+)
+def test_card_chain_artifact_does_not_whitelist_public_fields_below_their_schema_path(
+    nested_field: str,
+    nested_value: object,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 1,
+            "card_type": "ProposalCard",
+            "previous_card_hash": None,
+            "signal_id": "DAO-PROP-CARDS",
+            "raw_payload": {nested_field: nested_value},
+        },
+        separators=(",", ":"),
+    )
+    root = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute("DELETE FROM cards WHERE sequence_number=2")
+    db.execute(
+        "UPDATE cards SET card_json=?, card_hash=? WHERE sequence_number=1",
+        (raw, root),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=root,
+        )
+
+
+@pytest.mark.parametrize("public_field", ["authorization_id", "token_usage"])
+def test_card_chain_artifact_scans_sensitive_values_even_in_public_fields(
+    public_field: str,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    leaked_token = "ghp_" + "a" * 36
+    raw = json.dumps(
+        {
+            "sequence_number": 2,
+            "card_type": "CasperExecutionReceipt",
+            "previous_card_hash": expected[0][1],
+            "proposal_id": "DAO-PROP-CARDS",
+            "authorization_type": "human_approval",
+            "authorization_id": "public-approval-id",
+            "token_usage": {"prompt_tokens": 12},
+            public_field: leaked_token,
+        },
+        separators=(",", ":"),
+    )
+    root = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    db.execute(
+        "UPDATE cards SET card_type='CasperExecutionReceipt', card_json=?, card_hash=? "
+        "WHERE sequence_number=2",
+        (raw, root),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=root,
+        )
 
 
 def test_card_chain_artifact_enforces_card_count_and_byte_bounds(monkeypatch) -> None:
@@ -668,7 +823,60 @@ def test_card_chain_artifact_bounds_card_json_inside_the_select() -> None:
     assert "LENGTH(CAST" in select.upper()
     assert "MATERIALIZED" in select.upper()
     assert "OVER (" not in select.upper()
-    assert observed_card_json == [None]
+    # SQLITE_LIMIT_LENGTH now rejects before sqlite3 can construct a result
+    # row at all; the row factory therefore never receives the oversized value.
+    assert observed_card_json == []
+
+
+def test_card_chain_artifact_caps_sqlite_length_while_rejecting_a_64mib_row(
+    tmp_path,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db_path = tmp_path / "oversized-card.db"
+    init_db(db_path).close()
+
+    class TrackingConnection(sqlite3.Connection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.length_limit_requests: list[int] = []
+
+        def setlimit(self, category: int, limit: int) -> int:
+            if category == sqlite3.SQLITE_LIMIT_LENGTH:
+                self.length_limit_requests.append(limit)
+            return super().setlimit(category, limit)
+
+    db = sqlite3.connect(db_path, factory=TrackingConnection)
+    db.row_factory = sqlite3.Row
+    _insert_chain(db)
+    db.execute("DELETE FROM cards WHERE sequence_number=2")
+    # Build the hostile value inside SQLite so the Python test process never
+    # constructs a 64 MiB bytes/string object of its own.
+    db.execute(
+        "UPDATE cards SET card_json=CAST(zeroblob(?) AS TEXT), card_hash=? "
+        "WHERE sequence_number=1",
+        (64 * 1024 * 1024, "0" * 64),
+    )
+    db.commit()
+    original_limit = 96 * 1024 * 1024
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, original_limit)
+    db.length_limit_requests.clear()
+
+    with pytest.raises(module.CardChainArtifactError, match="card_json size limit"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash="0" * 64,
+        )
+
+    assert db.length_limit_requests == [
+        module.SQLITE_CARD_QUERY_LENGTH_LIMIT,
+        original_limit,
+    ]
+    assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert not db.in_transaction
+    db.close()
 
 
 def test_card_chain_artifact_requires_external_terminal_root_binding() -> None:
