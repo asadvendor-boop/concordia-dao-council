@@ -14,7 +14,9 @@ from shared.proof_runtime import (
 )
 
 
-NOW = "2026-07-23T01:00:00Z"
+# Fixed in the past so repository/public-document generation never depends on
+# the wall clock of the test runner.
+NOW = "2020-01-01T00:00:00Z"
 SOURCE_COMMIT = "1" * 40
 DEPLOYMENT_COMMIT = "2" * 40
 CURRENT_PAYMENT = "3" * 64

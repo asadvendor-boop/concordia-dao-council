@@ -95,6 +95,23 @@
         "test_reg_04g_official_x402_requires_exact_v3_execution_identity",
         "WP8 proof-type provenance relabelling tests"
       ]
+    },
+    {
+      "id": "G1-C12-proof-observation-chronology",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Every check observed_at, item captured_at, and registry generated_at is a strict RFC3339 UTC-Z timestamp.",
+        "For every verified item, max(check.observed_at) is less than or equal to item captured_at.",
+        "Every item captured_at is less than or equal to registry generated_at.",
+        "Registry generated_at is less than or equal to the verifier reference time and cannot be trusted as the verifier clock.",
+        "Any malformed, reversed, or future chronology makes the affected item or registry invalid rather than green."
+      ],
+      "acceptance_tests": [
+        "test_reg_05b_check_observation_cannot_follow_item_capture",
+        "test_reg_05c_item_capture_cannot_follow_registry_generation",
+        "test_reg_05d_registry_generation_cannot_be_in_the_verifier_future",
+        "WP8 future and reversed proof chronology tests"
+      ]
     }
   ]
 }

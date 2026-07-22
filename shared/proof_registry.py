@@ -226,6 +226,9 @@ _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _PROPOSAL_RE = re.compile(r"^[A-Z0-9-]{1,64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _CHECK_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+_RFC3339_UTC_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
 
 PUBLIC_ITEM_REQUIRED_FIELDS = (
     "proof_id",
@@ -289,14 +292,20 @@ def _is_hex32(value: Any) -> bool:
     return isinstance(value, str) and _HEX32_RE.fullmatch(value) is not None
 
 
-def _is_rfc3339_utc(value: Any) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
+def _parse_rfc3339_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str) or _RFC3339_UTC_RE.fullmatch(value) is None:
+        return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return parsed.tzinfo is not None and parsed.utcoffset().total_seconds() == 0
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        return None
+    return parsed
+
+
+def _is_rfc3339_utc(value: Any) -> bool:
+    return _parse_rfc3339_utc(value) is not None
 
 
 def _safe_repository_path(value: Any) -> bool:
@@ -422,6 +431,14 @@ def _public_item_errors(item: Any) -> list[str]:
     if item.get("captured_at") is not None and not _is_rfc3339_utc(item["captured_at"]):
         errors.append("captured_at_invalid")
     errors.extend(_check_errors(item.get("checks"), required_checks))
+    captured_at = _parse_rfc3339_utc(item.get("captured_at"))
+    if captured_at is not None and isinstance(item.get("checks"), list):
+        for check in item["checks"]:
+            if not isinstance(check, dict):
+                continue
+            observed_at = _parse_rfc3339_utc(check.get("observed_at"))
+            if observed_at is not None and observed_at > captured_at:
+                errors.append("check_observed_after_capture")
     if not isinstance(item.get("links"), list):
         errors.append("links_not_array")
     else:
@@ -499,16 +516,29 @@ def build_public_registry(
     items: list[dict[str, Any]],
     *,
     generated_at: str | None = None,
+    reference_time: str | None = None,
 ) -> dict[str, Any]:
     if _PROPOSAL_RE.fullmatch(proposal_id) is None:
         raise ValueError("invalid proposal_id")
+    now = datetime.now(UTC)
     if generated_at is None:
-        generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    if not _is_rfc3339_utc(generated_at):
+        generated_at = now.isoformat().replace("+00:00", "Z")
+    generated_time = _parse_rfc3339_utc(generated_at)
+    if generated_time is None:
         raise ValueError("generated_at must be RFC3339 UTC")
+    if reference_time is None:
+        reference_time = now.isoformat().replace("+00:00", "Z")
+    reference = _parse_rfc3339_utc(reference_time)
+    if reference is None:
+        raise ValueError("reference_time must be RFC3339 UTC")
+    if generated_time > reference:
+        raise ValueError("generated_at cannot be after reference_time")
     normalized = [normalize_proof_item(item) for item in items]
     for item in normalized:
         if item.get("proposal_id") not in {None, proposal_id}:
+            item["verification_status"] = "invalid"
+        captured_at = _parse_rfc3339_utc(item.get("captured_at"))
+        if captured_at is not None and captured_at > generated_time:
             item["verification_status"] = "invalid"
     return {
         "schema_version": 1,
