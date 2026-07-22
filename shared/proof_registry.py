@@ -80,7 +80,7 @@ REQUIRED_CHECKS_BY_PROOF_TYPE: dict[str, tuple[str, ...]] = {
         "payment_requirements_hash_matches_envelope",
         "signed_payment_payload_hash_matches_envelope",
         "active_wcspr_v8_pre_verify_drift_guard_passed",
-        "facilitator_verify_returned_isValid_true",
+        "facilitator_verify_returned_is_valid_true",
         "active_wcspr_v8_pre_settle_drift_guard_passed",
         "facilitator_settlement_response_success_true",
         "settlement_transaction_finalized_without_execution_error",
@@ -151,6 +151,76 @@ _EXECUTION_OUTCOMES = frozenset(
     }
 )
 _GREEN_OUTCOMES = frozenset({"accepted", "expected_rejection", "not_applicable"})
+
+# A proof type is not merely a label for a checklist.  Its provenance fields
+# define the exact claim that the checklist is allowed to support.  Keeping
+# this mapping explicit prevents a current v3 proof from being relabelled as
+# canonical/historical (or vice versa) while retaining a green status.
+_PROVENANCE_BY_PROOF_TYPE: dict[str, dict[str, frozenset[str]]] = {
+    "historical_odra_receipt_v2": {
+        "generation": frozenset({"v1", "v2"}),
+        "lineage": frozenset({"canonical", "supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"historical"}),
+        "execution_outcome": frozenset({"accepted", "expected_rejection"}),
+    },
+    "exact_envelope_v3": {
+        "generation": frozenset({"v3"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "native_treasury_execution_v1": {
+        "generation": frozenset({"v3"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "safepay_v2": {
+        "generation": frozenset({"v2"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "official_x402_settlement_v1": {
+        "generation": frozenset({"v3"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "approval_boundary_v1": {
+        "generation": frozenset({"v1"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "demo_capability_v1": {
+        "generation": frozenset({"v1"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "room_identity_v1": {
+        "generation": frozenset({"v1"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"live", "snapshot"}),
+        "temporal_scope": frozenset({"current"}),
+        "execution_outcome": frozenset({"accepted"}),
+    },
+    "snapshot": {
+        "generation": frozenset({"none"}),
+        "lineage": frozenset({"supplemental"}),
+        "observation_mode": frozenset({"snapshot"}),
+        "temporal_scope": frozenset({"current", "historical"}),
+        "execution_outcome": frozenset({"not_applicable"}),
+    },
+}
 _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _PROPOSAL_RE = re.compile(r"^[A-Z0-9-]{1,64}$")
@@ -320,6 +390,11 @@ def _public_item_errors(item: Any) -> list[str]:
     ):
         if item.get(field) not in allowed:
             errors.append(f"{field}_invalid")
+    provenance = _PROVENANCE_BY_PROOF_TYPE.get(proof_type)
+    if provenance is not None:
+        for field, allowed in provenance.items():
+            if item.get(field) not in allowed:
+                errors.append(f"provenance_invalid:{field}")
     for field in ("claim_scope", "enforcement_scope"):
         if not isinstance(item.get(field), str) or not item[field].strip():
             errors.append(f"{field}_invalid")
@@ -365,7 +440,11 @@ def _public_item_errors(item: Any) -> list[str]:
         if item.get("observation_mode") == "live" and item.get("temporal_scope") == "current":
             if item.get("deployment_commit") is None:
                 errors.append("verified_live_deployment_commit_missing")
-        if proof_type in {"exact_envelope_v3", "native_treasury_execution_v1"}:
+        if proof_type in {
+            "exact_envelope_v3",
+            "native_treasury_execution_v1",
+            "official_x402_settlement_v1",
+        }:
             for field in (
                 "proposal_id",
                 "action_id",
