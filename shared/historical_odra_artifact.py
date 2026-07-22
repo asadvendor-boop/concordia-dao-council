@@ -1199,24 +1199,9 @@ def verify_historical_odra_artifact(
         "deploymentCommit": deployment_commit,
         "capturedAt": captured_at,
         "sourceDeploymentEquivalence": "unproven",
-        "verificationScope": {
-            "proofType": "historical_odra_receipt",
-            "network": "casper-test",
-            "verified": [
-                "exact_card_chain_preimages",
-                "deploy_body_hash_and_deploy_hash",
-                "all_deploy_approval_signatures",
-                "successful_execution_and_canonical_block_inclusion",
-                "state_root_package_contract_and_wasm_identity",
-                "exact_17_typed_receipt_arguments",
-            ],
-            "notVerified": [
-                "validator_consensus_or_block_signatures",
-                "preserved_source_to_deployed_wasm_equivalence",
-                "retroactive_v3_exact_envelope_enforcement",
-            ],
-        },
-        "observationSources": [
+        "verificationScope": "artifact_transcript_consistency",
+        "observationSources": [],
+        "artifactInputs": [
             "packaged_frozen_inventory",
             "artifact.card_chain",
             "artifact.raw_rpc.deploy",
@@ -1224,6 +1209,13 @@ def verify_historical_odra_artifact(
             "artifact.raw_rpc.state_root",
             "artifact.raw_rpc.package",
             "artifact.raw_rpc.contract",
+        ],
+        "notVerified": [
+            "canonical_chain_membership_or_finality",
+            "live_rpc_observation",
+            "validator_consensus_or_block_signatures",
+            "preserved_source_to_deployed_wasm_equivalence",
+            "retroactive_v3_exact_envelope_enforcement",
         ],
     }
 

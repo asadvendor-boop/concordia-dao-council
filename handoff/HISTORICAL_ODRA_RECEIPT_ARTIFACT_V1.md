@@ -201,7 +201,19 @@ Only after every check passes may the adapter return:
 - `finalCardHash`, `receiptArgumentDigest`;
 - `sourceCommit`, `deploymentCommit`, `capturedAt`;
 - `sourceDeploymentEquivalence: "unproven"`;
-- explicit `verificationScope` and `observationSources`.
+- `verificationScope: "artifact_transcript_consistency"` and an empty
+  `observationSources` list;
+- explicit `artifactInputs` and `notVerified` lists.
+
+The offline adapter verifies signed deploy bytes, signatures, exact card
+preimages, and internal consistency across the supplied transcripts. Raw RPC
+JSON embedded in an artifact is not an authenticated observation of the live
+canonical chain. Therefore those paths are `artifactInputs`, never
+`observationSources`, and offline output must list canonical membership,
+finality, and live RPC observation as not verified. Only a separate explicit
+live mode querying trusted independent endpoints may report
+`verificationScope: "live_casper_rpc_corroborated"` and name those endpoints as
+observation sources.
 
 The historical public registry item remains historical. Passing this adapter
 does not retroactively prove v3 exact-envelope enforcement. A valid v2 receipt
