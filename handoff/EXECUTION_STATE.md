@@ -37,6 +37,7 @@ every handoff or live mutation. Claims require the evidence listed here.
 | WP8 verifier | IN_PROGRESS | package implementation and cross-language semantic audit in progress; its independent adapter found and now enforces post-freeze corrections G1-C6/C7 |
 | WP10 live/release | PENDING | no mutations before local/integration gates |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
+| Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
 | Final release | PENDING | no claim until hosted/live gates pass |
 
 ## Upstream x402 blocker details
@@ -80,6 +81,13 @@ exact/treasury parity. Both are now mandatory deltas in
 `handoff/G1_POST_FREEZE_CORRECTIONS.json`; 554 Python tests pass with the new
 adversarial cases. The original tag remains the common branch root and is not
 silently rewritten.
+
+Claude WP5 also remains isolated. Its existing 128 tests pass, but independent
+review proved that omitted/partial WCSPR argument values can pass post-settle
+readback, pending finality is made terminal, lost responses cannot be recovered
+without a transaction hash, frozen credential-bearing origins are overridable,
+and terminal retries rerun expiring/live gates. The complete rework gate is in
+`handoff/CODEX_REVIEW_CLAUDE_WP5.md`.
 
 No VM, Caddy, DNS, Compose, Testnet, npm, live artifact, or `main` mutation has
 occurred since G1.
