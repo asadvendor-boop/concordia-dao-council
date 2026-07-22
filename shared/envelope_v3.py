@@ -113,12 +113,17 @@ def uint_value(value: object, bits: int, field_name: str) -> int:
 def _ascii(value: object, field_name: str) -> bytes:
     if not isinstance(value, str):
         raise EnvelopeEncodingError("InvalidEnvelopeField", field_name, "string required")
-    if "\0" in value:
-        raise EnvelopeEncodingError("InvalidEnvelopeField", field_name, "embedded NUL")
     try:
-        return value.encode("ascii")
+        raw = value.encode("ascii")
     except UnicodeEncodeError as exc:
         raise EnvelopeEncodingError("InvalidEnvelopeField", field_name, "ASCII required") from exc
+    if any(byte < 0x20 or byte > 0x7E for byte in raw):
+        raise EnvelopeEncodingError(
+            "InvalidEnvelopeField",
+            field_name,
+            "printable ASCII 0x20..0x7e required",
+        )
+    return raw
 
 
 def length_prefix(value: str | bytes, field_name: str = "value") -> bytes:

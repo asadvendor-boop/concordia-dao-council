@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from shared.actions_v3 import derive_native_material, derive_x402_material
+from shared.actions_v3 import (
+    build_native_material,
+    derive_native_material,
+    derive_x402_material,
+)
 from shared.envelope_v3 import (
     EnvelopeEncodingError,
+    canonical_value,
     derive_deployment_domain,
     encode_header,
 )
@@ -24,6 +29,20 @@ def _load(relative: str) -> dict[str, object]:
 
 def _values(fields: list[dict[str, object]]) -> dict[str, object]:
     return {str(field["name"]): field["value"] for field in fields}
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["line\nbreak", "tab\tvalue", "delete\x7fvalue", "control\x1f"],
+)
+def test_frozen_strings_reject_every_non_printable_ascii_byte(value: str) -> None:
+    with pytest.raises(EnvelopeEncodingError, match="printable ASCII"):
+        canonical_value("String", value, "metadata")
+
+
+def test_frozen_strings_accept_ascii_space_through_tilde() -> None:
+    value = " " + "".join(chr(code) for code in range(0x21, 0x7F))
+    assert canonical_value("String", value, "metadata").endswith(value.encode("ascii"))
 
 
 @pytest.mark.parametrize("vector_name", ["GV-HDR-01", "GV-HDR-02", "GV-HDR-03"])
@@ -127,3 +146,17 @@ def test_invalid_x402_window_fails_closed() -> None:
 
     assert exc_info.value.error_name == "InvalidActionField"
     assert exc_info.value.field_name in vector["failed_fields"]
+
+
+def test_native_builder_derives_ids_before_strict_verification() -> None:
+    vector = _load("native_transfer/GV-NT-01.json")
+    header = _values(vector["typed_input"]["header"])
+    body = _values(vector["typed_input"]["body"])
+    header["action_id"] = "00" * 32
+    body["transfer_id"] = "0"
+
+    built_header, built_body, material = build_native_material(header, body)
+
+    assert built_header["action_id"] == vector["hashes"]["action_id"]
+    assert built_body["transfer_id"] == vector["typed_input"]["body"][7]["value"]
+    assert material.envelope_hash.hex() == vector["hashes"]["envelope_hash"]

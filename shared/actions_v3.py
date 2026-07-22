@@ -186,6 +186,37 @@ def derive_native_material(
     )
 
 
+def build_native_material(
+    header: Mapping[str, Any],
+    body: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], EncodedEnvelope]:
+    """Derive action/transfer IDs, then run the same strict verifier.
+
+    Callers provide all frozen typed fields but may leave ``action_id`` and
+    ``transfer_id`` as placeholders.  The returned dictionaries are copies;
+    input mappings are never mutated.
+    """
+
+    built_header = dict(header)
+    built_body = dict(body)
+    _validate_body_scalars(built_body, NATIVE_SCHEMA)
+    # Validate the complete header field set and all non-derived scalars before
+    # replacing the supplied placeholder action ID.
+    encode_header(built_header)
+    core = _encode_projection(built_body, NATIVE_CORE_SCHEMA)
+    computed_action_id = _derive_action_id(1, built_body["action_nonce"], core)
+    built_header["action_id"] = computed_action_id.hex()
+    transfer_digest = blake2b256(
+        TRANSFER_ID_DOMAIN_SEPARATOR
+        + length_prefix(built_header["proposal_id"], "proposal_id")
+        + bytes32(built_header["proposal_nonce"], "proposal_nonce")
+        + computed_action_id
+    )
+    built_body["transfer_id"] = str(int.from_bytes(transfer_digest[:8], "big"))
+    material = derive_native_material(built_header, built_body)
+    return built_header, built_body, material
+
+
 def _validate_x402_semantics(header: Mapping[str, Any], body: Mapping[str, Any]) -> None:
     expected_values = {
         "x402_version": 2,
