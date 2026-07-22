@@ -29,14 +29,14 @@ every handoff or live mutation. Claims require the evidence listed here.
 | Facilitator auth semantics | PASS | raw Authorization; authenticated redacted `/supported` returned 200 |
 | WCSPR live readback | PASS | package `3d80…47c1e`, active v8 `032706…35f4a`, value:U256, metadata pinned |
 | Official settlement compatibility | BLOCKED_FAIL_CLOSED | public JS/Go use runtime `amount`; live v8 requires `value`; only a real finalized canary can lift |
-| G1 interface freeze | READY_FOR_ANNOTATED_TAG | this committed state is prospective; actual publication is proven only by annotated tag existence, type, peeled SHA, and tagged-tree tests |
+| G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
-| WP1 v3 | PENDING | start after G1 tag |
-| WP4 registry | PENDING | start after interface implementation fixtures |
-| WP6 executor | PENDING | start after v3 encoder/ABI |
-| WP8 verifier | PENDING | start after shared golden vectors |
+| WP1 v3 | IN_PROGRESS | encoders committed; contract, reproducible Wasm/schema, installer, mixed-custody checkpoints and offline verifier under independent red-team review |
+| WP4 registry | IN_PROGRESS | fail-closed registry/API committed; live producers and legacy SafePay truth rewire remain |
+| WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
+| WP8 verifier | IN_PROGRESS | package implementation and cross-language semantic audit in progress |
 | WP10 live/release | PENDING | no mutations before local/integration gates |
-| Claude integration | PENDING | cherry-pick only accepted WP commits from Claude branch |
+| Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Final release | PENDING | no claim until hosted/live gates pass |
 
 ## Upstream x402 blocker details
@@ -50,6 +50,27 @@ every handoff or live mutation. Claims require the evidence listed here.
 - CAIP/EIP-712 domain is `casper:casper-test`, not `casper-test`.
 
 ## Latest checkpoint
+
+At the current Codex checkpoint, WP6 is committed and independently cleared for
+integration. Its durable journal persists signed bytes before broadcast,
+reconciles uncertain submission by deploy hash, reparses two independent RPC
+finality observations, binds exact historical balance evidence, and proves one
+matching transfer over a contiguous time-bounded scan. The public artifact
+serializer reparses every emitted raw transcript and equality-binds it to the
+sealed parser-issued proofs. The focused WP6 gate passed 285 tests; the final
+capture-time ordering hardening passed 15 artifact tests and Ruff.
+
+Claude's WP2/WP3 focused suite passed, but independent source review found
+release-blocking invariants not covered by those tests. Those commits remain
+isolated and unmerged. WP1 and WP8 continue concurrently. The most recent full
+Python run reached 531 passed with one expected transient WP1 deployment-
+manifest hash mismatch while the reproducible Wasm/schema rebuild was still in
+progress; this is not a green full-suite claim.
+
+No VM, Caddy, DNS, Compose, Testnet, npm, live artifact, or `main` mutation has
+occurred since G1.
+
+### Earlier G0-R checkpoint
 
 At 2026-07-22T19:58:59Z Codex had independently completed G0-R without a live
 mutation: the bundle and archive are readable, SQLite integrity is `ok`, all 77
