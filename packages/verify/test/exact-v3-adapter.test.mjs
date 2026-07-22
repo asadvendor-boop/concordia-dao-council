@@ -70,6 +70,24 @@ test("exact-envelope v3 adapter rejects every unbound summary or raw-evidence mu
     ["wrong rejection code", (proof) => {
       proof.run.steps[1].finality_transcript.response.result.execution_info.execution_result.Version2.error_message = "User error: 9";
     }, /checksum|outcome|User error/i],
+    ["nonfinal durable state", (proof) => {
+      proof.run.steps[0].submission_state = "broadcast_ambiguous";
+    }, /submission state|finalized/i],
+    ["asserted finality state root", (proof) => {
+      proof.run.steps[0].finality_block_evidence.state_root_hash = "ff".repeat(32);
+    }, /state_root_hash|raw node evidence/i],
+    ["single-node finality", (proof) => {
+      proof.run.steps[0].finality_block_evidence.node_observations.pop();
+      proof.run.steps[0].finality_block_evidence.endpoint_identities.pop();
+      proof.run.steps[0].finality_block_evidence.corroboration_count = 1;
+    }, /two-node|two node|exactly two|finalized/i],
+    ["observation before canonical finalization", (proof) => {
+      proof.run.steps[0].finality_block_evidence.observed_at = "2026-01-23T12:34:55.000Z";
+    }, /predates canonical finalization/i],
+    ["second-node competing block", (proof) => {
+      const node = proof.run.steps[0].finality_block_evidence.node_observations[1];
+      node.block_response.result.block_with_signatures.block.Version2.hash = "ef".repeat(32);
+    }, /block|node|evidence/i],
     ["readback fact", (proof) => { proof.readback.facts.action_authorized = false; }, /checksum|facts|authorization|readback/i],
     ["raw state", (proof) => {
       const state = proof.readback.transcripts.find((item) => item.method === "state_get_dictionary_item");
@@ -117,24 +135,44 @@ test("exact-envelope v3 adapter reads the installer package key only from a stri
 
 test("exact-envelope v3 adapter rejects nonmonotonic step finality after checksums are resealed", () => {
   const proof = structuredClone(baseline);
-  const transcript = proof.run.steps[1].finality_transcript;
-  transcript.response.result.execution_info.block_height =
+  const step = proof.run.steps[1];
+  const transcript = step.finality_transcript;
+  const height =
     proof.run.steps[0].finality_transcript.response.result.execution_info.block_height - 1;
+  transcript.response.result.execution_info.block_height = height;
   transcript.canonical_sha256 = sha256Canonical({
     request: transcript.request,
     response: transcript.response,
   });
+  step.finality_block_evidence.block_height = height;
+  for (const node of step.finality_block_evidence.node_observations) {
+    node.deploy_response.result.execution_info.block_height = height;
+    node.block_response.result.block_with_signatures.block.Version2.header.height = height;
+  }
   assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /nonmonotonic/i);
 });
 
 test("exact-envelope v3 adapter rejects two different canonical blocks at one step height", () => {
   const proof = structuredClone(baseline);
-  const transcript = proof.run.steps[1].finality_transcript;
-  transcript.response.result.execution_info.block_hash = "ef".repeat(32);
+  const step = proof.run.steps[1];
+  const transcript = step.finality_transcript;
+  const blockHash = "ef".repeat(32);
+  const blockHeight = proof.run.steps[0].finality_transcript.response.result.execution_info.block_height;
+  transcript.response.result.execution_info.block_hash = blockHash;
+  transcript.response.result.execution_info.block_height = blockHeight;
   transcript.canonical_sha256 = sha256Canonical({
     request: transcript.request,
     response: transcript.response,
   });
+  step.finality_block_evidence.block_hash = blockHash;
+  step.finality_block_evidence.block_height = blockHeight;
+  for (const node of step.finality_block_evidence.node_observations) {
+    node.deploy_response.result.execution_info.block_hash = blockHash;
+    node.deploy_response.result.execution_info.block_height = blockHeight;
+    node.block_request.params.block_identifier.Hash = blockHash;
+    node.block_response.result.block_with_signatures.block.Version2.hash = blockHash;
+    node.block_response.result.block_with_signatures.block.Version2.header.height = blockHeight;
+  }
   assert.throws(
     () => verifyExactEnvelopeV3Artifact(proof),
     /another block at the same height/i,
