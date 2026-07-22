@@ -20,12 +20,18 @@ from urllib.parse import urlsplit
 SCHEMA_VERSION = "concordia.card_chain.v1"
 ROOTS_SCHEMA_VERSION = "concordia.card_chain_roots.v1"
 MAX_CARD_COUNT = 256
-MAX_CARD_JSON_BYTES = 1024 * 1024
 MAX_TOTAL_PREIMAGE_BYTES = 8 * 1024 * 1024
+# The limited SQL CTE returns at most MAX_CARD_COUNT + 1 rows.  This quotient
+# therefore makes the maximum card_json materialized by SQLite no larger than
+# the total artifact budget, even for the one overflow row used to detect an
+# excessive card count.
+MAX_CARD_JSON_BYTES = MAX_TOTAL_PREIMAGE_BYTES // (MAX_CARD_COUNT + 1)
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_ROOTS_FILE_BYTES = 64 * 1024
 _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_URL_CONTROL_OR_SPACE_RE = re.compile(r"[\x00-\x20\x7f]")
 _RFC3339_UTC_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z$"
 )
@@ -33,32 +39,41 @@ _PUBLISHED_AT_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]{1,9})?(?:Z|\+00:00)$"
 )
-_SECRET_FIELD_NAMES = frozenset(
+_SECRET_KEY_SUBSTRINGS = (
+    "authorization",
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "bearer",
+    "client_secret",
+    "credential",
+    "docker_secret",
+    "env_var",
+    "environment_variable",
+    "jwt",
+    "llm_api_key",
+    "openai",
+    "passphrase",
+    "passwd",
+    "password",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "session_token",
+    "token",
+    "wallet_secret",
+)
+_SECRET_EXACT_FIELD_NAMES = frozenset({"key"})
+_PUBLIC_SECRETISH_FIELD_WHITELIST = frozenset(
     {
-        "access_token",
-        "api_key",
-        "apikey",
-        "auth_token",
-        "authorization",
-        "bearer",
-        "client_secret",
-        "credential",
-        "credentials",
-        "docker_secret",
-        "jwt",
-        "key",
-        "llm_api_key",
-        "openai_api_key",
-        "passphrase",
-        "passwd",
-        "password",
-        "private_key",
-        "refresh_token",
-        "secret",
-        "secret_key",
-        "session_token",
-        "token",
-        "wallet_secret",
+        "authorization_id",
+        # Frozen CasperExecutionReceipt schema: public enum, never a credential.
+        "authorization_type",
+        "token_usage",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
     }
 )
 _SECRET_VALUE_PATTERNS = (
@@ -115,7 +130,12 @@ def load_card_chain_release_roots(path_value: object) -> Mapping[str, str]:
     if type(path_value) is not str or not path_value.strip():
         raise CardChainRootsError("card-chain roots file is not configured")
     path = Path(path_value)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -203,7 +223,14 @@ def _secret_scan_findings(value: object, path: str = "$") -> list[str]:
         for key, raw in value.items():
             normalized = str(key).strip().lower().replace("-", "_")
             child = f"{path}.{key}"
-            if normalized in _SECRET_FIELD_NAMES and raw not in (None, "[REDACTED]"):
+            secretish_name = normalized in _SECRET_EXACT_FIELD_NAMES or any(
+                pattern in normalized for pattern in _SECRET_KEY_SUBSTRINGS
+            )
+            if (
+                normalized not in _PUBLIC_SECRETISH_FIELD_WHITELIST
+                and secretish_name
+                and raw not in (None, "[REDACTED]")
+            ):
                 findings.append(f"{child}: secret-like key")
             findings.extend(_secret_scan_findings(raw, child))
     elif type(value) is list:
@@ -240,17 +267,30 @@ def _validate_public_metadata(
     captured = _require_rfc3339_utc(captured_at, "captured_at")
     if type(source_url) is not str:
         raise CardChainArtifactError("source_url is invalid")
+    if _URL_CONTROL_OR_SPACE_RE.search(source_url):
+        raise CardChainArtifactError("source_url is invalid")
     try:
         source_url_bytes = source_url.encode("utf-8")
         parsed = urlsplit(source_url)
+        port = parsed.port
     except (UnicodeEncodeError, ValueError) as exc:
         raise CardChainArtifactError("source_url is invalid") from exc
     if len(source_url_bytes) > 2048:
         raise CardChainArtifactError("source_url is invalid")
+    host = parsed.hostname
+    if (
+        host is None
+        or host != host.lower()
+        or len(host) > 253
+        or any(_DNS_LABEL_RE.fullmatch(label) is None for label in host.split("."))
+        or port is not None and not 1 <= port <= 65535
+    ):
+        raise CardChainArtifactError("source_url is invalid")
+    canonical_netloc = host if port is None else f"{host}:{port}"
     expected_path = f"/proof-artifacts/v1/{proposal_id}/card-chain"
     if (
         parsed.scheme != "https"
-        or not parsed.hostname
+        or parsed.netloc != canonical_netloc
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -337,44 +377,37 @@ def _read_rows(db: sqlite3.Connection, proposal_id: str) -> list[sqlite3.Row]:
     db.execute("BEGIN DEFERRED")
     try:
         cursor = db.execute(
-            "SELECT known_proposal_id, sequence_number, card_type, card_hash, "
-            "CASE WHEN card_json_bytes <= ? AND cumulative_card_json_bytes <= ? "
+            "WITH limited_cards AS MATERIALIZED ("
+            "SELECT sequence_number, card_type, card_hash, "
+            "CASE WHEN length(CAST(card_json AS BLOB)) <= ? "
             "THEN card_json ELSE NULL END AS card_json, published_at, "
-            "card_json_bytes, cumulative_card_json_bytes "
-            "FROM ("
+            "length(CAST(card_json AS BLOB)) AS card_json_bytes "
+            "FROM cards WHERE proposal_id=? "
+            "ORDER BY sequence_number ASC LIMIT ?"
+            ") "
             "SELECT p.proposal_id AS known_proposal_id, c.sequence_number, "
             "c.card_type, c.card_hash, c.card_json, c.published_at, "
-            "length(CAST(c.card_json AS BLOB)) AS card_json_bytes, "
-            "sum(COALESCE(length(CAST(c.card_json AS BLOB)), 0)) OVER ("
-            "PARTITION BY p.proposal_id ORDER BY c.sequence_number "
-            "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-            ") AS cumulative_card_json_bytes "
-            "FROM proposals AS p "
-            "LEFT JOIN cards AS c ON c.proposal_id = p.proposal_id "
-            "WHERE p.proposal_id=?"
-            ") AS bounded_cards "
-            "ORDER BY sequence_number ASC "
-            "LIMIT ?",
+            "c.card_json_bytes "
+            "FROM proposals AS p LEFT JOIN limited_cards AS c ON 1=1 "
+            "WHERE p.proposal_id=? ORDER BY c.sequence_number ASC",
             (
                 MAX_CARD_JSON_BYTES,
-                MAX_TOTAL_PREIMAGE_BYTES,
                 proposal_id,
                 MAX_CARD_COUNT + 1,
+                proposal_id,
             ),
         )
         rows: list[sqlite3.Row] = []
+        cumulative_bytes = 0
         for row in cursor:
             if row["sequence_number"] is not None:
                 card_bytes = row["card_json_bytes"]
-                cumulative_bytes = row["cumulative_card_json_bytes"]
                 if type(card_bytes) is not int or card_bytes > MAX_CARD_JSON_BYTES:
                     raise CardChainArtifactError(
                         f"card {row['sequence_number']}: card_json size limit exceeded"
                     )
-                if (
-                    type(cumulative_bytes) is not int
-                    or cumulative_bytes > MAX_TOTAL_PREIMAGE_BYTES
-                ):
+                cumulative_bytes += card_bytes
+                if cumulative_bytes > MAX_TOTAL_PREIMAGE_BYTES:
                     raise CardChainArtifactError("total card_json size limit exceeded")
                 if row["card_json"] is None:
                     raise CardChainArtifactError(
