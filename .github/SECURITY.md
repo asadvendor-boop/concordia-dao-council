@@ -17,9 +17,21 @@ acknowledge reports promptly and will keep you informed of remediation progress.
 This is a hackathon submission running on the Casper **Testnet**. No mainnet
 funds are at risk. The security-relevant surfaces are:
 
-- the governance gateway API (`gateway/`),
-- the Casper contract package (`contracts/`), and
-- the proof/evidence runtime (`shared/proof_runtime.py`).
+- the governance gateway API (`gateway/`), including the human-approval
+  boundary and the judge-demo capability endpoints,
+- the Casper contract packages (`contracts/`),
+- the proof/evidence runtime (`shared/proof_runtime.py`),
+- the SafePay Lite payment provider (`x402_provider/`), and
+- the official x402 settlement service (`services/x402-official/`, added
+  during the July 2026 finals sprint).
+
+## Secrets Handling (finals-sprint posture)
+
+Runtime secrets are loaded only via `_FILE` indirection from `/run/secrets`
+(for example `*_FILE=/run/secrets/<name>`); direct-value environment variables
+are not used for secrets in production. No secret values appear in the
+repository, container images, logs, or error responses, and facilitator or
+operator tokens are never echoed back in response bodies or diagnostics.
 
 ## Automated Scanning
 

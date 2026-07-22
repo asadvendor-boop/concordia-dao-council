@@ -5,6 +5,13 @@ models are advisory and interchangeable, while policy checks, nonce binding,
 exact-envelope validation, quorum gating, and Casper execution are enforced by
 code.
 
+Canonical role taxonomy (used consistently across all judge-facing copy): five
+model-involved roles, including Locke, plus deterministic Core and Wells. Rowan,
+Mercer, Verity, Alden, and the authorization-bound Locke are the five
+model-involved roles; the Concordia Core is deterministic infrastructure, not a
+model; and Wells is a non-reasoning archival/presentation persona whose archive
+is produced by deterministic code.
+
 The system uses OpenAI-compatible environment variables. The values below are
 example values for any OpenAI-compatible provider, not a statement that the
 hosted walkthrough uses OpenAI:
@@ -31,7 +38,7 @@ The hosted Concordia walkthrough uses Qwen models with role-specific depth:
 | Alden | `commander` | `qwen3.7-plus` | Plan synthesis and DAO Mandate drafting require stronger reasoning. |
 | Rowan | `triage` | `qwen3.6-flash` | High-frequency routing favors low latency. |
 | Locke | `operator` | `qwen3.6-flash` | Narrow execution echo is deliberately low-authority. |
-| Wells | `scribe` | `qwen3.6-flash` via `LLM_SCRIBE_MODEL`, archival metadata label | Archiving and governance publication are deterministic code paths; Wells is not one of the five live-required advisory roles. |
+| Wells | `scribe` | `qwen3.6-flash` via `LLM_SCRIBE_MODEL` (configured metadata label only) | Non-reasoning archival/presentation persona: archiving and governance publication are deterministic code paths, and Wells performs no model reasoning in the judge path. Not one of the five live-required advisory roles. |
 
 The Gateway's live-readiness gate covers exactly five advisory roles: `triage`,
 `diagnosis`, `safety_reviewer`, `commander`, and `operator`. These are the same
