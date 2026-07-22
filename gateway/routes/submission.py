@@ -15,11 +15,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from gateway.auth import configured_key_to_role
 from shared.approval import requires_human_approval
 from shared.dao_policy import load_constitution
 from shared.integrity import seal_card, IdempotencyConflict, request_fingerprint
 from shared.models import CARD_TYPES
-from shared.runtime_secrets import read_secret
 
 logger = logging.getLogger("concordia.submission")
 router = APIRouter()
@@ -189,25 +189,7 @@ def _load_agent_keys() -> dict[str, str]:
     if _agent_keys is not None:
         return _agent_keys
 
-    keys: dict[str, str] = {}
-    ambiguous_keys: set[str] = set()
-
-    # Load per-agent dedicated keys
-    for role in _ROLE_ACL:
-        if role == "gateway":
-            continue
-        env_key = f"{role.upper()}_SUBMISSION_KEY"
-        key_val = read_secret(env_key)
-        if not key_val or key_val in ambiguous_keys:
-            continue
-        existing = keys.get(key_val)
-        if existing is not None and existing != role:
-            ambiguous_keys.add(key_val)
-            keys.pop(key_val, None)
-            continue
-        keys[key_val] = role
-
-    _agent_keys = keys
+    _agent_keys = configured_key_to_role()
     return _agent_keys
 
 
