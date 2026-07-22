@@ -182,6 +182,14 @@ Missing any raw transcript makes the proof unavailable at registry loading.
 A present but malformed, contradictory, ambiguous, or noncanonical transcript
 makes it invalid.
 
+`receiptArgumentDigest` is SHA-256 over the exact ordered Casper bytesrepr
+argument-list bytes: `u32_le(argument_count)` followed by each `NamedArg` in
+signed order. A `NamedArg` is bytesrepr `String(name)` concatenated with
+bytesrepr `CLValue(value)`. The digest is emitted as 64 lowercase hexadecimal
+characters. Implementations must not hash parsed JSON, sort by name, omit the
+list count, or encode a presentation schema. The generation-specific v1 and v2
+orders therefore produce distinct digests even when field names overlap.
+
 ## Derived verifier result
 
 Only after every check passes may the adapter return:
