@@ -378,6 +378,10 @@ def build_native_treasury_execution_artifact(
     source_commit = _release_value(source_commit, "source_commit")
     deployment_commit = _release_value(deployment_commit, "deployment_commit")
     captured_at = _captured_at(captured_at)
+    if _journal_timestamp(captured_at) < _journal_timestamp(journal.updated_at):
+        raise TreasuryExecutionArtifactError(
+            "capture timestamp precedes journal update timestamp"
+        )
 
     typed_header = _parse_canonical_json(
         authorization.typed_header_json, "typed header"
