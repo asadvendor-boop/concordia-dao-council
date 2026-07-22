@@ -56,6 +56,31 @@ const STEP_FIELDS = Object.freeze([
   "broadcast_transcript",
   "finality_transcript",
   "observed_outcome",
+  "submission_state",
+  "finality_block_evidence",
+]);
+const FINALITY_BLOCK_FIELDS = Object.freeze([
+  "status",
+  "block_hash",
+  "block_height",
+  "state_root_hash",
+  "block_timestamp",
+  "finalized_at",
+  "observed_at",
+  "deploy_hash",
+  "corroboration_count",
+  "success",
+  "user_error",
+  "node_observations",
+  "endpoint_identities",
+]);
+const FINALITY_NODE_FIELDS = Object.freeze([
+  "node_id",
+  "node_url",
+  "deploy_request",
+  "deploy_response",
+  "block_request",
+  "block_response",
 ]);
 const TRANSCRIPT_FIELDS = Object.freeze([
   "rpc_url_identity_or_node_id",
@@ -102,12 +127,24 @@ type DeploymentFacts = Readonly<{
   deploymentCommit: string;
 }>;
 
+type RawStepOutcome = Readonly<{
+  deployHash: string;
+  success: boolean;
+  userError: number | null;
+  blockHash: string;
+  blockHeight: number;
+}>;
+
 type StepOutcome = Readonly<{
   deployHash: string;
   success: boolean;
   userError: number | null;
   blockHash: string;
   blockHeight: number;
+  stateRootHash: string;
+  blockTimestamp: string;
+  finalizedAt: string;
+  observedAt: string;
 }>;
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -624,7 +661,7 @@ function finalityOutcome(
   recordedDeploy: unknown,
   publicKey: string,
   label: string,
-): StepOutcome {
+): RawStepOutcome {
   const item = transcript(value, "info_get_deploy", `${label} finality`);
   const finalityParams = record(own(item, "params"), `${label} finality params`);
   exactOwnKeys(finalityParams, ["deploy_hash"], `${label} finality params`);
@@ -648,6 +685,239 @@ function finalityOutcome(
   const blockHeight = height(own(executionInfo, "block_height"), `${label} block height`);
   const outcome = executionOutcome(own(executionInfo, "execution_result"), publicKey.toLowerCase(), label);
   return Object.freeze({ deployHash, ...outcome, blockHash, blockHeight });
+}
+
+function utcTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be canonical UTC RFC3339`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (match === null) throw new Error(`${label} must be canonical UTC RFC3339`);
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  if (
+    year === undefined || month === undefined || day === undefined || hour === undefined ||
+    minute === undefined || second === undefined || year < 1 || month < 1 || month > 12 ||
+    hour > 23 || minute > 59 || second > 59
+  ) {
+    throw new Error(`${label} must be canonical UTC RFC3339`);
+  }
+  const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day || parsed.getUTCHours() !== hour ||
+    parsed.getUTCMinutes() !== minute || parsed.getUTCSeconds() !== second
+  ) {
+    throw new Error(`${label} must be canonical UTC RFC3339`);
+  }
+  return value;
+}
+
+function rpcRequestResponse(
+  requestValue: unknown,
+  responseValue: unknown,
+  method: string,
+  params: Record<string, unknown>,
+  label: string,
+): Readonly<{ request: Record<string, unknown>; response: Record<string, unknown>; result: Record<string, unknown> }> {
+  const request = record(requestValue, `${label} request`);
+  exactOwnKeys(request, ["jsonrpc", "id", "method", "params"], `${label} request`);
+  if (own(request, "jsonrpc") !== "2.0" || own(request, "method") !== method) {
+    throw new Error(`${label} request method is invalid`);
+  }
+  equalCanonical(own(request, "params"), params, `${label} request params`);
+  const response = record(responseValue, `${label} response`);
+  exactOwnKeys(response, ["jsonrpc", "id", "result"], `${label} response`);
+  if (own(response, "jsonrpc") !== "2.0" || own(response, "id") !== own(request, "id")) {
+    throw new Error(`${label} response identity mismatch`);
+  }
+  const result = record(own(response, "result"), `${label} result`);
+  return Object.freeze({ request, response, result });
+}
+
+function finalityNodeUrl(nodeIdValue: unknown, nodeUrlValue: unknown, label: string): string {
+  if (typeof nodeIdValue !== "string" || nodeIdValue.length === 0 || typeof nodeUrlValue !== "string") {
+    throw new Error(`${label} node identity is invalid`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(nodeUrlValue);
+  } catch {
+    throw new Error(`${label} node identity is invalid`);
+  }
+  if (
+    parsed.protocol !== "https:" || parsed.hostname !== nodeIdValue || parsed.username !== "" ||
+    parsed.password !== "" || parsed.pathname !== "/rpc" || parsed.search !== "" ||
+    parsed.hash !== "" || (parsed.port !== "" && parsed.port !== "443") || parsed.href !== nodeUrlValue
+  ) {
+    throw new Error(`${label} node identity is invalid`);
+  }
+  return nodeUrlValue;
+}
+
+function canonicalBlockFacts(
+  result: Record<string, unknown>,
+  deployHash: string,
+  label: string,
+): Readonly<{ blockHash: string; blockHeight: number; stateRootHash: string; blockTimestamp: string }> {
+  const wrapper = record(own(result, "block_with_signatures"), `${label} block wrapper`);
+  exactOwnKeys(wrapper, ["block", "proofs"], `${label} block wrapper`);
+  if (!Array.isArray(own(wrapper, "proofs"))) throw new Error(`${label} block proofs are invalid`);
+  const versioned = record(own(wrapper, "block"), `${label} versioned block`);
+  const versions = ["Version1", "Version2"].filter((name) => Object.hasOwn(versioned, name));
+  if (versions.length !== 1 || Object.keys(versioned).length !== 1) {
+    throw new Error(`${label} canonical block version is invalid`);
+  }
+  const version = versions[0] as "Version1" | "Version2";
+  const block = record(own(versioned, version), `${label} canonical block`);
+  const blockHash = hash32Insensitive(own(block, "hash"), `${label} block hash`);
+  const header = record(own(block, "header"), `${label} block header`);
+  const blockHeight = height(own(header, "height"), `${label} block height`);
+  const stateRootHash = hash32Insensitive(own(header, "state_root_hash"), `${label} state root`);
+  const blockTimestamp = utcTimestamp(own(header, "timestamp"), `${label} block timestamp`);
+  const body = record(own(block, "body"), `${label} block body`);
+  let matches = 0;
+  if (version === "Version1") {
+    for (const field of ["deploy_hashes", "transfer_hashes"] as const) {
+      const values = own(body, field);
+      if (!Array.isArray(values)) throw new Error(`${label} block ${field} is invalid`);
+      matches += values.filter((value) =>
+        hash32Insensitive(value, `${label} block transaction hash`) === deployHash
+      ).length;
+    }
+  } else {
+    const transactions = record(own(body, "transactions"), `${label} block transactions`);
+    for (const rawItems of Object.values(transactions)) {
+      if (!Array.isArray(rawItems)) throw new Error(`${label} block transaction lane is invalid`);
+      for (const rawItem of rawItems) {
+        const item = record(rawItem, `${label} block transaction`);
+        if (Object.keys(item).length !== 1) throw new Error(`${label} block transaction is invalid`);
+        const transactionHash = own(item, Object.keys(item)[0] as string);
+        if (hash32Insensitive(transactionHash, `${label} block transaction hash`) === deployHash) matches += 1;
+      }
+    }
+  }
+  if (matches !== 1) throw new Error(`${label} deploy must appear exactly once in its canonical block`);
+  return Object.freeze({ blockHash, blockHeight, stateRootHash, blockTimestamp });
+}
+
+function verifyFinalityBlockEvidence(
+  value: unknown,
+  options: Readonly<{
+    deployHash: string;
+    recordedDeploy: unknown;
+    publicKey: string;
+    expectedUserError: number | null;
+    rawOutcome: RawStepOutcome;
+    label: string;
+  }>,
+): StepOutcome {
+  const { deployHash, recordedDeploy, publicKey, expectedUserError, rawOutcome, label } = options;
+  const evidence = record(value, `${label} two-node block evidence`);
+  exactOwnKeys(evidence, FINALITY_BLOCK_FIELDS, `${label} two-node block evidence`);
+  if (own(evidence, "status") !== "finalized" || own(evidence, "corroboration_count") !== 2) {
+    throw new Error(`${label} two-node block evidence is not finalized`);
+  }
+  const observations = own(evidence, "node_observations");
+  if (!Array.isArray(observations) || observations.length !== 2) {
+    throw new Error(`${label} requires exactly two node observations`);
+  }
+  const endpointIdentities = own(evidence, "endpoint_identities");
+  if (!Array.isArray(endpointIdentities) || endpointIdentities.length !== 2) {
+    throw new Error(`${label} endpoint identities are invalid`);
+  }
+  const recorded = verifySignedDeployJson(recordedDeploy, {
+    deployHash,
+    initiatorPublicKey: publicKey,
+  });
+  const nodeIds = new Set<string>();
+  const nodeUrls: string[] = [];
+  const facts: Array<Readonly<{
+    blockHash: string;
+    blockHeight: number;
+    stateRootHash: string;
+    blockTimestamp: string;
+    success: boolean;
+    userError: number | null;
+  }>> = [];
+  for (let index = 0; index < observations.length; index += 1) {
+    const observation = record(observations[index], `${label} node observation ${index + 1}`);
+    exactOwnKeys(observation, FINALITY_NODE_FIELDS, `${label} node observation ${index + 1}`);
+    const nodeId = own(observation, "node_id");
+    const nodeUrl = finalityNodeUrl(nodeId, own(observation, "node_url"), `${label} node observation ${index + 1}`);
+    if (typeof nodeId !== "string" || nodeIds.has(nodeId)) throw new Error(`${label} node observations must be distinct`);
+    nodeIds.add(nodeId);
+    nodeUrls.push(nodeUrl);
+    const deployPair = rpcRequestResponse(
+      own(observation, "deploy_request"),
+      own(observation, "deploy_response"),
+      "info_get_deploy",
+      { deploy_hash: deployHash },
+      `${label} node observation ${index + 1} deploy`,
+    );
+    exactOwnKeys(deployPair.result, ["api_version", "deploy", "execution_info"], `${label} node deploy result`);
+    const returned = verifySignedDeployJson(own(deployPair.result, "deploy"), {
+      deployHash,
+      initiatorPublicKey: publicKey,
+    });
+    if (!Buffer.from(recorded.canonicalBytes).equals(Buffer.from(returned.canonicalBytes))) {
+      throw new Error(`${label} node-returned deploy differs from recorded deploy`);
+    }
+    const executionInfo = record(own(deployPair.result, "execution_info"), `${label} node execution_info`);
+    exactOwnKeys(executionInfo, ["block_hash", "block_height", "execution_result"], `${label} node execution_info`);
+    const executionBlockHash = hash32Insensitive(own(executionInfo, "block_hash"), `${label} node execution block hash`);
+    const executionBlockHeight = height(own(executionInfo, "block_height"), `${label} node execution block height`);
+    const outcome = executionOutcome(own(executionInfo, "execution_result"), publicKey.toLowerCase(), `${label} node outcome`);
+    if (
+      (expectedUserError === null && (!outcome.success || outcome.userError !== null)) ||
+      (expectedUserError !== null && (outcome.success || outcome.userError !== expectedUserError))
+    ) {
+      throw new Error(`${label} node execution outcome differs from frozen expectation`);
+    }
+    const blockPair = rpcRequestResponse(
+      own(observation, "block_request"),
+      own(observation, "block_response"),
+      "chain_get_block",
+      { block_identifier: { Hash: executionBlockHash } },
+      `${label} node observation ${index + 1} block`,
+    );
+    const block = canonicalBlockFacts(blockPair.result, deployHash, `${label} node observation ${index + 1}`);
+    if (block.blockHash !== executionBlockHash || block.blockHeight !== executionBlockHeight) {
+      throw new Error(`${label} node deploy finality and canonical block disagree`);
+    }
+    facts.push(Object.freeze({ ...block, ...outcome }));
+  }
+  equalCanonical(endpointIdentities, nodeUrls, `${label} endpoint identities`);
+  equalCanonical(facts[1], facts[0], `${label} public RPC node facts`);
+  const fact = facts[0] as (typeof facts)[number];
+  const finalizedAt = utcTimestamp(own(evidence, "finalized_at"), `${label} finalized_at`);
+  const observedAt = utcTimestamp(own(evidence, "observed_at"), `${label} observed_at`);
+  if (Date.parse(observedAt) < Date.parse(finalizedAt)) {
+    throw new Error(`${label} finality observation predates canonical finalization`);
+  }
+  const asserted = {
+    block_hash: fact.blockHash,
+    block_height: fact.blockHeight,
+    state_root_hash: fact.stateRootHash,
+    block_timestamp: fact.blockTimestamp,
+    finalized_at: fact.blockTimestamp,
+    deploy_hash: deployHash,
+    success: fact.success,
+    user_error: fact.userError,
+  };
+  for (const [field, expected] of Object.entries(asserted)) {
+    if (own(evidence, field) !== expected) throw new Error(`${label} ${field} disagrees with raw node evidence`);
+  }
+  if (
+    rawOutcome.blockHash !== fact.blockHash || rawOutcome.blockHeight !== fact.blockHeight ||
+    rawOutcome.success !== fact.success || rawOutcome.userError !== fact.userError
+  ) {
+    throw new Error(`${label} two-node block evidence disagrees with raw finality`);
+  }
+  return Object.freeze({
+    ...rawOutcome,
+    stateRootHash: fact.stateRootHash,
+    blockTimestamp: fact.blockTimestamp,
+    finalizedAt,
+    observedAt,
+  });
 }
 
 function verifyLiveRun(
@@ -728,6 +998,9 @@ function verifyLiveRun(
     }
     if (argKind === "simple") simpleArgs(deploy.session.args, proposalId, envelopeHash, `v3 live step ${name}`);
     else exactFinalizeArgs(deploy.session.args, finalizeValues, argKind === "mutated", `v3 live step ${name}`);
+    if (own(step, "submission_state") !== "finalized") {
+      throw new Error(`v3 live step ${name} durable submission state is not finalized`);
+    }
     const broadcast = transcript(own(step, "broadcast_transcript"), "account_put_deploy", `v3 live step ${name} broadcast`);
     equalCanonical(own(broadcast, "params"), { deploy: own(step, "deploy") }, `v3 live step ${name} broadcast params`);
     const broadcastResponse = record(own(broadcast, "response"), `v3 live step ${name} broadcast response`);
@@ -736,7 +1009,18 @@ function verifyLiveRun(
     if (hash32Insensitive(own(broadcastResult, "deploy_hash"), `v3 live step ${name} broadcast hash`) !== deployHash) {
       throw new Error(`v3 live step ${name} broadcast hash mismatch`);
     }
-    const outcome = finalityOutcome(own(step, "finality_transcript"), deployHash, own(step, "deploy"), publicKeys[role] as string, `v3 live step ${name}`);
+    const rawOutcome = finalityOutcome(own(step, "finality_transcript"), deployHash, own(step, "deploy"), publicKeys[role] as string, `v3 live step ${name}`);
+    const outcome = verifyFinalityBlockEvidence(
+      own(step, "finality_block_evidence"),
+      {
+        deployHash,
+        recordedDeploy: own(step, "deploy"),
+        publicKey: publicKeys[role] as string,
+        expectedUserError: expectedError,
+        rawOutcome,
+        label: `v3 live step ${name}`,
+      },
+    );
     if (outcome.blockHeight < previousBlockHeight) {
       throw new Error(`v3 live step ${name} block height is nonmonotonic`);
     }

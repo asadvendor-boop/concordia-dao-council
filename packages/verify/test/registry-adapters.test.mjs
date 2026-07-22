@@ -82,16 +82,38 @@ function generateExactProof(useTreasuryDocument = false) {
 }
 
 function resealExactTemporalEvidence(proof, finalizationBlockHeight, finalizationBlockHash) {
+  const canonicalStep = proof.run.steps.find((step) => step.name === "finalize_exact");
+  const blockHash = finalizationBlockHash ?? canonicalStep.finality_block_evidence.block_hash;
+  const stateRootHash = canonicalStep.finality_block_evidence.state_root_hash;
+  const blockTimestamp = canonicalStep.finality_block_evidence.block_timestamp;
+  const transactions = {
+    "0": proof.run.steps.map((step) => ({ Deploy: step.deploy_hash })),
+  };
   for (const step of proof.run.steps) {
     const transcript = step.finality_transcript;
     transcript.response.result.execution_info.block_height = finalizationBlockHeight;
-    if (finalizationBlockHash !== undefined) {
-      transcript.response.result.execution_info.block_hash = finalizationBlockHash;
-    }
+    transcript.response.result.execution_info.block_hash = blockHash;
     transcript.canonical_sha256 = sha256Canonical({
       request: transcript.request,
       response: transcript.response,
     });
+    const evidence = step.finality_block_evidence;
+    evidence.block_hash = blockHash;
+    evidence.block_height = finalizationBlockHeight;
+    evidence.state_root_hash = stateRootHash;
+    evidence.block_timestamp = blockTimestamp;
+    evidence.finalized_at = blockTimestamp;
+    for (const node of evidence.node_observations) {
+      node.deploy_response.result.execution_info.block_hash = blockHash;
+      node.deploy_response.result.execution_info.block_height = finalizationBlockHeight;
+      node.block_request.params.block_identifier.Hash = blockHash;
+      const block = node.block_response.result.block_with_signatures.block.Version2;
+      block.hash = blockHash;
+      block.header.height = finalizationBlockHeight;
+      block.header.state_root_hash = stateRootHash;
+      block.header.timestamp = blockTimestamp;
+      block.body.transactions = structuredClone(transactions);
+    }
   }
   const observedBlockHeight = finalizationBlockHeight + 1;
   const blockTranscript = proof.readback.transcripts.find((item) => item.method === "chain_get_block");

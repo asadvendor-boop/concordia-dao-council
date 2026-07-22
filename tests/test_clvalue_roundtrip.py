@@ -405,7 +405,7 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
                     "block": {
                         "Version2": {
                             "hash": ids["block"],
-                            "header": {"height": 9_003, "state_root_hash": ids["state_root"]},
+                            "header": {"height": 9_010, "state_root_hash": ids["state_root"]},
                             "body": {},
                         }
                     },
@@ -487,7 +487,7 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
             "account_hash": public.to_account_hash().hex(),
         }
     records = []
-    for step in _steps(prepared):
+    for step_index, step in enumerate(_steps(prepared)):
         private = role_keys[step["role"]]
         public = private.to_public_key()
         deploy = _build_call(
@@ -501,6 +501,14 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
         )
         deploy_hash = deploy["hash"].lower()
         error_code = step.get("expected_error")
+        block_hash = hashlib.sha256(
+            f"concordia-v3-test-step-{step_index}".encode("ascii")
+        ).hexdigest()
+        block_height = 9_002 + step_index
+        state_root_hash = hashlib.sha256(
+            f"concordia-v3-test-state-{step_index}".encode("ascii")
+        ).hexdigest()
+        block_timestamp = f"2026-01-23T12:35:0{step_index}.000Z"
         broadcast = _rpc(
             "account_put_deploy",
             {"deploy": deploy},
@@ -513,8 +521,8 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                 "api_version": "2.0.0",
                 "deploy": copy.deepcopy(deploy),
                 "execution_info": {
-                    "block_hash": "cd" * 32,
-                    "block_height": 9_002,
+                    "block_hash": block_hash,
+                    "block_height": block_height,
                     "execution_result": {
                         "Version2": {
                             "initiator": {"PublicKey": public.account_key.hex()},
@@ -538,7 +546,7 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
             "jsonrpc": "2.0",
             "id": "block",
             "method": "chain_get_block",
-            "params": {"block_identifier": {"Hash": "cd" * 32}},
+            "params": {"block_identifier": {"Hash": block_hash}},
         }
         block_response = {
             "jsonrpc": "2.0",
@@ -548,11 +556,11 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                 "block_with_signatures": {
                     "block": {
                         "Version2": {
-                            "hash": "cd" * 32,
+                            "hash": block_hash,
                             "header": {
-                                "height": 9_002,
-                                "state_root_hash": "de" * 32,
-                                "timestamp": "2026-01-23T12:34:56.789Z",
+                                "height": block_height,
+                                "state_root_hash": state_root_hash,
+                                "timestamp": block_timestamp,
                             },
                             "body": {
                                 "transactions": {"0": [{"Deploy": deploy_hash}]}
@@ -577,12 +585,12 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
             )
         block_evidence = {
             "status": "finalized",
-            "block_hash": "cd" * 32,
-            "block_height": 9_002,
-            "state_root_hash": "de" * 32,
-            "block_timestamp": "2026-01-23T12:34:56.789Z",
-            "finalized_at": "2026-01-23T12:34:56.789Z",
-            "observed_at": "2026-01-23T12:35:01.000Z",
+            "block_hash": block_hash,
+            "block_height": block_height,
+            "state_root_hash": state_root_hash,
+            "block_timestamp": block_timestamp,
+            "finalized_at": block_timestamp,
+            "observed_at": "2026-01-23T12:35:10.000Z",
             "deploy_hash": deploy_hash.lower(),
             "corroboration_count": 2,
             "success": error_code is None,
@@ -930,7 +938,7 @@ def test_rb_01_through_10_reparse_raw_state_root_pinned_transcripts_into_opaque_
     assert facts.finalized_envelope.hex() == ids["envelope"]
     assert facts.action_id.hex() == ids["action"]
     assert facts.action_authorized is True
-    assert facts.observed_block_height == 9_003
+    assert facts.observed_block_height == 9_010
     assert facts.observed_state_root_hash.hex() == ids["state_root"]
 
 
@@ -959,7 +967,7 @@ def test_readback_accepts_exact_casper_v1_and_v2_block_with_signatures_wrappers(
         action_id=ids["action"],
     )
 
-    assert artifact["facts"]["observed_block_height"] == 9_003
+    assert artifact["facts"]["observed_block_height"] == 9_010
 
 
 def test_readback_rejects_flags_echoes_unpinned_queries_and_tampered_transcripts() -> None:
