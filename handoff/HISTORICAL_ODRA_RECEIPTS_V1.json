@@ -1,0 +1,41 @@
+{
+  "schema_version": "concordia.historical_odra_inventory.v1",
+  "network": "casper-test",
+  "chain_identity": {
+    "v1": {
+      "package_hash": "992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a",
+      "contract_hash": "a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+      "contract_wasm_state_hash": "242f2621c5f1d276da98a9019626e811518a2955798bbd5849c7a2461fbfface",
+      "contract_version": 1,
+      "protocol_version_major": 2,
+      "install_deploy_hash": "d319157b2638ed8fa7c1dfc639be16e1455530cd568c3cde35bb40c1bd20ba32",
+      "install_block_height": 8340287,
+      "entry_point": "store_governance_receipt",
+      "receipt_deploys": {
+        "canonical_accepted": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
+      }
+    },
+    "v2": {
+      "package_hash": "1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+      "contract_hash": "fda5618813b629d2a69f71e1d2dfc497b16ab8a09713dcd6c47ac8eb7e0c735f",
+      "contract_wasm_state_hash": "42848a133bee46d6c704bb9bcff88156bc363473e06641ae41c0661077338ec4",
+      "contract_version": 1,
+      "protocol_version_major": 2,
+      "install_deploy_hash": "6282b437c4d79de98537cf593ddbbd79f6d95fbf2a79b7a96c35d81f76ecdc6a",
+      "install_block_height": 8348699,
+      "entry_point": "store_governance_receipt",
+      "receipt_deploys": {
+        "pre_quorum_expected_rejection": "6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
+        "post_quorum_accepted": "9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928"
+      }
+    }
+  },
+  "preserved_repo_source": {
+    "baseline_commit": "b79b42c974daa6ba4b8d904573f6c321ecef1a98",
+    "manifest_path": "handoff/HISTORICAL_ODRA_SHA256.txt",
+    "manifest_sha256": "b062b94287c468ec0c3606ff80302700b062d8fe76fa9e0d1adb5da9ba7077a5",
+    "governance_receipt_wasm_path": "contracts/odra-governance-receipt/wasm/GovernanceReceipt.wasm",
+    "governance_receipt_wasm_sha256": "07e8ee2744063e0ed8c38fc9dda262a6291984ccc8ad7e6e9ccc3c2928c22c13",
+    "source_deployment_equivalence": "unproven"
+  }
+}

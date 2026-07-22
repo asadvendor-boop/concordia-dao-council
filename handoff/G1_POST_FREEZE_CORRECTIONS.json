@@ -112,6 +112,23 @@
         "test_reg_05d_registry_generation_cannot_be_in_the_verifier_future",
         "WP8 future and reversed proof chronology tests"
       ]
+    },
+    {
+      "id": "G1-C13-independent-historical-odra-artifact",
+      "affected_schema": "concordia.historical_odra_receipt.v1",
+      "rules": [
+        "Historical receipt verification consumes raw Casper deploy, canonical-block, state-root, package, and contract JSON-RPC transcripts plus the exact card-chain artifact.",
+        "The legacy humanized receipt summary and all asserted passed, processed, or chain_valid booleans are forbidden as verification inputs.",
+        "The signed receipt deploy, exact 17 typed runtime arguments, terminal card hash, package version, contract ownership, and on-chain Wasm state hash are recomputed and equality-bound to a packaged frozen v1/v2 chain-identity inventory.",
+        "Preserved repo source hashes are verified separately and source_deployment_equivalence is unproven; no source-to-deployed-Wasm equivalence claim is allowed.",
+        "Missing raw evidence is unavailable and contradictory raw evidence is invalid."
+      ],
+      "acceptance_tests": [
+        "test_historical_odra_inventory_separates_chain_identity_from_source_preservation",
+        "test_historical_odra_inventory_pins_exact_v1_and_v2_chain_identities",
+        "test_preserved_source_manifest_still_matches_every_historical_file",
+        "WP8 historical raw-receipt adapter and forged-summary guard tests"
+      ]
     }
   ]
 }
