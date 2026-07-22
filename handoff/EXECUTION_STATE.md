@@ -93,8 +93,12 @@ the terminal hash; no Host header or self-asserted card root is accepted. The
 historical v1/v2 receipt verifier contract consumes raw Casper RPC transcripts
 and a packaged chain-identity inventory, while explicitly reporting that the
 preserved repo source is not proven byte-equivalent to either deployed Wasm.
-No fake root or combined historical artifact has been created; those remain
-live capture outputs.
+A later independent public-RPC audit found that the accepted v1 and v2 deploys
+use different session variants, target kinds, signed argument orders, and
+terminal card roots. The frozen correction is now generation-specific. Only
+v1 currently has a matching canonical card-chain export; v2 remains separate
+supplemental quorum evidence until its different exact chain is exported. No
+fake root or cross-generation combined historical artifact has been created.
 
 Claude WP5 also remains isolated. Its existing 128 tests pass, but independent
 review proved that omitted/partial WCSPR argument values can pass post-settle
