@@ -353,6 +353,19 @@ def _rpc(method: str, params: dict[str, object], result: dict[str, object]) -> d
     }
 
 
+def _reseal_rpc_transcript(transcript: dict[str, object]) -> None:
+    transcript["canonical_sha256"] = hashlib.sha256(
+        json.dumps(
+            {
+                "request": transcript["request"],
+                "response": transcript["response"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
     ids = {
         "package": "aa" * 32,
@@ -981,6 +994,55 @@ def test_offline_verifier_rejects_nonmonotonic_contract_step_finality() -> None:
     ).hexdigest()
 
     with pytest.raises(ProofVerificationError, match="preceding contract step"):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_rejects_contract_step_at_install_height() -> None:
+    proof, _, _ = _bound_v3_proof()
+    first_step = proof["run"]["steps"][0]
+    finality = first_step["finality_transcript"]
+    finality["response"]["result"]["execution_info"]["block_height"] = proof[
+        "deployment"
+    ]["install_block_height"]
+    _reseal_rpc_transcript(finality)
+
+    with pytest.raises(ProofVerificationError, match="must follow contract installation"):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_rejects_equal_height_steps_on_different_blocks() -> None:
+    proof, _, _ = _bound_v3_proof()
+    second_step = proof["run"]["steps"][1]
+    finality = second_step["finality_transcript"]
+    finality["response"]["result"]["execution_info"]["block_hash"] = "fe" * 32
+    _reseal_rpc_transcript(finality)
+
+    with pytest.raises(ProofVerificationError, match="same height on different blocks"):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_rejects_equal_height_readback_on_different_block() -> None:
+    proof, _, ids = _bound_v3_proof()
+    transcripts = copy.deepcopy(proof["readback"]["transcripts"])
+    readback_header = transcripts[0]["response"]["result"]["block_with_signatures"][
+        "block"
+    ]["Version2"]["header"]
+    readback_header["height"] = proof["run"]["steps"][-2]["finality_transcript"][
+        "response"
+    ]["result"]["execution_info"]["block_height"]
+    _reseal_rpc_transcript(transcripts[0])
+    readback = build_readback_artifact_from_transcripts(
+        transcripts=transcripts,
+        expected_network="casper-test",
+        expected_package_hash=ids["package"],
+        expected_contract_hash=ids["contract"],
+        proposal_id=proof["prepared"]["proposal_id"],
+        action_id=proof["prepared"]["action_id"],
+    )
+    proof["readback"] = readback
+    proof["run"]["readback"] = copy.deepcopy(readback)
+
+    with pytest.raises(ProofVerificationError, match="different block at exact finalization height"):
         verify_v3_proof_document(proof)
 
 

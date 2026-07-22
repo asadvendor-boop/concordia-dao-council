@@ -250,6 +250,7 @@ def test_exact_contiguous_scan_proves_one_transfer_only() -> None:
     proof = _verify()
     assert proof.network == "casper-test"
     assert proof.authorization_block_height == AUTHORIZATION_HEIGHT
+    assert proof.authorization_block_hash == BLOCK_HASHES[AUTHORIZATION_HEIGHT]
     assert proof.inclusion_block_height == INCLUSION_HEIGHT
     assert proof.observed_through_block_height == OBSERVED_HEIGHT
     assert proof.matched_transfer_count == 1

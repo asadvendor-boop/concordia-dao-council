@@ -130,7 +130,11 @@ def _finalized(tmp_path: Path):
     return executor, authorization, finality
 
 
-def _proof_inputs(tmp_path: Path):
+def _proof_inputs(
+    tmp_path: Path,
+    *,
+    scan_authorization_block_hash: bytes | None = None,
+):
     executor, authorization, finality = _finalized(tmp_path)
     pre_source = authorization.treasury_snapshot_balance_motes
     pre_recipient = 7_000_000_000
@@ -170,6 +174,9 @@ def _proof_inputs(tmp_path: Path):
     start = authorization.finalization_block_height
     observed = FINALITY_HEIGHT + 1
     block_hashes = {height: f"{height - start + 1:064x}" for height in range(start, observed + 1)}
+    block_hashes[start] = (
+        scan_authorization_block_hash or authorization.finalization_block_hash
+    ).hex()
     block_hashes[FINALITY_HEIGHT] = FINALITY_HASH.hex()
     observations = []
     for height in range(start, observed + 1):
@@ -345,6 +352,18 @@ def test_proof_gate_requires_authorization_snapshot_as_pre_source(tmp_path: Path
         request_base=500,
     )
     with pytest.raises(JournalConflict, match="authorization snapshot"):
+        executor.prove_execution(_key(authorization), **proofs)
+
+
+def test_proof_gate_rejects_competing_block_at_v3_authorization_height(
+    tmp_path: Path,
+) -> None:
+    executor, authorization, proofs = _proof_inputs(
+        tmp_path,
+        scan_authorization_block_hash=bytes.fromhex("fe" * 32),
+    )
+
+    with pytest.raises(JournalConflict, match="authorization block hash"):
         executor.prove_execution(_key(authorization), **proofs)
 
 

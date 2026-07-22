@@ -124,6 +124,9 @@ def test_native_treasury_artifact_has_exact_outer_contract_and_is_canonical(
     }
     assert artifact["executor_journal"]["state"] == "PROVEN"
     assert artifact["executor_journal"]["broadcast_attempts"] == 1
+    assert artifact["bounded_transfer_scan"]["authorization_block_hash"] == (
+        entry.authorization.finalization_block_hash.hex()
+    )
     assert artifact["bounded_transfer_scan"]["observed_through_block_height"]
     assert artifact["bounded_transfer_scan"]["observed_through_block_hash"]
     assert artifact["bounded_transfer_scan"]["matched_transfer_count"] == 1

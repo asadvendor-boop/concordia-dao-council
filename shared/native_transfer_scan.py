@@ -45,6 +45,7 @@ class VerifiedNoDuplicateNativeTransfer:
 
     network: str
     authorization_block_height: int
+    authorization_block_hash: str
     inclusion_block_height: int
     observed_through_block_height: int
     observed_through_block_hash: str
@@ -87,6 +88,7 @@ def _integrity_tag(proof: VerifiedNoDuplicateNativeTransfer) -> bytes:
     material = {
         "network": proof.network,
         "authorization_block_height": proof.authorization_block_height,
+        "authorization_block_hash": proof.authorization_block_hash,
         "inclusion_block_height": proof.inclusion_block_height,
         "observed_through_block_height": proof.observed_through_block_height,
         "observed_through_block_hash": proof.observed_through_block_hash,
@@ -135,6 +137,7 @@ def require_verified_no_duplicate_native_transfer(
         != value.observed_through_block_height - value.authorization_block_height + 1
         or value.inclusion_block_height < value.authorization_block_height
         or value.inclusion_block_height > value.observed_through_block_height
+        or _HASH_RE.fullmatch(value.authorization_block_hash) is None
         or _HASH_RE.fullmatch(value.deploy_hash) is None
         or _HASH_RE.fullmatch(value.observed_through_block_hash) is None
         or type(value.source_account_hash) is not bytes
@@ -390,6 +393,7 @@ def verify_no_duplicate_native_transfer(
     relevant: list[tuple[int, str, dict[str, object]]] = []
     seen_hashes: set[str] = set()
     previous_hash: str | None = None
+    authorization_block_hash: str | None = None
     for offset, observation in enumerate(block_observations):
         height = start + offset
         item = _object(observation, f"block observation {height}")
@@ -403,6 +407,8 @@ def verify_no_duplicate_native_transfer(
         block_hash, parent_hash = _parse_block(
             item["block_request"], item["block_response"], height
         )
+        if height == start:
+            authorization_block_hash = block_hash
         if block_hash in seen_hashes:
             raise NativeTransferScanError("canonical block hash repeats within scan")
         if previous_hash is not None and parent_hash != previous_hash:
@@ -425,6 +431,8 @@ def verify_no_duplicate_native_transfer(
 
     if block_hash != observed_hash:
         raise NativeTransferScanError("block scan does not end at observed tip")
+    if authorization_block_hash is None:
+        raise NativeTransferScanError("authorization block was not observed")
     if len(relevant) != 1:
         raise NativeTransferScanError(
             "scan must contain exactly one transfer for source and transfer id"
@@ -451,6 +459,7 @@ def verify_no_duplicate_native_transfer(
     proof = _make_proof(
         network="casper-test",
         authorization_block_height=start,
+        authorization_block_hash=authorization_block_hash,
         inclusion_block_height=finality.block_height,
         observed_through_block_height=observed_height,
         observed_through_block_hash=observed_hash,
