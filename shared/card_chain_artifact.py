@@ -526,7 +526,12 @@ def build_card_chain_artifact(
     source_url: str,
     expected_final_card_hash: str,
 ) -> dict[str, object]:
-    """Return exact stored card preimages without parsing or reserializing them."""
+    """Return the exact historical prefix selected by an external receipt root.
+
+    Later immutable rows may have been appended after the selected receipt was
+    finalized.  They remain untouched in SQLite and are outside this as-of
+    proof; the externally pinned receipt root is the only allowed cutoff.
+    """
 
     proposal_id, captured_at, source_url = _validate_public_metadata(
         proposal_id=proposal_id,
@@ -549,6 +554,7 @@ def build_card_chain_artifact(
     cards: list[dict[str, object]] = []
     previous_hash: str | None = None
     total_preimage_bytes = 0
+    root_found = False
     for expected_sequence, row in enumerate(card_rows, start=1):
         card = _validate_row(
             row,
@@ -561,7 +567,10 @@ def build_card_chain_artifact(
             raise CardChainArtifactError("total card_json size limit exceeded")
         cards.append(card)
         previous_hash = str(card["card_hash"])
-    if not hmac.compare_digest(previous_hash or "", expected_final_card_hash):
+        if hmac.compare_digest(previous_hash, expected_final_card_hash):
+            root_found = True
+            break
+    if not root_found:
         raise CardChainArtifactError("expected_final_card_hash does not match terminal card")
     artifact: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
