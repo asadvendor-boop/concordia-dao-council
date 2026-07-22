@@ -4,13 +4,20 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
+import contextlib
+import fcntl
 import hashlib
+import hmac
 import json
+import os
+import re
+import subprocess
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
-import httpx
 from pycspr import crypto, serializer
 from pycspr.factory.accounts import parse_private_key
 from pycspr.factory.deploys import create_deploy, create_deploy_parameters, create_standard_payment
@@ -20,15 +27,773 @@ from pycspr.types.crypto import KeyAlgorithm
 from pycspr.types.node.rpc import Deploy, DeployOfModuleBytes
 
 from scripts.derive_deployment_domain_v3 import deployment_domain_record
-from shared.casper_executor import await_casper_finality
+from shared.casper_rpc_transport import (
+    PinnedHttpsJsonRpc,
+    RpcEndpointPolicyError,
+    RpcRemoteError,
+    RpcTransportError,
+    validate_public_rpc_endpoints as _validate_shared_rpc_endpoints,
+)
 
 
 PACKAGE_KEY_NAME = "concordia_governance_receipt_v3"
 CHAIN_NAME = "casper-test"
+ROOT = Path(__file__).resolve().parents[1]
+RELEASE_IDENTITY_PATHS = (
+    "contracts/odra-governance-receipt-v3/src/lib.rs",
+    "contracts/odra-governance-receipt-v3/src/encoding.rs",
+    "contracts/odra-governance-receipt-v3/Cargo.lock",
+    "contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm",
+    "contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/governance_receiptv3_schema.json",
+    "contracts/odra-governance-receipt-v3/deployment.manifest.json",
+)
 
 
 class InstallValidationError(ValueError):
     pass
+
+
+JOURNAL_SCHEMA_ID = "concordia.wp10-deploy-journal.v1"
+JOURNAL_STATES = {
+    "prepared",
+    "broadcast_inflight",
+    "submitted",
+    "broadcast_ambiguous",
+    "terminal_rejected",
+    "finalized",
+}
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _sealed_journal(value: Mapping[str, Any]) -> dict[str, Any]:
+    sealed = dict(value)
+    sealed.pop("journal_sha256", None)
+    sealed["journal_sha256"] = hashlib.sha256(_canonical_json(sealed)).hexdigest()
+    return sealed
+
+
+class DurableDeployJournal:
+    """Crash-durable exact-deploy state used before every WP10 network write."""
+
+    def __init__(self, path: Path, value: Mapping[str, Any]):
+        self.path = path
+        self._value = self._validate(value)
+
+    @property
+    def state(self) -> str:
+        return str(self._value["state"])
+
+    @property
+    def deploy_hash(self) -> str:
+        return str(self._value["deploy_hash"])
+
+    @property
+    def signed_deploy(self) -> dict[str, Any]:
+        return dict(self._value["signed_deploy"])
+
+    @property
+    def intent(self) -> dict[str, Any]:
+        return dict(self._value["intent"])
+
+    @property
+    def evidence(self) -> object:
+        return self._value["evidence"]
+
+    @staticmethod
+    def _validate(value: Mapping[str, Any]) -> dict[str, Any]:
+        required = {
+            "schema_id",
+            "state",
+            "intent",
+            "signed_deploy",
+            "signed_deploy_json_bytes_hex",
+            "signed_deploy_sha256",
+            "signed_deploy_casper_bytes_hex",
+            "signed_deploy_casper_sha256",
+            "deploy_hash",
+            "evidence",
+            "last_detail_code",
+            "revision",
+            "journal_sha256",
+        }
+        if not isinstance(value, Mapping) or set(value) != required:
+            raise InstallValidationError("deploy journal field set is invalid")
+        if value["schema_id"] != JOURNAL_SCHEMA_ID or value["state"] not in JOURNAL_STATES:
+            raise InstallValidationError("deploy journal schema/state is invalid")
+        if not isinstance(value["intent"], Mapping) or not isinstance(
+            value["signed_deploy"], Mapping
+        ):
+            raise InstallValidationError("deploy journal intent/deploy is invalid")
+        deploy_hash = _strip_hash(value["deploy_hash"], "journal deploy hash")
+        if str(value["signed_deploy"].get("hash", "")).lower() != deploy_hash:
+            raise InstallValidationError("deploy journal signed deploy hash mismatch")
+        canonical = _canonical_json(value["signed_deploy"])
+        try:
+            persisted = bytes.fromhex(str(value["signed_deploy_json_bytes_hex"]))
+        except ValueError as exc:
+            raise InstallValidationError("deploy journal signed bytes are invalid") from exc
+        if persisted != canonical or hashlib.sha256(canonical).hexdigest() != value["signed_deploy_sha256"]:
+            raise InstallValidationError("deploy journal signed bytes digest mismatch")
+        try:
+            parsed_deploy = serializer.from_json(dict(value["signed_deploy"]), Deploy)
+            canonical_deploy = serializer.to_json(parsed_deploy)
+            casper_bytes = serializer.to_bytes(parsed_deploy)
+            body_hash = create_digest_of_deploy_body(
+                parsed_deploy.payment, parsed_deploy.session
+            )
+            recomputed_hash = create_digest_of_deploy(parsed_deploy.header)
+        except Exception as exc:
+            raise InstallValidationError(
+                "deploy journal is not canonical Casper deploy data"
+            ) from exc
+        if _normalize_deploy_json(canonical_deploy) != _normalize_deploy_json(
+            value["signed_deploy"]
+        ):
+            raise InstallValidationError(
+                "deploy journal is not canonical Casper deploy data"
+            )
+        if (
+            parsed_deploy.header.body_hash != body_hash
+            or parsed_deploy.hash != recomputed_hash
+            or recomputed_hash.hex() != deploy_hash
+            or parsed_deploy.header.chain_name != CHAIN_NAME
+            or len(parsed_deploy.approvals) != 1
+        ):
+            raise InstallValidationError(
+                "deploy journal is not canonical Casper deploy data"
+            )
+        approval = parsed_deploy.approvals[0]
+        signer = getattr(approval.signer, "account_key", None)
+        if (
+            not isinstance(signer, bytes)
+            or signer != parsed_deploy.header.account.account_key
+            or not crypto.verify_deploy_approval_signature(
+                recomputed_hash, approval.signature, signer
+            )
+        ):
+            raise InstallValidationError(
+                "deploy journal is not canonical Casper deploy data"
+            )
+        try:
+            persisted_casper = bytes.fromhex(
+                str(value["signed_deploy_casper_bytes_hex"])
+            )
+        except ValueError as exc:
+            raise InstallValidationError(
+                "deploy journal canonical Casper bytes are invalid"
+            ) from exc
+        if (
+            persisted_casper != casper_bytes
+            or hashlib.sha256(casper_bytes).hexdigest()
+            != value["signed_deploy_casper_sha256"]
+        ):
+            raise InstallValidationError(
+                "deploy journal canonical Casper bytes digest mismatch"
+            )
+        if value["intent"].get("kind") == "v3_install":
+            manifest = value["intent"].get("manifest")
+            if not isinstance(manifest, Mapping):
+                raise InstallValidationError("install journal immutable intent is invalid")
+            try:
+                validate_finalized_install_deploy(value["signed_deploy"], manifest)
+            except InstallValidationError as exc:
+                raise InstallValidationError(
+                    "install journal deploy differs from immutable intent"
+                ) from exc
+        if type(value["revision"]) is not int or value["revision"] < 0:
+            raise InstallValidationError("deploy journal revision is invalid")
+        sealed = _sealed_journal(value)
+        if not hmac.compare_digest(
+            str(value["journal_sha256"]), sealed["journal_sha256"]
+        ):
+            raise InstallValidationError("deploy journal checksum mismatch")
+        return dict(value)
+
+    @classmethod
+    def create(
+        cls,
+        path: Path,
+        *,
+        intent: Mapping[str, Any],
+        signed_deploy: Mapping[str, Any],
+        deploy_hash: str,
+    ) -> "DurableDeployJournal":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        canonical = _canonical_json(signed_deploy)
+        try:
+            casper_deploy = serializer.from_json(dict(signed_deploy), Deploy)
+            casper_bytes = serializer.to_bytes(casper_deploy)
+        except Exception as exc:
+            raise InstallValidationError(
+                "signed deploy is not canonical Casper deploy data"
+            ) from exc
+        value = _sealed_journal(
+            {
+                "schema_id": JOURNAL_SCHEMA_ID,
+                "state": "prepared",
+                "intent": dict(intent),
+                "signed_deploy": dict(signed_deploy),
+                "signed_deploy_json_bytes_hex": canonical.hex(),
+                "signed_deploy_sha256": hashlib.sha256(canonical).hexdigest(),
+                "signed_deploy_casper_bytes_hex": casper_bytes.hex(),
+                "signed_deploy_casper_sha256": hashlib.sha256(casper_bytes).hexdigest(),
+                "deploy_hash": _strip_hash(deploy_hash, "journal deploy hash"),
+                "evidence": None,
+                "last_detail_code": None,
+                "revision": 0,
+            }
+        )
+        rendered = json.dumps(value, indent=2, sort_keys=True).encode("ascii") + b"\n"
+        try:
+            descriptor = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+        except FileExistsError as exc:
+            raise InstallValidationError("deploy journal already exists; resume it") from exc
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _fsync_directory(path.parent)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                path.unlink()
+            raise
+        return cls(path, value)
+
+    @classmethod
+    def open(cls, path: Path) -> "DurableDeployJournal":
+        try:
+            value = json.loads(path.read_text(encoding="ascii"))
+        except (OSError, ValueError) as exc:
+            raise InstallValidationError("deploy journal cannot be loaded") from exc
+        return cls(path, value)
+
+    @contextlib.contextmanager
+    def locked(self):
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            current = self.open(self.path)
+            self._value = current._value
+            yield self
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def transition(
+        self,
+        expected_state: str,
+        state: str,
+        *,
+        evidence: object = None,
+        detail_code: str | None = None,
+    ) -> "DurableDeployJournal":
+        if self.state != expected_state:
+            raise InstallValidationError(
+                f"journal transition expected {expected_state}, found {self.state}"
+            )
+        if state not in JOURNAL_STATES:
+            raise InstallValidationError("journal target state is invalid")
+        updated = dict(self._value)
+        updated.update(
+            {
+                "state": state,
+                "evidence": evidence,
+                "last_detail_code": detail_code,
+                "revision": int(updated["revision"]) + 1,
+            }
+        )
+        updated = _sealed_journal(updated)
+        rendered = json.dumps(updated, indent=2, sort_keys=True).encode("ascii") + b"\n"
+        descriptor, name = tempfile.mkstemp(
+            prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent
+        )
+        temporary = Path(name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            _fsync_directory(self.path.parent)
+        finally:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+        self._value = self._validate(updated)
+        return self
+
+
+def execute_journaled_submission(
+    journal: DurableDeployJournal,
+    *,
+    broadcast: Any,
+    reconcile: Any,
+) -> DurableDeployJournal:
+    """Advance one exact deploy without rebuilding or ambiguous rebroadcast."""
+
+    with journal.locked():
+        if journal.state in {"finalized", "terminal_rejected"}:
+            return journal
+        if journal.state == "broadcast_inflight":
+            journal.transition(
+                "broadcast_inflight",
+                "broadcast_ambiguous",
+                detail_code="recovered_inflight_after_restart",
+            )
+        if journal.state == "prepared":
+            journal.transition(
+                "prepared", "broadcast_inflight", detail_code="broadcast_inflight"
+            )
+            try:
+                result = broadcast(journal.signed_deploy, journal.deploy_hash)
+            except Exception:
+                journal.transition(
+                    "broadcast_inflight",
+                    "broadcast_ambiguous",
+                    detail_code="broadcast_result_unknown",
+                )
+                result = None
+            if result is None:
+                pass
+            elif not isinstance(result, Mapping) or result.get("deploy_hash") not in {
+                None,
+                journal.deploy_hash,
+            }:
+                journal.transition(
+                    "broadcast_inflight",
+                    "broadcast_ambiguous",
+                    detail_code="broadcast_response_unverified",
+                )
+            elif result.get("status") == "terminal_rejected":
+                return journal.transition(
+                    "broadcast_inflight",
+                    "terminal_rejected",
+                    evidence=dict(result),
+                    detail_code="broadcast_terminal_rejected",
+                )
+            elif result.get("status") == "submitted":
+                journal.transition(
+                    "broadcast_inflight",
+                    "submitted",
+                    evidence=dict(result),
+                    detail_code="broadcast_submitted",
+                )
+            else:
+                journal.transition(
+                    "broadcast_inflight",
+                    "broadcast_ambiguous",
+                    evidence=dict(result),
+                    detail_code="broadcast_result_unknown",
+                )
+        result = reconcile(journal.deploy_hash)
+        if not isinstance(result, Mapping) or result.get("deploy_hash") not in {
+            None,
+            journal.deploy_hash,
+        }:
+            return journal
+        if result.get("status") == "finalized":
+            prior_evidence = journal.evidence
+            return journal.transition(
+                journal.state,
+                "finalized",
+                evidence={
+                    "broadcast": prior_evidence,
+                    "reconciliation": dict(result),
+                },
+                detail_code="deploy_finalized",
+            )
+        if result.get("status") == "terminal_rejected":
+            return journal.transition(
+                journal.state,
+                "terminal_rejected",
+                evidence=dict(result),
+                detail_code="deploy_terminal_rejected",
+            )
+        return journal
+
+
+def validate_public_rpc_endpoints(
+    urls: Sequence[str], *, resolver: Any | None = None
+) -> tuple[str, str]:
+    try:
+        endpoints = _validate_shared_rpc_endpoints(urls, resolver=resolver)
+    except RpcEndpointPolicyError as exc:
+        raise InstallValidationError(
+            "RPC endpoints must be two distinct public credential-free HTTPS /rpc URLs"
+        ) from exc
+    return endpoints[0].url, endpoints[1].url
+
+
+def build_public_rpc_transport(
+    urls: Sequence[str], *, resolver: Any | None = None
+) -> PinnedHttpsJsonRpc:
+    try:
+        return PinnedHttpsJsonRpc(urls, resolver=resolver)
+    except RpcEndpointPolicyError as exc:
+        raise InstallValidationError(
+            "RPC endpoints must be two distinct public credential-free HTTPS /rpc URLs"
+        ) from exc
+
+
+def deploy_expiry_epoch(signed_deploy: Mapping[str, Any]) -> float:
+    try:
+        deploy = serializer.from_json(dict(signed_deploy), Deploy)
+        return (
+            deploy.header.timestamp.value
+            + deploy.header.ttl.as_milliseconds / 1000
+        )
+    except Exception as exc:
+        raise InstallValidationError("signed deploy expiry cannot be decoded") from exc
+
+
+def verify_git_release_identity(
+    repository_root: Path,
+    *,
+    source_commit: str,
+    deployment_commit: str,
+    release_paths: Sequence[str],
+) -> dict[str, str]:
+    source = _commit_hash(source_commit, "source_commit")
+    deployment = _commit_hash(deployment_commit, "deployment_commit")
+
+    def git(*arguments: str) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", *arguments],
+                cwd=repository_root,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise InstallValidationError("release Git identity cannot be verified") from exc
+
+    head = git("rev-parse", "HEAD").lower()
+    if deployment != head:
+        raise InstallValidationError("deployment_commit must equal actual Git HEAD")
+    if git("status", "--porcelain"):
+        raise InstallValidationError("release Git tree must be clean")
+    git("cat-file", "-e", source + "^{commit}")
+    for relative in release_paths:
+        current = (repository_root / relative).read_bytes()
+        try:
+            historical = subprocess.check_output(
+                ["git", "show", f"{source}:{relative}"],
+                cwd=repository_root,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise InstallValidationError(
+                "source_commit does not contain the exact release files"
+            ) from exc
+        if not hmac.compare_digest(current, historical):
+            raise InstallValidationError(
+                "source_commit does not contain the exact release files"
+            )
+    return {"source_commit": source, "deployment_commit": deployment}
+
+
+def _block_inclusion(block_response: Mapping[str, Any], deploy_hash: str) -> dict[str, Any]:
+    try:
+        result = block_response["result"]
+        wrapped = result["block_with_signatures"]
+        versioned = wrapped["block"]
+        if len(versioned) != 1:
+            raise KeyError("version")
+        version, block = next(iter(versioned.items()))
+        block_hash = _strip_hash(block["hash"], "canonical block hash")
+        height = block["header"]["height"]
+        state_root = _strip_hash(block["header"]["state_root_hash"], "state root")
+        block_timestamp = block["header"]["timestamp"]
+        body = block["body"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InstallValidationError("canonical block response is invalid") from exc
+    if type(height) is not int or height < 0:
+        raise InstallValidationError("canonical block height is invalid")
+    if not isinstance(block_timestamp, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z",
+        block_timestamp,
+    ):
+        raise InstallValidationError("canonical block timestamp is invalid")
+    try:
+        parsed_timestamp = datetime.fromisoformat(
+            block_timestamp[:-1] + "+00:00"
+        )
+    except ValueError as exc:
+        raise InstallValidationError("canonical block timestamp is invalid") from exc
+    if parsed_timestamp.tzinfo != timezone.utc:
+        raise InstallValidationError("canonical block timestamp is invalid")
+    matches = 0
+    if version in {"Version1", "Legacy"}:
+        for name in ("deploy_hashes", "transfer_hashes"):
+            matches += sum(str(item).lower() == deploy_hash for item in body.get(name, []))
+    elif version == "Version2":
+        transactions = body.get("transactions")
+        if not isinstance(transactions, Mapping):
+            raise InstallValidationError("canonical block response is invalid")
+        for items in transactions.values():
+            if not isinstance(items, list):
+                raise InstallValidationError("canonical block response is invalid")
+            for item in items:
+                if isinstance(item, Mapping) and len(item) == 1:
+                    matches += int(str(next(iter(item.values()))).lower() == deploy_hash)
+    else:
+        raise InstallValidationError("canonical block response is invalid")
+    if matches == 0:
+        raise InstallValidationError("deploy is absent from canonical block")
+    if matches != 1:
+        raise InstallValidationError("deploy appears multiple times in canonical block")
+    return {
+        "block_hash": block_hash,
+        "block_height": height,
+        "state_root_hash": state_root,
+        "block_timestamp": block_timestamp,
+    }
+
+
+def verify_two_node_deploy_finality(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    deploy_hash: str,
+    expected_user_error: int | None = None,
+) -> dict[str, Any]:
+    expected_hash = _strip_hash(deploy_hash, "deploy hash")
+    if len(observations) != 2:
+        raise InstallValidationError("exactly two node observations are required")
+    facts: list[dict[str, Any]] = []
+    outcomes: list[tuple[bool, int | None]] = []
+    node_ids: set[str] = set()
+    endpoint_identities: list[str] = []
+    for observation in observations:
+        node_id = observation.get("node_id")
+        node_url = observation.get("node_url")
+        parsed_url = urlsplit(str(node_url))
+        if (
+            not isinstance(node_id, str)
+            or not node_id
+            or node_id in node_ids
+            or parsed_url.scheme != "https"
+            or parsed_url.hostname != node_id
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise InstallValidationError("node observations must be distinct")
+        node_ids.add(node_id)
+        endpoint_identities.append(str(node_url))
+        deploy_request = observation.get("deploy_request")
+        deploy_response = observation.get("deploy_response")
+        if (
+            not isinstance(deploy_request, Mapping)
+            or set(deploy_request) != {"jsonrpc", "id", "method", "params"}
+            or deploy_request["jsonrpc"] != "2.0"
+            or deploy_request["method"] != "info_get_deploy"
+            or deploy_request["params"] != {"deploy_hash": expected_hash}
+            or not isinstance(deploy_response, Mapping)
+            or set(deploy_response) != {"jsonrpc", "id", "result"}
+            or deploy_response["jsonrpc"] != "2.0"
+            or deploy_response["id"] != deploy_request["id"]
+        ):
+            raise InstallValidationError("deploy finality request/response is invalid")
+        try:
+            result = deploy_response["result"]
+            returned_deploy = result["deploy"]
+            execution_info = result["execution_info"]
+            returned_hash = _strip_hash(returned_deploy["hash"], "returned deploy hash")
+            execution_block = _strip_hash(
+                execution_info["block_hash"], "execution block hash"
+            )
+            execution_height = execution_info["block_height"]
+            versioned = execution_info["execution_result"]["Version2"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InstallValidationError("deploy finality response is invalid") from exc
+        if returned_hash != expected_hash:
+            raise InstallValidationError("node returned another deploy")
+        error_message = versioned.get("error_message")
+        if error_message is None:
+            outcome = (True, None)
+        elif isinstance(error_message, str):
+            match = re.search(r"(?:User error|ApiError::User)[:( ]+(\d+)", error_message)
+            outcome = (False, int(match.group(1)) if match else None)
+        else:
+            raise InstallValidationError("deploy execution outcome is invalid")
+        if expected_user_error is None and outcome != (True, None):
+            raise InstallValidationError("deploy did not finalize successfully")
+        if expected_user_error is not None and outcome != (False, expected_user_error):
+            raise InstallValidationError("deploy did not finalize with expected user error")
+        outcomes.append(outcome)
+        block_request = observation.get("block_request")
+        block_response = observation.get("block_response")
+        if (
+            not isinstance(block_request, Mapping)
+            or set(block_request) != {"jsonrpc", "id", "method", "params"}
+            or block_request["jsonrpc"] != "2.0"
+            or block_request["method"] != "chain_get_block"
+            or block_request["params"]
+            != {"block_identifier": {"Hash": execution_block}}
+            or not isinstance(block_response, Mapping)
+            or set(block_response) != {"jsonrpc", "id", "result"}
+            or block_response["jsonrpc"] != "2.0"
+            or block_response["id"] != block_request["id"]
+        ):
+            raise InstallValidationError("canonical block request/response is invalid")
+        block = _block_inclusion(block_response, expected_hash)
+        if block["block_hash"] != execution_block or block["block_height"] != execution_height:
+            raise InstallValidationError("deploy finality and canonical block disagree")
+        facts.append(block)
+    if facts[0] != facts[1] or outcomes[0] != outcomes[1]:
+        raise InstallValidationError("public RPC nodes disagree on deploy finality")
+    return {
+        **facts[0],
+        "finalized_at": facts[0]["block_timestamp"],
+        "deploy_hash": expected_hash,
+        "corroboration_count": 2,
+        "success": outcomes[0][0],
+        "user_error": outcomes[0][1],
+        "node_observations": [dict(item) for item in observations],
+        "endpoint_identities": endpoint_identities,
+    }
+
+
+def _safe_rpc_payload(
+    transport: PinnedHttpsJsonRpc,
+    url: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        method = payload["method"]
+        params = payload["params"]
+        request_id = payload["id"]
+        if (
+            payload.get("jsonrpc") != "2.0"
+            or not isinstance(method, str)
+            or not isinstance(params, Mapping)
+        ):
+            raise InstallValidationError("public RPC request is invalid")
+        return transport.call(
+            url,
+            method,
+            dict(params),
+            request_id,
+            allow_submit=method == "account_put_deploy",
+        )
+    except (KeyError, RpcEndpointPolicyError, RpcTransportError) as exc:
+        raise InstallValidationError("public RPC request failed") from exc
+
+
+def reconcile_two_node_deploy(
+    transport: PinnedHttpsJsonRpc,
+    *,
+    deploy_hash: str,
+    expected_user_error: int | None = None,
+    deploy_expires_at: float | None = None,
+) -> dict[str, Any]:
+    expected_hash = _strip_hash(deploy_hash, "deploy hash")
+    observations: list[dict[str, Any]] = []
+    absence_observations: list[dict[str, Any]] = []
+    pending = False
+    for index, url in enumerate(transport.endpoints):
+        request = {
+            "jsonrpc": "2.0",
+            "id": f"concordia-wp10-finality-{index}",
+            "method": "info_get_deploy",
+            "params": {"deploy_hash": expected_hash},
+        }
+        try:
+            response = transport.call(
+                url,
+                "info_get_deploy",
+                {"deploy_hash": expected_hash},
+                request["id"],
+            )
+        except RpcRemoteError as exc:
+            if exc.code != -32001:
+                raise InstallValidationError(
+                    "public RPC deploy lookup returned an unexpected error"
+                ) from exc
+            absence_observations.append(
+                {
+                    "node_id": urlsplit(url).hostname,
+                    "node_url": str(url),
+                    "deploy_request": request,
+                    "deploy_error_code": exc.code,
+                }
+            )
+            continue
+        except (RpcEndpointPolicyError, RpcTransportError) as exc:
+            raise InstallValidationError("public RPC request failed") from exc
+        result = response.get("result")
+        if not isinstance(result, Mapping):
+            raise InstallValidationError("public RPC finality response is invalid")
+        execution = result.get("execution_info")
+        if execution is None:
+            pending = True
+            continue
+        if not isinstance(execution, Mapping):
+            raise InstallValidationError("public RPC finality response is invalid")
+        block_hash = _strip_hash(execution.get("block_hash"), "execution block hash")
+        block_request = {
+            "jsonrpc": "2.0",
+            "id": f"concordia-wp10-block-{index}",
+            "method": "chain_get_block",
+            "params": {"block_identifier": {"Hash": block_hash}},
+        }
+        block_response = _safe_rpc_payload(transport, url, block_request)
+        observations.append(
+            {
+                "node_id": urlsplit(url).hostname,
+                "node_url": str(url),
+                "deploy_request": request,
+                "deploy_response": response,
+                "block_request": block_request,
+                "block_response": block_response,
+            }
+        )
+    if len(absence_observations) == 2:
+        if (
+            isinstance(deploy_expires_at, (int, float))
+            and not isinstance(deploy_expires_at, bool)
+            and datetime.now(timezone.utc).timestamp() >= float(deploy_expires_at)
+        ):
+            return {
+                "status": "terminal_rejected",
+                "deploy_hash": expected_hash,
+                "detail_code": "ttl_expired_and_two_nodes_report_absent",
+                "absence_observations": absence_observations,
+            }
+        return {"status": "pending", "deploy_hash": expected_hash}
+    if absence_observations or pending or len(observations) != 2:
+        return {"status": "pending", "deploy_hash": expected_hash}
+    proof = verify_two_node_deploy_finality(
+        observations,
+        deploy_hash=expected_hash,
+        expected_user_error=expected_user_error,
+    )
+    observed_at = datetime.now(timezone.utc).isoformat(
+        timespec="milliseconds"
+    ).replace("+00:00", "Z")
+    finalized = datetime.fromisoformat(proof["finalized_at"][:-1] + "+00:00")
+    observed = datetime.fromisoformat(observed_at[:-1] + "+00:00")
+    if observed < finalized:
+        raise InstallValidationError("canonical block timestamp is in the future")
+    return {"status": "finalized", **proof, "observed_at": observed_at}
 
 
 def _commit_hash(value: object, field: str) -> str:
@@ -83,8 +848,10 @@ def build_locked_install_args(
         raise InstallValidationError("proposer, finalizer and signers must be pairwise distinct")
     if len(set(signers)) != 3:
         raise InstallValidationError("three pairwise-distinct signers are required")
-    if type(threshold) is not int or threshold not in (2, 3):
-        raise InstallValidationError("threshold must be exactly 2 or 3")
+    if type(threshold) is not int or threshold != 2:
+        raise InstallValidationError(
+            "threshold must be exactly 2 for the frozen seven-step finals proof"
+        )
     try:
         nonce = _hash32(installation_nonce, "installation_nonce")
         deployment_domain_record(
@@ -223,16 +990,19 @@ def build_signed_install_payload(
     return payload, manifest
 
 
-def _rpc(rpc_url: str, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+def _rpc(
+    transport: PinnedHttpsJsonRpc,
+    rpc_url: str,
+    method: str,
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
     request = {
         "jsonrpc": "2.0",
         "id": "concordia-v3-install-" + method,
         "method": method,
         "params": dict(params),
     }
-    response = httpx.post(rpc_url, json=request, timeout=60.0)
-    response.raise_for_status()
-    parsed = response.json()
+    parsed = _safe_rpc_payload(transport, rpc_url, request)
     if (
         not isinstance(parsed, dict)
         or set(parsed) != {"jsonrpc", "id", "result"}
@@ -501,28 +1271,41 @@ def _resolve_locked_contract(package_value: object) -> tuple[int, str]:
 
 def finalize_deployment_manifest(
     *,
+    rpc_transport: PinnedHttpsJsonRpc,
     rpc_url: str,
     manifest: dict[str, Any],
     broadcast_response: Mapping[str, Any],
+    two_node_finality: Mapping[str, Any],
 ) -> dict[str, Any]:
-    deploy_hash = str((broadcast_response.get("result") or {}).get("deploy_hash") or "")
+    deploy_hash = str(
+        (broadcast_response.get("result") or {}).get("deploy_hash")
+        or broadcast_response.get("deploy_hash")
+        or ""
+    )
     if deploy_hash.lower() != str(manifest["install_deploy_hash"]).lower():
         raise InstallValidationError("node returned a different install deploy hash")
-    finality = asyncio.run(await_casper_finality(deploy_hash, rpc_url=rpc_url, max_attempts=30, poll_interval_seconds=6))
-    if finality.get("success") is not True:
-        raise InstallValidationError("v3 install did not finalize successfully")
-    block_hash = finality.get("block_hash")
-    if not isinstance(block_hash, str):
-        raise InstallValidationError("install finality lacks a block hash")
-    install_rpc = _rpc(
-        rpc_url,
-        "info_get_deploy",
-        {"deploy_hash": deploy_hash},
-    )
+    if two_node_finality.get("status") != "finalized":
+        raise InstallValidationError("two-node install finality is not complete")
+    block_hash = str(two_node_finality.get("block_hash") or "")
+    block_height = two_node_finality.get("block_height")
+    observations = two_node_finality.get("node_observations")
+    if not isinstance(observations, list) or len(observations) != 2:
+        raise InstallValidationError("two-node install finality evidence is invalid")
+    primary = observations[0]
+    install_rpc = {
+        "request": primary["deploy_request"],
+        "response": primary["deploy_response"],
+    }
+    finality = {
+        "success": True,
+        "block_hash": block_hash,
+        "block_height": block_height,
+    }
     install_facts = _validate_successful_install_rpc(install_rpc, manifest)
     if install_facts["block_hash"] != _strip_hash(block_hash, "install block hash"):
         raise InstallValidationError("install finality summary disagrees with raw node response")
     root_rpc = _rpc(
+        rpc_transport,
         rpc_url,
         "chain_get_state_root_hash",
         {"block_identifier": {"Hash": _strip_hash(block_hash, "install block hash")}},
@@ -530,6 +1313,7 @@ def finalize_deployment_manifest(
     state_root = (root_rpc["response"].get("result") or {}).get("state_root_hash")
     state_root = _strip_hash(state_root, "install state root")
     account_rpc = _rpc(
+        rpc_transport,
         rpc_url,
         "query_global_state",
         {
@@ -542,6 +1326,7 @@ def finalize_deployment_manifest(
     package_key = _find_named_key(account_value, PACKAGE_KEY_NAME)
     package_hash = _strip_hash(package_key, "v3 package named key")
     package_rpc = _rpc(
+        rpc_transport,
         rpc_url,
         "query_global_state",
         {
@@ -553,6 +1338,7 @@ def finalize_deployment_manifest(
     package_value = (package_rpc["response"].get("result") or {}).get("stored_value")
     version, contract_hash = _resolve_locked_contract(package_value)
     contract_rpc = _rpc(
+        rpc_transport,
         rpc_url,
         "query_global_state",
         {
@@ -596,10 +1382,32 @@ def finalize_deployment_manifest(
             },
         }
     )
+    if two_node_finality is not None:
+        result["two_node_finality"] = dict(two_node_finality)
     return result
 
 
-def main() -> int:
+def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(json.dumps(value, indent=2, sort_keys=True).encode("utf-8"))
+            stream.write(b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        with contextlib.suppress(OSError):
+            temporary.unlink()
+
+
+def build_install_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--secret-key", type=Path, required=True)
     parser.add_argument("--key-algorithm", default="ED25519")
@@ -612,39 +1420,148 @@ def main() -> int:
     parser.add_argument("--ttl", default="30m")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--deployment-commit", required=True)
-    parser.add_argument("--node-rpc-url", default="https://node.testnet.casper.network/rpc")
+    parser.add_argument(
+        "--rpc-url",
+        dest="rpc_urls",
+        action="append",
+        default=[],
+        help="repeat exactly twice when --submit is used",
+    )
     parser.add_argument("--submit", action="store_true")
+    parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--manifest-out", type=Path, required=True)
+    return parser
+
+
+def main() -> int:
+    parser = build_install_parser()
     args = parser.parse_args()
     try:
-        roles = json.loads(args.roles.read_text(encoding="utf-8"))
-        payload, manifest = build_signed_install_payload(
-            secret_key_path=args.secret_key,
-            key_algorithm=args.key_algorithm,
-            roles=roles,
-            threshold=args.threshold,
-            installation_nonce=args.installation_nonce,
-            wasm_path=args.wasm,
-            schema_path=args.schema,
-            payment_amount_motes=args.payment_motes,
-            ttl=args.ttl,
-            source_commit=args.source_commit,
-            deployment_commit=args.deployment_commit,
-        )
-        if args.submit:
-            response = httpx.post(args.node_rpc_url, json=payload, timeout=60.0)
-            response.raise_for_status()
-            parsed = response.json()
-            if parsed.get("error"):
-                raise InstallValidationError(f"install RPC failed: {parsed['error']}")
-            manifest = finalize_deployment_manifest(
-                rpc_url=args.node_rpc_url,
-                manifest=manifest,
-                broadcast_response=parsed,
+        if args.journal.exists():
+            journal = DurableDeployJournal.open(args.journal)
+            intent = journal.intent
+            if intent.get("kind") != "v3_install" or not isinstance(
+                intent.get("manifest"), Mapping
+            ):
+                raise InstallValidationError("install journal intent is invalid")
+            manifest = dict(intent["manifest"])
+            payload = {
+                "jsonrpc": "2.0",
+                "id": "concordia-v3-install",
+                "method": "account_put_deploy",
+                "params": {"deploy": journal.signed_deploy},
+            }
+        else:
+            identity = verify_git_release_identity(
+                ROOT,
+                source_commit=args.source_commit,
+                deployment_commit=args.deployment_commit,
+                release_paths=RELEASE_IDENTITY_PATHS,
             )
-        args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
-        args.manifest_out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        print(json.dumps({"status": "submitted" if args.submit else "prepared", "manifest": str(args.manifest_out)}))
+            roles = json.loads(args.roles.read_text(encoding="utf-8"))
+            payload, manifest = build_signed_install_payload(
+                secret_key_path=args.secret_key,
+                key_algorithm=args.key_algorithm,
+                roles=roles,
+                threshold=args.threshold,
+                installation_nonce=args.installation_nonce,
+                wasm_path=args.wasm,
+                schema_path=args.schema,
+                payment_amount_motes=args.payment_motes,
+                ttl=args.ttl,
+                source_commit=identity["source_commit"],
+                deployment_commit=identity["deployment_commit"],
+            )
+            journal = DurableDeployJournal.create(
+                args.journal,
+                intent={"kind": "v3_install", "manifest": manifest},
+                signed_deploy=payload["params"]["deploy"],
+                deploy_hash=str(manifest["install_deploy_hash"]),
+            )
+        if args.submit:
+            verify_git_release_identity(
+                ROOT,
+                source_commit=str(manifest.get("source_commit", "")),
+                deployment_commit=str(manifest.get("deployment_commit", "")),
+                release_paths=RELEASE_IDENTITY_PATHS,
+            )
+            rpc_transport = build_public_rpc_transport(args.rpc_urls)
+            rpc_urls = rpc_transport.endpoints
+            def broadcast(
+                signed_deploy: Mapping[str, Any], deploy_hash: str
+            ) -> dict[str, Any]:
+                exact_payload = {
+                    "jsonrpc": "2.0",
+                    "id": "concordia-v3-install",
+                    "method": "account_put_deploy",
+                    "params": {"deploy": dict(signed_deploy)},
+                }
+                parsed = _safe_rpc_payload(rpc_transport, rpc_urls[0], exact_payload)
+                result = parsed.get("result")
+                if (
+                    not isinstance(result, Mapping)
+                    or str(result.get("deploy_hash", "")).lower() != deploy_hash
+                ):
+                    return {
+                        "status": "ambiguous",
+                        "deploy_hash": deploy_hash,
+                    }
+                return {
+                    "status": "submitted",
+                    "deploy_hash": deploy_hash,
+                    "raw_response": parsed,
+                }
+
+            journal = execute_journaled_submission(
+                journal,
+                broadcast=broadcast,
+                reconcile=lambda deploy_hash: reconcile_two_node_deploy(
+                    rpc_transport,
+                    deploy_hash=deploy_hash,
+                    deploy_expires_at=deploy_expiry_epoch(journal.signed_deploy),
+                ),
+            )
+            if journal.state != "finalized":
+                print(
+                    json.dumps(
+                        {
+                            "status": journal.state,
+                            "manifest": None,
+                            "journal": str(args.journal),
+                        }
+                    )
+                )
+                return 3
+            journal_evidence = journal.evidence
+            reconciliation = journal_evidence["reconciliation"]
+            broadcast_evidence = journal_evidence.get("broadcast")
+            raw_broadcast = (
+                broadcast_evidence.get("raw_response")
+                if isinstance(broadcast_evidence, Mapping)
+                else None
+            )
+            if not isinstance(raw_broadcast, Mapping):
+                raw_broadcast = {
+                    "status": "response_lost_reconciled_by_hash",
+                    "deploy_hash": journal.deploy_hash,
+                }
+            manifest = finalize_deployment_manifest(
+                rpc_transport=rpc_transport,
+                rpc_url=rpc_urls[0],
+                manifest=manifest,
+                broadcast_response=raw_broadcast,
+                two_node_finality=reconciliation,
+            )
+            _atomic_write_json(args.manifest_out, manifest)
+        print(
+            json.dumps(
+                {
+                    "status": "finalized" if args.submit else "prepared",
+                    "manifest": str(args.manifest_out) if args.submit else None,
+                    "journal": str(args.journal),
+                }
+            )
+        )
         return 0
     except (InstallValidationError, OSError, ValueError, TypeError) as exc:
         parser.error(str(exc))

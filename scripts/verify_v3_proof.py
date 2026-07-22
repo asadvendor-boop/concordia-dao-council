@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,6 +24,7 @@ from scripts.install_governance_receipt_v3 import (
     InstallValidationError,
     _resolve_locked_contract,
     _validate_successful_install_rpc,
+    verify_two_node_deploy_finality,
 )
 from scripts.prepare_v3_envelope import prepare_v3_envelope
 from scripts.read_v3_state import validate_verified_readback, verify_and_seal_readback_artifact
@@ -39,12 +41,27 @@ def _same(name: str, actual: object, expected: object) -> None:
 
 _USER_ERROR = re.compile(r"(?:User error|ApiError::User)[:( ]+(\d+)")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
+_RFC3339_UTC = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z"
+)
 ROOT = Path(__file__).resolve().parents[1]
 V3_ROOT = ROOT / "contracts/odra-governance-receipt-v3"
 
 
 def _canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def _utc_timestamp(value: object, field: str) -> datetime:
+    if not isinstance(value, str) or _RFC3339_UTC.fullmatch(value) is None:
+        raise ProofVerificationError(f"{field} must be exact RFC3339 UTC")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ProofVerificationError(f"{field} must be exact RFC3339 UTC") from exc
+    if parsed.tzinfo != timezone.utc:
+        raise ProofVerificationError(f"{field} must be exact RFC3339 UTC")
+    return parsed
 
 
 def _verified_transcript(value: object, *, method: str) -> Mapping[str, Any]:
@@ -203,7 +220,10 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "verified_install_deploy",
         "raw_rpc",
     }
-    if not isinstance(value, Mapping) or set(value) != expected_keys:
+    if not isinstance(value, Mapping) or frozenset(value) not in {
+        frozenset(expected_keys),
+        frozenset(expected_keys | {"two_node_finality"}),
+    }:
         raise ProofVerificationError("deployment manifest field set is not finalized/frozen")
     if value["status"] != "finalized" or value["network"] != "casper-test":
         raise ProofVerificationError("deployment manifest is not finalized on casper-test")
@@ -233,8 +253,8 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
     if len(set(ordered_roles.values())) != 5 or "00" * 32 in ordered_roles.values():
         raise ProofVerificationError("deployment governance roles are not nonzero/pairwise distinct")
     threshold = value["threshold"]
-    if threshold not in (2, 3):
-        raise ProofVerificationError("deployment threshold is invalid")
+    if threshold != 2:
+        raise ProofVerificationError("deployment threshold must be exactly 2")
     installer_hash = _lower_hash(value["installer_account_hash"], "deployment installer")
     if installer_hash in ordered_roles.values():
         raise ProofVerificationError("deployment installer collides with governance role")
@@ -250,17 +270,28 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
     }:
         raise ProofVerificationError("deployment raw RPC evidence is incomplete")
     broadcast = raw["broadcast_response"]
-    if (
-        not isinstance(broadcast, Mapping)
-        or set(broadcast) != {"jsonrpc", "id", "result"}
-        or broadcast["jsonrpc"] != "2.0"
-        or broadcast["id"] != "concordia-v3-install"
-        or not isinstance(broadcast["result"], Mapping)
-        or set(broadcast["result"]) != {"api_version", "deploy_hash"}
-        or not isinstance(broadcast["result"]["api_version"], str)
-        or not broadcast["result"]["api_version"]
-        or broadcast["result"].get("deploy_hash", "").lower() != str(value["install_deploy_hash"]).lower()
-    ):
+    broadcast_is_exact = (
+        isinstance(broadcast, Mapping)
+        and set(broadcast) == {"jsonrpc", "id", "result"}
+        and broadcast["jsonrpc"] == "2.0"
+        and broadcast["id"] == "concordia-v3-install"
+        and isinstance(broadcast["result"], Mapping)
+        and set(broadcast["result"]) == {"api_version", "deploy_hash"}
+        and isinstance(broadcast["result"]["api_version"], str)
+        and bool(broadcast["result"]["api_version"])
+        and broadcast["result"].get("deploy_hash", "").lower()
+        == str(value["install_deploy_hash"]).lower()
+    )
+    broadcast_was_reconciled = (
+        isinstance(broadcast, Mapping)
+        and broadcast
+        == {
+            "status": "response_lost_reconciled_by_hash",
+            "deploy_hash": value["install_deploy_hash"],
+        }
+        and "two_node_finality" in value
+    )
+    if not broadcast_is_exact and not broadcast_was_reconciled:
         raise ProofVerificationError("deployment broadcast evidence is invalid")
     install = _install_rpc(raw["install_deploy"], method="info_get_deploy")
     if install["request"]["params"] != {"deploy_hash": value["install_deploy_hash"]}:
@@ -285,6 +316,24 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "deploy_hash": install_facts["deploy_hash"],
     }:
         raise ProofVerificationError("deployment finality summary differs from raw node evidence")
+    if "two_node_finality" in value:
+        raw_two_node = value["two_node_finality"]
+        if not isinstance(raw_two_node, Mapping):
+            raise ProofVerificationError("deployment two-node finality is invalid")
+        try:
+            two_node = verify_two_node_deploy_finality(
+                raw_two_node.get("node_observations", []),
+                deploy_hash=install_facts["deploy_hash"],
+            )
+        except InstallValidationError as exc:
+            raise ProofVerificationError(
+                "deployment two-node finality is invalid"
+            ) from exc
+        for field in ("deploy_hash", "block_hash", "block_height"):
+            if two_node[field] != raw_two_node.get(field):
+                raise ProofVerificationError(
+                    "deployment two-node finality summary differs from raw evidence"
+                )
 
     state_root = _install_rpc(raw["state_root"], method="chain_get_state_root_hash")
     if state_root["request"]["params"] != {"block_identifier": {"Hash": value["install_block_hash"]}}:
@@ -547,7 +596,10 @@ def _prepared_args(prepared: Mapping[str, Any], *, mutated: bool = False) -> lis
     if mutated:
         for item in values:
             if item[0] == "approved_allocation_bps":
-                item[1] = serializer.to_json(CLV_U32(3000))
+                current = item[1].get("parsed")
+                item[1] = serializer.to_json(
+                    CLV_U32(2999 if current == 3000 else 3000)
+                )
                 break
     return values
 
@@ -613,9 +665,18 @@ def _verify_live_run(
         name, role, entry_point, success_label, error_code, expected_args = expected
         required = {
             "name", "role", "custody", "entry_point", "expected", "expected_error",
-            "deploy_hash", "deploy", "broadcast_transcript", "finality_transcript", "observed_outcome",
+            "deploy_hash", "deploy", "finality_transcript", "observed_outcome",
         }
-        if not isinstance(record, Mapping) or set(record) != required:
+        durable_required = required | {
+            "submission_state",
+            "finality_block_evidence",
+        }
+        accepted_broadcast = durable_required | {"broadcast_transcript"}
+        reconciled_broadcast = durable_required | {"broadcast_evidence"}
+        if not isinstance(record, Mapping) or set(record) not in (
+            accepted_broadcast,
+            reconciled_broadcast,
+        ):
             raise ProofVerificationError(f"{name}: step record shape is invalid")
         if (record["name"], record["role"], record["entry_point"], record["expected"], record["expected_error"]) != (name, role, entry_point, success_label, error_code):
             raise ProofVerificationError(f"{name}: asserted choreography differs from frozen sequence")
@@ -630,24 +691,106 @@ def _verify_live_run(
         )
         if _session(deploy, contract_hash=contract_hash, entry_point=entry_point) != expected_args:
             raise ProofVerificationError(f"{name}: deploy runtime args differ from frozen choreography")
-        broadcast = _verified_transcript(record["broadcast_transcript"], method="account_put_deploy")
-        if broadcast["params"] != {"deploy": deploy}:
-            raise ProofVerificationError(f"{name}: broadcast request differs from recorded deploy")
-        broadcast_result = broadcast["response"]["result"]
-        if not isinstance(broadcast_result, Mapping) or set(broadcast_result) != {
-            "api_version",
-            "deploy_hash",
+        if "broadcast_transcript" in record:
+            broadcast = _verified_transcript(
+                record["broadcast_transcript"], method="account_put_deploy"
+            )
+            if broadcast["params"] != {"deploy": deploy}:
+                raise ProofVerificationError(
+                    f"{name}: broadcast request differs from recorded deploy"
+                )
+            broadcast_result = broadcast["response"]["result"]
+            if not isinstance(broadcast_result, Mapping) or set(broadcast_result) != {
+                "api_version",
+                "deploy_hash",
+            }:
+                raise ProofVerificationError(f"{name}: broadcast response shape is invalid")
+            returned_hash = broadcast_result["deploy_hash"]
+            if (
+                not isinstance(returned_hash, str)
+                or returned_hash.lower() != deploy_hash.lower()
+            ):
+                raise ProofVerificationError(f"{name}: broadcast response hash mismatch")
+        elif record["broadcast_evidence"] != {
+            "status": "response_lost_reconciled_by_hash",
+            "deploy_hash": deploy_hash.lower(),
         }:
-            raise ProofVerificationError(f"{name}: broadcast response shape is invalid")
-        returned_hash = broadcast_result["deploy_hash"]
-        if not isinstance(returned_hash, str) or returned_hash.lower() != deploy_hash.lower():
-            raise ProofVerificationError(f"{name}: broadcast response hash mismatch")
+            raise ProofVerificationError(
+                f"{name}: ambiguous broadcast evidence is invalid"
+            )
         outcome = _finality_outcome(
             record["finality_transcript"],
             deploy_hash=deploy_hash,
             recorded_deploy=deploy,
             expected_public_key=str(roles[role]["public_key"]),
         )
+        if record["submission_state"] != "finalized":
+            raise ProofVerificationError(
+                f"{name}: durable submission state is not finalized"
+            )
+        block_evidence = record["finality_block_evidence"]
+        expected_block_fields = {
+            "status",
+            "block_hash",
+            "block_height",
+            "state_root_hash",
+            "block_timestamp",
+            "finalized_at",
+            "observed_at",
+            "deploy_hash",
+            "corroboration_count",
+            "success",
+            "user_error",
+            "node_observations",
+            "endpoint_identities",
+        }
+        if not isinstance(block_evidence, Mapping) or set(block_evidence) != expected_block_fields:
+            raise ProofVerificationError(
+                f"{name}: two-node block evidence is invalid"
+            )
+        try:
+            corroborated = verify_two_node_deploy_finality(
+                block_evidence["node_observations"],
+                deploy_hash=deploy_hash,
+                expected_user_error=error_code,
+            )
+        except InstallValidationError as exc:
+            raise ProofVerificationError(
+                f"{name}: two-node block evidence is invalid"
+            ) from exc
+        derived_fields = {
+            "block_hash",
+            "block_height",
+            "state_root_hash",
+            "block_timestamp",
+            "deploy_hash",
+            "corroboration_count",
+            "success",
+            "user_error",
+            "endpoint_identities",
+        }
+        if (
+            block_evidence["status"] != "finalized"
+            or any(block_evidence[field] != corroborated[field] for field in derived_fields)
+            or block_evidence["finalized_at"] != corroborated["block_timestamp"]
+            or corroborated["block_hash"] != outcome["block_hash"]
+            or corroborated["block_height"] != outcome["block_height"]
+        ):
+            raise ProofVerificationError(
+                f"{name}: two-node block evidence disagrees with raw finality"
+            )
+        finalized_time = _utc_timestamp(
+            block_evidence["finalized_at"], f"{name} finalized_at"
+        )
+        observed_time = _utc_timestamp(
+            block_evidence["observed_at"], f"{name} observed_at"
+        )
+        if observed_time < finalized_time:
+            raise ProofVerificationError(
+                f"{name}: finality observation predates canonical finalization"
+            )
+        outcome["finalized_at"] = block_evidence["finalized_at"]
+        outcome["observed_at"] = block_evidence["observed_at"]
         observed_result = {
             "success": outcome["success"],
             "user_error": outcome["user_error"],
