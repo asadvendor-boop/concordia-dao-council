@@ -127,3 +127,22 @@ Playwright test; the expanded viewport/state/accessibility suite; no console
 errors; no dead controls; proposal-race tests; exact demo-capability tests; and
 a second read-only source and visual audit. The final video must not be recorded
 until this gate is green on the hosted release candidate.
+
+## Mandatory post-freeze registry/artifact corrections
+
+- Frontend provenance must enforce the proof-type combinations in G1-C11, not
+  only the independent enum values. In particular, current exact-v3/native/
+  official-x402 proof cannot be relabelled canonical or historical; SafePay v2
+  cannot be relabelled v1/v3; snapshot evidence cannot become execution proof.
+- Enforce G1-C12 chronology before rendering green:
+  `max(check.observed_at) <= item.captured_at <= registry.generated_at <=`
+  the browser/verifier reference time. Malformed, future, or reversed
+  timestamps render invalid/unavailable with a non-color cue.
+- Historical card/receipt proof comes from the independent
+  `concordia.historical_odra_receipt.v1` artifact and exact
+  `concordia.card_chain.v1` preimages. Never infer cryptographic verification
+  from the legacy humanized receipt summary, card presence, or
+  `chain_valid/passed/processed` booleans.
+- Display the verifier's explicit `verification_scope` and
+  `observation_sources`. Offline transcript verification must not be worded as
+  a current live-chain read.

@@ -71,3 +71,21 @@ second independent source review. The live claim remains blocked until Codex's
 chain observer proves a real finalized hosted-facilitator v8 transaction with
 all eight exact arguments; `/supported` or `isValid:true` is not settlement
 proof.
+
+## Mandatory post-freeze interface corrections
+
+- The official settlement registry item is exactly generation `v3`, lineage
+  `supplemental`, observation `live|snapshot`, temporal scope `current`, and
+  outcome `accepted`; it also carries the exact proposal, action, envelope,
+  network, package, contract, and deployment-domain identity. Relabelled or
+  partial identity is invalid.
+- Use the normalized required-check name
+  `facilitator_verify_returned_is_valid_true`. The earlier camel-case
+  `...isValid...` literal violates the frozen check-name grammar and cannot
+  produce a green item.
+- Emit strict UTC-Z check observations and capture time satisfying
+  `max(check.observed_at) <= item.captured_at`. The integrated registry then
+  enforces `item.captured_at <= registry.generated_at <= verifier time`.
+- The verifier's live observer uses operator-selected trusted HTTPS RPC
+  endpoints; the service or artifact must never choose verifier observation
+  URLs.

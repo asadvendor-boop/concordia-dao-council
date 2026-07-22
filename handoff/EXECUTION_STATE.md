@@ -32,9 +32,9 @@ every handoff or live mutation. Claims require the evidence listed here.
 | G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
 | WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `b6b2c98`; G1-C6/C8 enforce raw temporal and fork identity; 172 affected Python tests and the prior full/Rust/Wasm gates are green; live deployment remains WP10 |
-| WP4 registry | PASS_LOCAL_PENDING_PRODUCERS | fail-closed registry/API and legacy SafePay truth rewire committed; live v3/SafePay/x402 registry artifacts wait on the corresponding verified executions |
+| WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, exact card-chain export bound to a trusted external terminal root, and frozen raw historical-receipt contract are committed; no canonical card/root or combined receipt artifact is fabricated locally, and live capture/registry publication remain WP10 |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
-| WP8 verifier | IN_PROGRESS_BLOCKED_ON_PRODUCERS | package implementation and cross-language audit found G1-C6/C7/C8/C9 plus missing independent card/SafePay/x402 adapters, boolean-only live mode, and attacker-controlled freshness; clock/live/card work is active, SafePay/x402 completion waits on corrected producer schemas |
+| WP8 verifier | IN_PROGRESS_BLOCKED_ON_PRODUCERS | package implementation and cross-language audit found G1-C6 through C13, missing independent adapters, unusable/unsafe live scope, provenance relabelling and attacker-controlled chronology; card/historical/live-observer work is active, while SafePay/x402 completion waits on corrected producer schemas |
 | WP10 live/release | PENDING | no mutations before local/integration gates |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
@@ -84,6 +84,17 @@ committed at `b6b2c98`; 172 affected tests pass. G1-C10 also freezes a new exact
 sealed-card publication because the existing humanized evidence view is not a
 cryptographic hash preimage. The original tag remains the common branch root
 and is not silently rewritten.
+
+Subsequent independent review added G1-C11 through C13. The public registry now
+binds each proof type to its allowed generation/lineage/observation/temporal/
+outcome semantics and rejects impossible observation chronology. Exact card
+preimages are exported only when a strict immutable release-root mapping binds
+the terminal hash; no Host header or self-asserted card root is accepted. The
+historical v1/v2 receipt verifier contract consumes raw Casper RPC transcripts
+and a packaged chain-identity inventory, while explicitly reporting that the
+preserved repo source is not proven byte-equivalent to either deployed Wasm.
+No fake root or combined historical artifact has been created; those remain
+live capture outputs.
 
 Claude WP5 also remains isolated. Its existing 128 tests pass, but independent
 review proved that omitted/partial WCSPR argument values can pass post-settle

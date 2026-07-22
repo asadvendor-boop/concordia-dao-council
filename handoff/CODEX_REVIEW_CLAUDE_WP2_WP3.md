@@ -75,3 +75,15 @@ as complete work packages until every blocker below is fixed and retested.
 - Codex independently reviews the corrective diff before cherry-pick.
 - The integrated full Python, schema, hosted and live boundary gates pass.
 
+## Mandatory post-freeze interface corrections
+
+- A green SafePay item is exactly generation `v2`, lineage `supplemental`,
+  observation `live|snapshot`, temporal scope `current`, and outcome
+  `accepted`. Historical/canonical/rejection relabelling is invalid.
+- SafePay and WP3 proof items emit strict UTC-Z check observations and capture
+  time satisfying `max(check.observed_at) <= item.captured_at`; the integrated
+  registry separately binds capture to generation/verifier time.
+- Approval, demo-capability, and room-identity proof items are generation `v1`,
+  supplemental, current, accepted, and live or dated-snapshot only.
+- Producer interfaces must not add trust booleans as substitutes for the
+  required observed checks. Missing raw observations stay unavailable.
