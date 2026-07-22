@@ -499,7 +499,7 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
             payment_motes=5_000_000_000,
             ttl="30m",
         )
-        deploy_hash = deploy["hash"]
+        deploy_hash = deploy["hash"].lower()
         error_code = step.get("expected_error")
         broadcast = _rpc(
             "account_put_deploy",
@@ -534,6 +534,65 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                 },
             },
         )
+        block_request = {
+            "jsonrpc": "2.0",
+            "id": "block",
+            "method": "chain_get_block",
+            "params": {"block_identifier": {"Hash": "cd" * 32}},
+        }
+        block_response = {
+            "jsonrpc": "2.0",
+            "id": "block",
+            "result": {
+                "api_version": "2.0.0",
+                "block_with_signatures": {
+                    "block": {
+                        "Version2": {
+                            "hash": "cd" * 32,
+                            "header": {
+                                "height": 9_002,
+                                "state_root_hash": "de" * 32,
+                                "timestamp": "2026-01-23T12:34:56.789Z",
+                            },
+                            "body": {
+                                "transactions": {"0": [{"Deploy": deploy_hash}]}
+                            },
+                        }
+                    },
+                    "proofs": [],
+                },
+            },
+        }
+        node_observations = []
+        for host in ("rpc-a.example", "rpc-b.example"):
+            node_observations.append(
+                {
+                    "node_id": host,
+                    "node_url": f"https://{host}/rpc",
+                    "deploy_request": copy.deepcopy(finality["request"]),
+                    "deploy_response": copy.deepcopy(finality["response"]),
+                    "block_request": copy.deepcopy(block_request),
+                    "block_response": copy.deepcopy(block_response),
+                }
+            )
+        block_evidence = {
+            "status": "finalized",
+            "block_hash": "cd" * 32,
+            "block_height": 9_002,
+            "state_root_hash": "de" * 32,
+            "block_timestamp": "2026-01-23T12:34:56.789Z",
+            "finalized_at": "2026-01-23T12:34:56.789Z",
+            "observed_at": "2026-01-23T12:35:01.000Z",
+            "deploy_hash": deploy_hash.lower(),
+            "corroboration_count": 2,
+            "success": error_code is None,
+            "user_error": error_code,
+            "node_observations": node_observations,
+            "endpoint_identities": [
+                "https://rpc-a.example/rpc",
+                "https://rpc-b.example/rpc",
+            ],
+        }
         records.append(
             {
                 "name": step["name"],
@@ -550,6 +609,8 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                     "success": error_code is None,
                     "user_error": error_code,
                 },
+                "submission_state": "finalized",
+                "finality_block_evidence": block_evidence,
             }
         )
     return {
@@ -966,6 +1027,27 @@ def test_offline_verifier_recomputes_envelope_and_readback_instead_of_trusting_b
         verify_v3_proof_document(proof)
 
 
+def test_offline_verifier_rejects_reversed_finality_observation_time() -> None:
+    proof, _, _ = _bound_v3_proof()
+    exact = proof["run"]["steps"][5]["finality_block_evidence"]
+    exact["observed_at"] = "2026-01-23T12:34:55.000Z"
+
+    with pytest.raises(ProofVerificationError, match="predates"):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_accepts_lost_broadcast_only_after_hash_reconciliation() -> None:
+    proof, _, _ = _bound_v3_proof()
+    record = proof["run"]["steps"][0]
+    record.pop("broadcast_transcript")
+    record["broadcast_evidence"] = {
+        "status": "response_lost_reconciled_by_hash",
+        "deploy_hash": record["deploy_hash"].lower(),
+    }
+
+    assert verify_v3_proof_document(proof)["valid"] is True
+
+
 def test_offline_verifier_rejects_state_readback_before_exact_finalization() -> None:
     proof, _, ids = _bound_v3_proof()
     transcripts = copy.deepcopy(proof["readback"]["transcripts"])
@@ -1011,7 +1093,7 @@ def test_offline_verifier_rejects_nonmonotonic_contract_step_finality() -> None:
         ).encode()
     ).hexdigest()
 
-    with pytest.raises(ProofVerificationError, match="preceding contract step"):
+    with pytest.raises(ProofVerificationError, match="block evidence|preceding contract step"):
         verify_v3_proof_document(proof)
 
 
@@ -1024,7 +1106,7 @@ def test_offline_verifier_rejects_contract_step_at_install_height() -> None:
     ]["install_block_height"]
     _reseal_rpc_transcript(finality)
 
-    with pytest.raises(ProofVerificationError, match="must follow contract installation"):
+    with pytest.raises(ProofVerificationError, match="block evidence|must follow"):
         verify_v3_proof_document(proof)
 
 
@@ -1035,7 +1117,7 @@ def test_offline_verifier_rejects_equal_height_steps_on_different_blocks() -> No
     finality["response"]["result"]["execution_info"]["block_hash"] = "fe" * 32
     _reseal_rpc_transcript(finality)
 
-    with pytest.raises(ProofVerificationError, match="same height on different blocks"):
+    with pytest.raises(ProofVerificationError, match="block evidence|same height"):
         verify_v3_proof_document(proof)
 
 
@@ -1546,23 +1628,99 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
         }
 
     monkeypatch.setattr(live_proof_runner, "capture_v3_checkpoint_state", fake_checkpoint_state)
-    monkeypatch.setattr(live_proof_runner.httpx, "AsyncClient", FakeAsyncClient)
-    monkeypatch.setattr(live_proof_runner, "_await_finality_transcript", fake_finality)
+    monkeypatch.setattr(
+        live_proof_runner,
+        "build_public_rpc_transport",
+        lambda urls: argparse.Namespace(endpoints=tuple(urls)),
+    )
+    seen_deploy: dict[str, object] = {}
+
+    def safe_rpc(
+        _transport: object, _url: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        deploy = payload["params"]["deploy"]
+        seen_deploy.clear()
+        seen_deploy.update(deploy)
+        return {
+            "jsonrpc": "2.0",
+            "id": payload["id"],
+            "result": {"api_version": "2.0.0", "deploy_hash": deploy["hash"]},
+        }
+
+    def reconcile(_urls: object, *, deploy_hash: str, **_: object) -> dict[str, object]:
+        public = role_keys["proposer"].to_public_key().account_key.hex()
+        response = {
+            "jsonrpc": "2.0",
+            "id": "finality",
+            "result": {
+                "api_version": "2.0.0",
+                "deploy": copy.deepcopy(seen_deploy),
+                "execution_info": {
+                    "block_hash": "cc" * 32,
+                    "block_height": 9_002,
+                    "execution_result": {
+                        "Version2": {
+                            "initiator": {"PublicKey": public},
+                            "error_message": None,
+                            "current_price": 1,
+                            "limit": "5000000000",
+                            "consumed": "1",
+                            "cost": "1",
+                            "refund": "0",
+                            "transfers": [],
+                            "size_estimate": 1,
+                            "effects": [],
+                        }
+                    },
+                },
+            },
+        }
+        request = {
+            "jsonrpc": "2.0",
+            "id": "finality",
+            "method": "info_get_deploy",
+            "params": {"deploy_hash": deploy_hash},
+        }
+        return {
+            "status": "finalized",
+            "node_observations": [
+                {
+                    "node_id": "rpc-a.example",
+                    "deploy_request": request,
+                    "deploy_response": response,
+                },
+                {"node_id": "rpc-b.example"},
+            ],
+        }
+
+    monkeypatch.setattr(live_proof_runner, "_safe_rpc_payload", safe_rpc)
+    monkeypatch.setattr(live_proof_runner, "reconcile_two_node_deploy", reconcile)
     args = argparse.Namespace(
         input=input_path,
         roles=roles_path,
         package_hash="aa" * 32,
         contract_hash="bb" * 32,
-        rpc_url="https://node.testnet.casper.network/rpc",
+        rpc_url="",
         payment_motes=5_000_000_000,
         ttl="30m",
         max_attempts=1,
         poll_seconds=0.0,
-        prepare_only=False,
+        prepare_only=True,
+        submit=False,
+        rpc_urls=[],
+        journal=checkpoint_path,
         resume_checkpoint=None,
         signed_deploy=None,
         out=checkpoint_path,
     )
+    prepared_journal = await live_proof_runner.run(args)
+    assert prepared_journal["status"] == "prepared"
+    assert prepared_journal["steps"][0]["custody"] == "browser"
+
+    args.prepare_only = False
+    args.submit = True
+    args.rpc_urls = ["https://rpc-a.example/rpc", "https://rpc-b.example/rpc"]
+    args.resume_checkpoint = checkpoint_path
     first = await live_proof_runner.run(args)
     assert first["status"] == "waiting_for_browser_signature"
     assert first["next_step_index"] == 0
@@ -1619,6 +1777,100 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
             build_browser_signature_import(broken, serializer.to_json(next_signed)),
             now_seconds=next_signed.header.timestamp.value + 1,
         )
+
+
+@pytest.mark.asyncio
+async def test_server_lost_response_resumes_by_exact_hash_without_rebroadcast(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document = _native_document()
+    role_keys = _role_private_keys()
+    roles = {
+        name: {
+            "custody": "server",
+            "secret_key_path": str(tmp_path / f"{name}.pem"),
+            "key_algorithm": (
+                "SECP256K1" if name in {"finalizer", "signer_b"} else "ED25519"
+            ),
+        }
+        for name, private in role_keys.items()
+    }
+    input_path = tmp_path / "input.json"
+    roles_path = tmp_path / "roles.json"
+    journal_path = tmp_path / "run.journal.json"
+    input_path.write_text(json.dumps(document), encoding="utf-8")
+    roles_path.write_text(json.dumps(roles), encoding="utf-8")
+    monkeypatch.setattr(
+        live_proof_runner,
+        "parse_private_key",
+        lambda path, algorithm: role_keys[path.stem],
+    )
+    monkeypatch.setattr(
+        live_proof_runner,
+        "build_public_rpc_transport",
+        lambda urls: argparse.Namespace(endpoints=tuple(urls)),
+    )
+    calls = 0
+
+    def lost_response(*_: object, **__: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise InstallValidationError("public RPC request failed")
+
+    monkeypatch.setattr(live_proof_runner, "_safe_rpc_payload", lost_response)
+    seen: list[str] = []
+    monkeypatch.setattr(
+        live_proof_runner,
+        "reconcile_two_node_deploy",
+        lambda _transport, *, deploy_hash, **_kwargs: (
+            seen.append(deploy_hash)
+            or {"status": "pending", "deploy_hash": deploy_hash}
+        ),
+    )
+    args = argparse.Namespace(
+        input=input_path,
+        roles=roles_path,
+        package_hash="aa" * 32,
+        contract_hash="bb" * 32,
+        rpc_url="",
+        rpc_urls=["https://rpc-a.example/rpc", "https://rpc-b.example/rpc"],
+        payment_motes=5_000_000_000,
+        ttl="30m",
+        max_attempts=1,
+        poll_seconds=0.0,
+        prepare_only=False,
+        submit=True,
+        resume_checkpoint=None,
+        signed_deploy=None,
+        journal=journal_path,
+        out=journal_path,
+    )
+    first = await live_proof_runner.run(args)
+    deploy_hash = first["steps"][0]["deploy_hash"]
+    assert first["steps"][0]["submission_state"] == "broadcast_ambiguous"
+    assert calls == 1
+    assert seen == [deploy_hash]
+
+    monkeypatch.setattr(
+        live_proof_runner,
+        "_safe_rpc_payload",
+        lambda *_args, **_kwargs: pytest.fail("resume must not rebroadcast"),
+    )
+    args.resume_checkpoint = journal_path
+    second = await live_proof_runner.run(args)
+    assert second["steps"][0]["submission_state"] == "broadcast_ambiguous"
+    assert second["steps"][0]["deploy_hash"] == deploy_hash
+    assert seen == [deploy_hash, deploy_hash]
+    assert calls == 1
+
+    tampered = json.loads(journal_path.read_text(encoding="utf-8"))
+    tampered["steps"][0]["deploy"]["session"]["StoredContractByHash"][
+        "entry_point"
+    ] = "forged_entry_point"
+    journal_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(LiveProofError, match="frozen|canonical|invalid"):
+        await live_proof_runner.run(args)
 
 
 @pytest.mark.parametrize(
