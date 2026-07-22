@@ -186,6 +186,7 @@ def test_reg_03_historical_proof_retains_narrow_non_retroactive_semantics() -> N
             "lineage": "supplemental",
             "observation_mode": "snapshot",
             "temporal_scope": "historical",
+            "execution_outcome": "accepted",
             "claim_scope": "The v2 contract rejected receipt storage before quorum and accepted it after quorum.",
             "enforcement_scope": "Historical quorum-gated receipt storage only; no retroactive exact-envelope or custody claim.",
             "checks": _checks("historical_odra_receipt_v2"),
@@ -233,6 +234,7 @@ def test_reg_04c_v3_execution_items_require_deployment_domain(proof_type: str) -
             "proof_type": proof_type,
             "generation": "v3",
             "observation_mode": "live",
+            "execution_outcome": "accepted",
             "proposal_id": "DAO-PROP-TEST",
             "action_id": "01" * 32,
             "envelope_hash": "02" * 32,
@@ -247,6 +249,197 @@ def test_reg_04c_v3_execution_items_require_deployment_domain(proof_type: str) -
     assert proof_item_is_green(item) is True
 
     item["deployment_domain"] = None
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("proof_type", "field", "invalid_value"),
+    [
+        ("exact_envelope_v3", "generation", "v1"),
+        ("exact_envelope_v3", "lineage", "canonical"),
+        ("exact_envelope_v3", "temporal_scope", "historical"),
+        ("exact_envelope_v3", "execution_outcome", "expected_rejection"),
+        ("native_treasury_execution_v1", "generation", "v2"),
+        ("native_treasury_execution_v1", "lineage", "canonical"),
+        ("native_treasury_execution_v1", "temporal_scope", "historical"),
+        ("native_treasury_execution_v1", "execution_outcome", "not_applicable"),
+    ],
+)
+def test_reg_04d_current_v3_execution_provenance_cannot_be_relabelled(
+    proof_type: str,
+    field: str,
+    invalid_value: str,
+) -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": f"{proof_type}-current",
+            "proof_type": proof_type,
+            "generation": "v3",
+            "lineage": "supplemental",
+            "observation_mode": "live",
+            "temporal_scope": "current",
+            "verification_status": "verified",
+            "execution_outcome": "accepted",
+            "proposal_id": "DAO-PROP-TEST",
+            "action_id": "01" * 32,
+            "envelope_hash": "02" * 32,
+            "network": "casper:casper-test",
+            "package_hash": "03" * 32,
+            "contract_hash": "04" * 32,
+            "deployment_domain": "05" * 32,
+            "deployment_commit": "2" * 40,
+            "checks": _checks(proof_type),
+        }
+    )
+    item[field] = invalid_value
+
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("proof_type", "generation"),
+    [("safepay_v2", "v2"), ("official_x402_settlement_v1", "v3")],
+)
+def test_reg_04e_payment_proof_provenance_is_generation_bound(
+    proof_type: str,
+    generation: str,
+) -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": f"{proof_type}-current",
+            "proof_type": proof_type,
+            "generation": generation,
+            "lineage": "supplemental",
+            "observation_mode": "live",
+            "temporal_scope": "current",
+            "verification_status": "verified",
+            "execution_outcome": "accepted",
+            "deployment_commit": "2" * 40,
+            "checks": _checks(proof_type),
+        }
+    )
+    if proof_type == "official_x402_settlement_v1":
+        item.update(
+            {
+                "action_id": "01" * 32,
+                "envelope_hash": "02" * 32,
+                "network": "casper:casper-test",
+                "package_hash": "03" * 32,
+                "contract_hash": "04" * 32,
+                "deployment_domain": "05" * 32,
+                "payment_requirements_hash": "06" * 32,
+                "signed_payment_payload_hash": "07" * 32,
+                "report_hash": "08" * 32,
+                "settlement_transaction": "09" * 32,
+            }
+        )
+    assert proof_item_is_green(item) is True
+
+    item["generation"] = "v1"
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("proof_type", "generation", "field", "invalid_value"),
+    [
+        ("safepay_v2", "v2", "lineage", "canonical"),
+        ("safepay_v2", "v2", "observation_mode", "unavailable"),
+        ("safepay_v2", "v2", "temporal_scope", "historical"),
+        ("safepay_v2", "v2", "execution_outcome", "expected_rejection"),
+        ("official_x402_settlement_v1", "v3", "lineage", "canonical"),
+        ("official_x402_settlement_v1", "v3", "observation_mode", "unavailable"),
+        ("official_x402_settlement_v1", "v3", "temporal_scope", "historical"),
+        ("official_x402_settlement_v1", "v3", "execution_outcome", "expected_rejection"),
+    ],
+)
+def test_reg_04f_payment_proof_provenance_cannot_be_relabelled(
+    proof_type: str,
+    generation: str,
+    field: str,
+    invalid_value: str,
+) -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": f"{proof_type}-current",
+            "proof_type": proof_type,
+            "generation": generation,
+            "lineage": "supplemental",
+            "observation_mode": "live",
+            "temporal_scope": "current",
+            "verification_status": "verified",
+            "execution_outcome": "accepted",
+            "deployment_commit": "2" * 40,
+            "checks": _checks(proof_type),
+        }
+    )
+    if proof_type == "official_x402_settlement_v1":
+        item.update(
+            {
+                "action_id": "01" * 32,
+                "envelope_hash": "02" * 32,
+                "network": "casper:casper-test",
+                "package_hash": "03" * 32,
+                "contract_hash": "04" * 32,
+                "deployment_domain": "05" * 32,
+                "payment_requirements_hash": "06" * 32,
+                "signed_payment_payload_hash": "07" * 32,
+                "report_hash": "08" * 32,
+                "settlement_transaction": "09" * 32,
+            }
+        )
+    item[field] = invalid_value
+
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "proposal_id",
+        "action_id",
+        "envelope_hash",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "deployment_domain",
+    ],
+)
+def test_reg_04g_official_x402_requires_exact_v3_execution_identity(field: str) -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": "official-x402-current",
+            "proof_type": "official_x402_settlement_v1",
+            "generation": "v3",
+            "lineage": "supplemental",
+            "observation_mode": "live",
+            "temporal_scope": "current",
+            "verification_status": "verified",
+            "execution_outcome": "accepted",
+            "action_id": "01" * 32,
+            "envelope_hash": "02" * 32,
+            "network": "casper:casper-test",
+            "package_hash": "03" * 32,
+            "contract_hash": "04" * 32,
+            "deployment_domain": "05" * 32,
+            "payment_requirements_hash": "06" * 32,
+            "signed_payment_payload_hash": "07" * 32,
+            "report_hash": "08" * 32,
+            "settlement_transaction": "09" * 32,
+            "deployment_commit": "2" * 40,
+            "checks": _checks("official_x402_settlement_v1"),
+        }
+    )
+    assert proof_item_is_green(item) is True
+
+    item[field] = None
     assert proof_item_is_green(item) is False
     assert normalize_proof_item(item)["verification_status"] == "invalid"
 

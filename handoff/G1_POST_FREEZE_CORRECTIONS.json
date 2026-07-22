@@ -75,6 +75,26 @@
         "WP8 card-chain exact hash and linkage tests",
         "WP8 forged chain_valid boolean guard"
       ]
+    },
+    {
+      "id": "G1-C11-proof-type-provenance-binding",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Each proof_type has a closed allowlist for generation, lineage, observation_mode, temporal_scope, and execution_outcome; valid enum values cannot be relabelled across proof semantics.",
+        "exact_envelope_v3 and native_treasury_execution_v1 are v3 supplemental current accepted proof observed live or by dated snapshot.",
+        "safepay_v2 is v2 supplemental current accepted proof observed live or by dated snapshot.",
+        "official_x402_settlement_v1 is v3 supplemental current accepted proof observed live or by dated snapshot and requires the full exact-v3 proposal, action, envelope, network, package, contract, and deployment-domain identity.",
+        "historical_odra_receipt_v2 is v1 or v2 historical accepted or expected-rejection proof and cannot imply current v3 enforcement.",
+        "snapshot is generation none, supplemental, snapshot-observed, not-applicable evidence only.",
+        "The official facilitator check name is normalized to facilitator_verify_returned_is_valid_true so it satisfies the frozen snake-case check-name grammar."
+      ],
+      "acceptance_tests": [
+        "test_reg_04d_current_v3_execution_provenance_cannot_be_relabelled",
+        "test_reg_04e_payment_proof_provenance_is_generation_bound",
+        "test_reg_04f_payment_proof_provenance_cannot_be_relabelled",
+        "test_reg_04g_official_x402_requires_exact_v3_execution_identity",
+        "WP8 proof-type provenance relabelling tests"
+      ]
     }
   ]
 }
