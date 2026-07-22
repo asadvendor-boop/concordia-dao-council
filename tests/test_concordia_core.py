@@ -17,7 +17,6 @@ from shared.casper_executor import (
     build_unsigned_governance_receipt_deploy,
     build_unsigned_odra_call_deploy,
     casper_execution_preflight,
-    submit_odra_call_deploy,
     submit_governance_receipt,
 )
 from shared.approval import (
@@ -443,7 +442,7 @@ def test_dao_mandate_uses_approval_expiry_not_now():
     assert mandate["expires_at"] == "2026-08-01T00:00:00+00:00"
 
 
-def test_invariant_runner_covers_required_no_fake_success_checks():
+def test_invariant_runner_covers_required_checks_without_trusting_caller_success():
     invariants = build_invariant_runner(
         _canonical_evidence_sample(),
         {
@@ -454,11 +453,11 @@ def test_invariant_runner_covers_required_no_fake_success_checks():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "passed"
+    assert invariants["status"] == "failed"
     assert checks["allocation_cap"]["passed"]
     assert checks["quorum_required"]["passed"]
     assert checks["tampered_envelope_rejected"]["passed"]
-    assert checks["duplicate_x402_proof_rejected"]["passed"]
+    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
     assert checks["old_nonce_rejected"]["passed"]
     assert checks["llm_numeric_mutation_ignored"]["passed"]
     assert checks["policy_hash_mismatch_rejected"]["passed"]
@@ -502,7 +501,7 @@ def test_invariant_runner_missing_policy_hash_is_incomplete_not_failed():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "incomplete"
+    assert invariants["status"] == "failed"
     assert checks["policy_hash_mismatch_rejected"]["passed"] is None
     assert checks["policy_hash_mismatch_rejected"]["status"] == "missing_evidence"
     assert "missing" in checks["policy_hash_mismatch_rejected"]["evidence"]
@@ -515,7 +514,7 @@ def test_invariant_runner_fails_when_policy_hash_missing():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "incomplete"
+    assert invariants["status"] == "failed"
     assert checks["policy_hash_mismatch_rejected"]["passed"] is None
     assert checks["policy_hash_mismatch_rejected"]["status"] == "missing_evidence"
 
@@ -570,7 +569,7 @@ def test_invariant_runner_rejects_llm_numeric_mutation():
     assert "caps 3000 bps to 800 bps" in checks["llm_numeric_mutation_ignored"]["evidence"]
 
 
-def test_invariant_runner_rejects_duplicate_x402_proof():
+def test_invariant_runner_rejects_caller_asserted_duplicate_x402_proof():
     invariants = build_invariant_runner(
         _canonical_evidence_sample(),
         {
@@ -581,7 +580,7 @@ def test_invariant_runner_rejects_duplicate_x402_proof():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is True
+    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
 
 
 def test_certificate_pdf_bytes_is_real_downloadable_pdf():
@@ -637,26 +636,26 @@ def test_public_llm_readiness_status_redacts_provider_details():
     assert public["model_roles"] == ["commander", "operator"]
 
 
-def test_safepay_lite_parses_current_x402_artifact():
+def test_safepay_lite_does_not_promote_historical_x402_artifact():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["status"] == "verified"
-    assert safepay["payment_verified"] is True
-    assert safepay["report_hash_verified"] is True
-    assert safepay["duplicate_proof_rejected"] is True
+    assert safepay["status"] == "unverified"
+    assert safepay["payment_verified"] is False
+    assert safepay["report_hash_verified"] is False
+    assert safepay["duplicate_proof_rejected"] is False
     assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
-    assert safepay["provider_reputation_delta"] == 1
-    assert safepay["included_in_governance_proof"] is True
+    assert safepay["provider_reputation_delta"] == 0
+    assert safepay["included_in_governance_proof"] is False
 
 
-def test_safepay_lite_is_verified_with_real_payment_artifact():
+def test_safepay_lite_real_historical_payment_is_not_replay_proof():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["status"] == "verified"
+    assert safepay["status"] == "unverified"
     assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
-    assert safepay["payment_verified"] is True
-    assert safepay["report_hash_verified"] is True
-    assert safepay["included_in_governance_proof"] is True
+    assert safepay["payment_verified"] is False
+    assert safepay["report_hash_verified"] is False
+    assert safepay["included_in_governance_proof"] is False
 
 
 def test_safepay_lite_is_unverified_without_payment_artifact(monkeypatch, tmp_path):
@@ -711,16 +710,16 @@ def test_safepay_lite_unverified_on_report_hash_mismatch(monkeypatch, tmp_path):
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
     assert safepay["status"] == "unverified"
-    assert safepay["payment_verified"] is True
+    assert safepay["payment_verified"] is False
     assert safepay["report_hash_verified"] is False
     assert safepay["included_in_governance_proof"] is False
 
 
-def test_safepay_lite_duplicate_proof_rejected():
+def test_safepay_lite_requires_current_registry_for_replay_rejection():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["duplicate_proof_rejected"] is True
-    assert safepay["duplicate_rejection_mode"] == "deterministic_replay_proof"
+    assert safepay["duplicate_proof_rejected"] is False
+    assert safepay["duplicate_rejection_mode"] == "unverified"
 
 
 def test_dynamic_preview_computes_hashes_from_payload():
