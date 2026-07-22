@@ -151,6 +151,58 @@ def test_card_chain_artifact_preserves_exact_stored_preimages_and_shape() -> Non
     assert db.total_changes == changes_before
 
 
+def test_card_chain_artifact_exports_the_historical_prefix_selected_by_receipt_root() -> None:
+    """Later immutable cards must not make an earlier receipt proof impossible.
+
+    The canonical reviewer proposal has twelve immutable rows today, while its
+    accepted v1 receipt signed the hash at sequence six.  The external receipt
+    root therefore selects the exact historical prefix; it never truncates or
+    rewrites the database itself.
+    """
+
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    third_json = _canonical_card(
+        3,
+        "GovernanceSummary",
+        expected[-1][1],
+        marker="later immutable evidence",
+    )
+    third_hash = hashlib.sha256(third_json.encode("utf-8")).hexdigest()
+    db.execute(
+        "INSERT INTO cards ("
+        "proposal_id, sequence_number, card_type, card_hash, card_json, created_at, published_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "DAO-PROP-CARDS",
+            3,
+            "GovernanceSummary",
+            third_hash,
+            third_json,
+            NOW,
+            NOW,
+        ),
+    )
+    changes_before = db.total_changes
+
+    artifact = module.build_card_chain_artifact(
+        db,
+        proposal_id="DAO-PROP-CARDS",
+        captured_at=NOW,
+        source_url=SOURCE_URL,
+        expected_final_card_hash=expected[-1][1],
+    )
+
+    assert [card["card_hash"] for card in artifact["cards"]] == [
+        expected[0][1],
+        expected[1][1],
+    ]
+    assert artifact["cards"][-1]["card_hash"] != third_hash
+    assert db.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 3
+    assert db.total_changes == changes_before
+
+
 def test_card_chain_artifact_rejects_a_known_proposal_with_no_cards() -> None:
     module = importlib.import_module("shared.card_chain_artifact")
     db = init_db(":memory:")
