@@ -1,0 +1,249 @@
+/**
+ * HTTP surface (§12): GET /health, GET /supported, GET /resource/:resourceId,
+ * POST /verify, POST /settle. Emits PAYMENT-REQUIRED on 402 and accepts
+ * PAYMENT-SIGNATURE; releases the protected report only from a finalized
+ * fulfillment.
+ *
+ * Logging is sanitized by construction: one structured line per request with
+ * method, route, status, and machine code only. No headers, bodies, tokens,
+ * exception messages, or stack traces are ever logged.
+ */
+
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+
+import { ServiceRefusal } from "./errors.js";
+import { validateVerifySettleRequest } from "./validation.js";
+import {
+  buildPaymentRequired,
+  buildPaymentRequirements,
+  reportReleasableRow,
+  runSettle,
+  runVerify,
+  type PipelineDeps,
+} from "./pipeline.js";
+
+const MAX_BODY_BYTES = 1_048_576;
+
+export const PAYMENT_HEADERS = {
+  required: "payment-required",
+  signature: "payment-signature",
+  response: "payment-response",
+} as const;
+
+function log(entry: Record<string, string | number>): void {
+  // Only stable machine fields. Never free-form text from any request/error.
+  console.log(JSON.stringify(entry));
+}
+
+function send(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  extraHeaders: Record<string, string> = {},
+  contentType = "application/json",
+): void {
+  const payload =
+    Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), "utf8");
+  res.writeHead(status, {
+    "content-type": contentType,
+    "content-length": String(payload.length),
+    "cache-control": "no-store",
+    ...extraHeaders,
+  });
+  res.end(payload);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      throw new ServiceRefusal(413, "request_too_large", "invalid_request");
+    }
+    chunks.push(buf);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new ServiceRefusal(400, "invalid_json", "invalid_request");
+  }
+}
+
+function refusalCode(error: unknown): { status: number; code: string } {
+  if (error instanceof ServiceRefusal) {
+    return { status: error.httpStatus, code: error.code };
+  }
+  return { status: 500, code: "internal_error" };
+}
+
+export function createService(deps: PipelineDeps): Server {
+  const { config } = deps;
+
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const method = req.method ?? "GET";
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const path = url.pathname;
+    let route = path;
+    let status = 404;
+    let code = "";
+    try {
+      if (method === "GET" && path === "/health") {
+        route = "/health";
+        // Minimal liveness + frozen fail-closed settlement state. No secrets.
+        status = 200;
+        send(res, 200, {
+          status: "ok",
+          settlement_state: deps.ledger.getSettlementState(),
+        });
+        return;
+      }
+      if (method === "GET" && path === "/supported") {
+        route = "/supported";
+        status = 200;
+        send(res, 200, {
+          kinds: [{ x402Version: 2, scheme: "exact", network: config.network }],
+          extensions: {},
+          signers: [],
+        });
+        return;
+      }
+      if (method === "GET" && path.startsWith("/resource/")) {
+        route = "/resource/:resourceId";
+        const resourceId = path.slice("/resource/".length);
+        const resource = config.resources.find((r) => r.id === resourceId);
+        if (resource === undefined) {
+          status = 404;
+          code = "unknown_resource";
+          send(res, 404, { error: "unknown_resource" });
+          return;
+        }
+        const signatureHeader = req.headers[PAYMENT_HEADERS.signature];
+        if (signatureHeader === undefined || Array.isArray(signatureHeader)) {
+          const paymentRequired = buildPaymentRequired(resource, config);
+          status = 402;
+          code = "payment_required";
+          send(res, 402, paymentRequired, {
+            [PAYMENT_HEADERS.required]: Buffer.from(
+              JSON.stringify(paymentRequired),
+              "utf8",
+            ).toString("base64"),
+          });
+          return;
+        }
+        let paymentPayload: unknown;
+        try {
+          paymentPayload = JSON.parse(
+            Buffer.from(signatureHeader, "base64").toString("utf8"),
+          );
+        } catch {
+          throw new ServiceRefusal(400, "invalid_payment_signature_header", "invalid_request");
+        }
+        const settleRequest = {
+          x402Version: 2,
+          paymentPayload,
+          paymentRequirements: buildPaymentRequirements(resource, config),
+        };
+        // Validate first so the payload provably binds to THIS resource.
+        const validated = validateVerifySettleRequest(settleRequest, config);
+        if (validated.resource.id !== resource.id) {
+          throw new ServiceRefusal(409, "cross_binding_rejected", "terminal_conflict");
+        }
+        const settleResponse = await runSettle(settleRequest, deps);
+        if (settleResponse.success !== true) {
+          status = 402;
+          code = settleResponse.errorReason ?? "settlement_failed";
+          send(res, 402, settleResponse);
+          return;
+        }
+        const row = reportReleasableRow(
+          deps,
+          resource,
+          validated.signedPaymentPayloadHashHex,
+        );
+        if (row === undefined) {
+          // success:true without a finalized row must never release bytes.
+          status = 500;
+          code = "report_not_releasable";
+          send(res, 500, { error: "report_not_releasable" });
+          return;
+        }
+        status = 200;
+        code = "report_released";
+        send(
+          res,
+          200,
+          resource.reportBytes,
+          {
+            [PAYMENT_HEADERS.response]: Buffer.from(
+              JSON.stringify(settleResponse),
+              "utf8",
+            ).toString("base64"),
+          },
+          resource.mimeType,
+        );
+        return;
+      }
+      if (method === "POST" && path === "/verify") {
+        route = "/verify";
+        try {
+          const body = await readJsonBody(req);
+          const verifyResponse = await runVerify(body, deps);
+          status = 200;
+          code = verifyResponse.isValid ? "is_valid" : verifyResponse.invalidReason ?? "invalid";
+          send(res, 200, verifyResponse);
+        } catch (error) {
+          const mapped = refusalCode(error);
+          status = mapped.status;
+          code = mapped.code;
+          if (mapped.status === 500) throw error;
+          send(res, mapped.status, { isValid: false, invalidReason: mapped.code });
+        }
+        return;
+      }
+      if (method === "POST" && path === "/settle") {
+        route = "/settle";
+        try {
+          const body = await readJsonBody(req);
+          const settleResponse = await runSettle(body, deps);
+          status = 200;
+          code = settleResponse.success
+            ? "settled"
+            : settleResponse.errorReason ?? "not_settled";
+          send(res, 200, settleResponse);
+        } catch (error) {
+          const mapped = refusalCode(error);
+          status = mapped.status;
+          code = mapped.code;
+          if (mapped.status === 500) throw error;
+          send(res, mapped.status, {
+            success: false,
+            errorReason: mapped.code,
+            transaction: "",
+            network: config.network,
+          });
+        }
+        return;
+      }
+      status = 404;
+      code = "not_found";
+      send(res, 404, { error: "not_found" });
+    } catch (error) {
+      const mapped = refusalCode(error);
+      status = mapped.status;
+      code = mapped.code;
+      if (!res.headersSent) {
+        send(res, mapped.status, { error: mapped.code });
+      } else {
+        res.destroy();
+      }
+    } finally {
+      log({ event: "request", method, route, status, code });
+    }
+  };
+
+  return createHttpServer((req, res) => {
+    void handler(req, res);
+  });
+}

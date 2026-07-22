@@ -1,0 +1,30 @@
+{
+  "name": "@concordia/x402-official",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Concordia official CSPR.cloud x402 settlement service (OfficialX402SettlementV1, fail-closed)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@casper-ecosystem/casper-eip-712": "1.2.1",
+    "@make-software/casper-x402": "1.0.0",
+    "@x402/core": "2.15.0",
+    "better-sqlite3": "12.4.1",
+    "blakejs": "1.2.1",
+    "casper-js-sdk": "5.0.12"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.20.1",
+    "typescript": "5.8.3",
+    "vitest": "3.2.7"
+  }
+}
