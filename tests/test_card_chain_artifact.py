@@ -4,6 +4,7 @@ import hashlib
 import importlib
 import json
 import re
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,6 +87,26 @@ def _insert_chain(db, proposal_id: str = "DAO-PROP-CARDS") -> list[tuple[str, st
     return [(first_json, first_hash), (second_json, second_hash)]
 
 
+def _write_roots(path, proposal_id: str, final_card_hash: str) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "concordia.card_chain_roots.v1",
+                "roots": {proposal_id: final_card_hash},
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+
+def _terminal_hash(db) -> str:
+    row = db.execute(
+        "SELECT card_hash FROM cards ORDER BY sequence_number DESC LIMIT 1"
+    ).fetchone()
+    return row["card_hash"] if row is not None else "0" * 64
+
+
 def test_card_chain_artifact_preserves_exact_stored_preimages_and_shape() -> None:
     module = importlib.import_module("shared.card_chain_artifact")
     db = init_db(":memory:")
@@ -97,6 +118,7 @@ def test_card_chain_artifact_preserves_exact_stored_preimages_and_shape() -> Non
         proposal_id="DAO-PROP-CARDS",
         captured_at=NOW,
         source_url=SOURCE_URL,
+        expected_final_card_hash=expected[-1][1],
     )
 
     assert set(artifact) == {
@@ -139,6 +161,7 @@ def test_card_chain_artifact_rejects_a_known_proposal_with_no_cards() -> None:
             proposal_id="DAO-PROP-EMPTY",
             captured_at=NOW,
             source_url="https://concordia.example/proof-artifacts/v1/DAO-PROP-EMPTY/card-chain",
+            expected_final_card_hash=_terminal_hash(db),
         )
 
 
@@ -218,6 +241,7 @@ def test_card_chain_artifact_rejects_malformed_or_unlinked_rows(
             proposal_id="DAO-PROP-CARDS",
             captured_at=NOW,
             source_url=SOURCE_URL,
+            expected_final_card_hash=_terminal_hash(db),
         )
 
 
@@ -227,6 +251,7 @@ def test_card_chain_artifact_uses_one_read_transaction_and_does_not_mutate() -> 
     _insert_chain(db)
     rows_before = list(db.iterdump())
     changes_before = db.total_changes
+    expected_final_card_hash = _terminal_hash(db)
     statements: list[str] = []
     db.set_trace_callback(statements.append)
 
@@ -235,6 +260,7 @@ def test_card_chain_artifact_uses_one_read_transaction_and_does_not_mutate() -> 
         proposal_id="DAO-PROP-CARDS",
         captured_at=NOW,
         source_url=SOURCE_URL,
+        expected_final_card_hash=expected_final_card_hash,
     )
     db.set_trace_callback(None)
 
@@ -283,6 +309,7 @@ def test_card_chain_artifact_rejects_secret_like_exact_preimage_without_rewritin
             proposal_id="DAO-PROP-CARDS",
             captured_at=NOW,
             source_url=SOURCE_URL,
+            expected_final_card_hash=original_hash,
         )
 
     stored = db.execute("SELECT card_json FROM cards WHERE sequence_number=1").fetchone()[0]
@@ -315,6 +342,7 @@ def test_card_chain_artifact_allows_public_authorization_ids_and_token_usage_cou
         proposal_id="DAO-PROP-CARDS",
         captured_at=NOW,
         source_url=SOURCE_URL,
+        expected_final_card_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
     )
 
     assert artifact["cards"][0]["canonical_card_json"] == raw
@@ -332,6 +360,7 @@ def test_card_chain_artifact_enforces_card_count_and_byte_bounds(monkeypatch) ->
             proposal_id="DAO-PROP-CARDS",
             captured_at=NOW,
             source_url=SOURCE_URL,
+            expected_final_card_hash=_terminal_hash(db),
         )
 
     monkeypatch.setattr(module, "MAX_CARD_COUNT", 256)
@@ -342,6 +371,7 @@ def test_card_chain_artifact_enforces_card_count_and_byte_bounds(monkeypatch) ->
             proposal_id="DAO-PROP-CARDS",
             captured_at=NOW,
             source_url=SOURCE_URL,
+            expected_final_card_hash=_terminal_hash(db),
         )
 
 
@@ -365,6 +395,7 @@ def test_card_chain_artifact_rejects_invalid_public_metadata(
         "proposal_id": "DAO-PROP-CARDS",
         "captured_at": NOW,
         "source_url": SOURCE_URL,
+        "expected_final_card_hash": _terminal_hash(db),
     }
     kwargs[field] = value
 
@@ -379,7 +410,10 @@ def test_public_card_chain_route_is_exact_read_only_and_never_cached(tmp_path, m
     db = init_db(db_path)
     expected = _insert_chain(db)
     db.close()
+    roots_path = tmp_path / "roots.json"
+    _write_roots(roots_path, "DAO-PROP-CARDS", expected[-1][1])
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://proofs.concordia.example")
+    monkeypatch.setenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE", str(roots_path))
 
     with TestClient(create_app(db_path=str(db_path))) as client:
         response = client.get("/proof-artifacts/v1/DAO-PROP-CARDS/card-chain")
@@ -428,7 +462,14 @@ def test_public_card_chain_route_404s_unknown_and_fails_closed_on_unsafe_rows(
         (unsafe, hashlib.sha256(unsafe.encode("utf-8")).hexdigest()),
     )
     db.close()
+    roots_path = tmp_path / "roots.json"
+    _write_roots(
+        roots_path,
+        "DAO-PROP-CARDS",
+        hashlib.sha256(unsafe.encode("utf-8")).hexdigest(),
+    )
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://proofs.concordia.example")
+    monkeypatch.setenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE", str(roots_path))
 
     with TestClient(create_app(db_path=str(db_path))) as client:
         unknown = client.get("/proof-artifacts/v1/DAO-PROP-UNKNOWN/card-chain")
@@ -498,4 +539,230 @@ def test_card_chain_artifact_rejects_cross_proposal_transplant_and_relabeling() 
                 "https://concordia.example/proof-artifacts/v1/"
                 f"{relabeled_proposal_id}/card-chain"
             ),
+            expected_final_card_hash=second_hash,
         )
+
+
+def test_card_chain_artifact_rejects_proposal_card_after_sequence_one() -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+    second_json = _canonical_card(
+        2,
+        "ProposalCard",
+        expected[0][1],
+        marker="transplanted-root",
+    )
+    second_hash = hashlib.sha256(second_json.encode("utf-8")).hexdigest()
+    db.execute(
+        "UPDATE cards SET card_type='ProposalCard', card_json=?, card_hash=? "
+        "WHERE sequence_number=2",
+        (second_json, second_hash),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="only card 1"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=second_hash,
+        )
+
+
+@pytest.mark.parametrize(
+    ("secret_key", "secret_value"),
+    [
+        ("password", "correct horse battery staple"),
+        ("token", "ordinary-unprefixed-secret-value"),
+    ],
+)
+def test_card_chain_artifact_blocks_password_and_generic_token_fields(
+    secret_key: str,
+    secret_value: str,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 1,
+            "card_type": "ProposalCard",
+            "previous_card_hash": None,
+            "signal_id": "DAO-PROP-CARDS",
+            secret_key: secret_value,
+        },
+        separators=(",", ":"),
+    )
+    db.execute("DELETE FROM cards WHERE sequence_number=2")
+    db.execute(
+        "UPDATE cards SET card_json=?, card_hash=? WHERE sequence_number=1",
+        (raw, hashlib.sha256(raw.encode("utf-8")).hexdigest()),
+    )
+
+    with pytest.raises(module.CardChainArtifactError, match="secret-like"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
+
+
+def test_card_chain_artifact_bounds_card_json_inside_the_select() -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    _insert_chain(db)
+    raw = json.dumps(
+        {
+            "sequence_number": 1,
+            "card_type": "ProposalCard",
+            "previous_card_hash": None,
+            "signal_id": "DAO-PROP-CARDS",
+            "marker": "x" * (3 * 1024 * 1024),
+        },
+        separators=(",", ":"),
+    )
+    db.execute("DELETE FROM cards WHERE sequence_number=2")
+    db.execute(
+        "UPDATE cards SET card_json=?, card_hash=? WHERE sequence_number=1",
+        (raw, hashlib.sha256(raw.encode("utf-8")).hexdigest()),
+    )
+    observed_card_json: list[object] = []
+
+    def tracking_row_factory(cursor, values):
+        row = sqlite3.Row(cursor, values)
+        if "card_json" in row.keys():
+            observed_card_json.append(row["card_json"])
+        return row
+
+    db.row_factory = tracking_row_factory
+    statements: list[str] = []
+    db.set_trace_callback(statements.append)
+
+    with pytest.raises(module.CardChainArtifactError, match="card_json size"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
+    db.set_trace_callback(None)
+
+    select = next(
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    )
+    assert "CASE" in select.upper()
+    assert "LENGTH(CAST" in select.upper()
+    assert observed_card_json == [None]
+
+
+def test_card_chain_artifact_requires_external_terminal_root_binding() -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    db = init_db(":memory:")
+    expected = _insert_chain(db)
+
+    with pytest.raises(module.CardChainArtifactError, match="expected_final_card_hash"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash="A" * 64,
+        )
+    with pytest.raises(module.CardChainArtifactError, match="expected_final_card_hash"):
+        module.build_card_chain_artifact(
+            db,
+            proposal_id="DAO-PROP-CARDS",
+            captured_at=NOW,
+            source_url=SOURCE_URL,
+            expected_final_card_hash="0" * 64,
+        )
+
+    artifact = module.build_card_chain_artifact(
+        db,
+        proposal_id="DAO-PROP-CARDS",
+        captured_at=NOW,
+        source_url=SOURCE_URL,
+        expected_final_card_hash=expected[-1][1],
+    )
+    assert artifact["cards"][-1]["card_hash"] == expected[-1][1]
+
+
+def test_public_card_chain_route_never_uses_host_as_canonical_source(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from gateway.app import create_app
+
+    db_path = tmp_path / "gateway.db"
+    db = init_db(db_path)
+    expected = _insert_chain(db)
+    db.close()
+    roots_path = tmp_path / "roots.json"
+    _write_roots(roots_path, "DAO-PROP-CARDS", expected[-1][1])
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE", str(roots_path))
+
+    with TestClient(
+        create_app(db_path=str(db_path)),
+        base_url="https://evil-host.example",
+    ) as client:
+        response = client.get("/proof-artifacts/v1/DAO-PROP-CARDS/card-chain")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "card_chain_artifact_unavailable"}
+    assert response.headers["cache-control"] == "no-store"
+    assert "evil-host.example" not in response.text
+
+
+@pytest.mark.parametrize("root_mode", ["missing", "wrong"])
+def test_public_card_chain_route_fails_closed_without_the_trusted_terminal_root(
+    root_mode: str,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from gateway.app import create_app
+
+    db_path = tmp_path / "gateway.db"
+    db = init_db(db_path)
+    _insert_chain(db)
+    db.close()
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://proofs.concordia.example")
+    if root_mode == "missing":
+        monkeypatch.delenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE", raising=False)
+    else:
+        roots_path = tmp_path / "roots.json"
+        _write_roots(roots_path, "DAO-PROP-CARDS", "0" * 64)
+        monkeypatch.setenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE", str(roots_path))
+
+    with TestClient(create_app(db_path=str(db_path))) as client:
+        response = client.get("/proof-artifacts/v1/DAO-PROP-CARDS/card-chain")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "card_chain_artifact_unavailable"}
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_release_root_file_is_strict_duplicate_safe_and_loaded_read_only(
+    tmp_path,
+) -> None:
+    module = importlib.import_module("shared.card_chain_artifact")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(
+        '{"schema_version":"concordia.card_chain_roots.v1","roots":{'
+        '"DAO-PROP-CARDS":"' + "1" * 64 + '",'
+        '"DAO-PROP-CARDS":"' + "2" * 64 + '"}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(module.CardChainRootsError, match="invalid JSON"):
+        module.load_card_chain_release_roots(str(duplicate))
+
+    valid = tmp_path / "valid.json"
+    _write_roots(valid, "DAO-PROP-CARDS", "3" * 64)
+    roots = module.load_card_chain_release_roots(str(valid))
+    assert roots == {"DAO-PROP-CARDS": "3" * 64}
+    with pytest.raises(TypeError):
+        roots["DAO-PROP-CARDS"] = "4" * 64
