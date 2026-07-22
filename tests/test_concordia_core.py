@@ -896,6 +896,7 @@ def test_council_reputation_counts_evidence_cards():
                 "data": {
                     "card_type": "CasperExecutionReceipt",
                     "actions_taken": [{"status": "success", "deploy_hash": "e" * 64}],
+                    "governance_archive": {"archive_hash": "sha256:" + "a" * 64},
                 },
             },
             {
@@ -913,6 +914,7 @@ def test_council_reputation_counts_evidence_cards():
     assert by_metric["Rogue executions blocked"] == 1
     assert by_metric["Live Casper reads"] == 1
     assert by_metric["Archives sealed"] == 1
+    assert by_metric["Optional summaries"] == 1
 
 
 def test_rate_limiter_does_not_starve_dashboard_or_agent_control_plane():

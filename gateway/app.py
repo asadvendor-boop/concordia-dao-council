@@ -426,7 +426,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         title="Concordia DAO Council Gateway",
         description=(
             "Multi-agent DAO governance gateway. "
-            "Coordinates a six-agent core through Gateway-owned Council Chambers."
+            "Coordinates four deliberative agents, authorization-bound Locke, "
+            "deterministic Concordia Core, and presentation-only Wells through "
+            "Gateway-owned Council Chambers."
         ),
         version="0.1.0",
         lifespan=lifespan,
@@ -961,7 +963,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "GovernanceSummary": {
                 "key": "wells",
                 "name": "Wells",
-                "role": "Governance Archivist",
+                "role": "Non-reasoning Archive Presentation Persona",
             },
         }
 
@@ -2210,9 +2212,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     from .routes.rooms import router as rooms_router
     new_app.include_router(rooms_router, prefix="/api")
 
-    # Wells, the Governance Archivist, produces the public GovernanceSummary and
-    # audit archive for the canonical reviewer proof. Any legacy /scribe route
-    # remains an internal compatibility hook, not a missing final archive path.
+    # Concordia Core builds the deterministic archive and Locke seals it in the
+    # receipt. Wells is presentation-only. Any legacy /scribe label remains a
+    # compatibility/presentation hook, never an authority or archive boundary.
 
     # -----------------------------------------------------------------------
     # Council Chamber Messages (for dashboard viewer)

@@ -1,9 +1,9 @@
-"""Wells, Governance Archivist.
+"""Wells, Governance Archive Persona.
 
-Locke creates the deterministic Governance Archive inside the sealed
-CasperExecutionReceipt after Casper execution succeeds. This service keeps the
-Wells persona online for the Council Chamber roster and follow-on narrative
-enrichment without owning the authority boundary.
+Concordia Core builds the deterministic Governance Archive and Locke seals it
+inside the CasperExecutionReceipt after Casper execution succeeds. This
+heartbeat keeps Wells visible only as a non-reasoning presentation persona; it
+does not poll rooms, deliberate, generate cards, authorize, or execute.
 """
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ async def _heartbeat_loop() -> None:
     payload = {
         "role": "scribe",
         "agent_id": agent_id,
-        "framework": "Council Runtime + deterministic archive",
-        "model": os.getenv("LLM_SCRIBE_MODEL", "configured-live-model"),
+        "framework": "Council roster heartbeat",
+        "model": "none",
         "display_name": "Wells",
-        "persona_title": "Governance Archivist",
+        "persona_title": "Governance Archive Persona",
         "persona_temperament": "methodical, audit-minded, and precise about final evidence packets",
     }
 
@@ -47,7 +47,7 @@ async def _heartbeat_loop() -> None:
 
 async def main() -> None:
     logger.info(
-        "[scribe] Wells online. Deterministic governance archives are sealed by Locke "
-        "after Casper execution succeeds."
+        "[scribe] Wells presentation heartbeat online. Concordia Core builds "
+        "deterministic archives and Locke seals them after Casper execution succeeds."
     )
     await _heartbeat_loop()

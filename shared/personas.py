@@ -56,7 +56,7 @@ PERSONAS: dict[str, AgentPersona] = {
     "scribe": AgentPersona(
         role="scribe",
         display_name="Wells",
-        title="Governance Archivist",
+        title="Governance Archive Persona",
         temperament="clear, concise, and focused on post-decision accountability",
     ),
 }
