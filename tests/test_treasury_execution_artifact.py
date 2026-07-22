@@ -242,6 +242,20 @@ def test_native_treasury_artifact_rejects_invalid_release_metadata(
         build_native_treasury_execution_artifact(entry, **kwargs)
 
 
+def test_native_treasury_artifact_rejects_capture_before_journal_update(
+    tmp_path: Path,
+) -> None:
+    entry = _proven(tmp_path)
+
+    with pytest.raises(TreasuryExecutionArtifactError, match="capture timestamp"):
+        build_native_treasury_execution_artifact(
+            entry,
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+            captured_at="2000-01-01T00:00:00Z",
+        )
+
+
 def test_native_treasury_artifact_rejects_caller_constructed_lookalike() -> None:
     with pytest.raises(TreasuryExecutionArtifactError, match="journal entry"):
         build_native_treasury_execution_artifact(
