@@ -155,6 +155,7 @@ _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _PROPOSAL_RE = re.compile(r"^[A-Z0-9-]{1,64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_CHECK_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 
 PUBLIC_ITEM_REQUIRED_FIELDS = (
     "proof_id",
@@ -266,7 +267,7 @@ def _check_errors(checks: Any, required_names: tuple[str, ...]) -> list[str]:
         if set(check) - (required_fields | {"detail_code"}):
             errors.append("check_unknown_fields")
         name = check.get("name")
-        if not isinstance(name, str) or _IDENTIFIER_RE.fullmatch(name) is None:
+        if not isinstance(name, str) or _CHECK_NAME_RE.fullmatch(name) is None:
             errors.append("check_name_invalid")
             continue
         names.append(name)
