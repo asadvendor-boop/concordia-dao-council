@@ -39,6 +39,11 @@ from shared.casper_executor import (
     typed_runtime_args_preview,
 )
 from shared.casper_mcp import cspr_trade_status, get_cspr_trade_quote
+from shared.card_chain_artifact import (
+    CardChainArtifactError,
+    CardChainNotFound,
+    build_card_chain_artifact,
+)
 from shared.config import MODELS, get_llm_api_key, get_llm_base_url, llm_readiness_status, public_llm_readiness_status
 from shared.cspr_cloud import cspr_cloud_status
 from shared.ipfs_client import fetch_ipfs_cid, ipfs_status, upload_json_to_ipfs
@@ -483,6 +488,51 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError:
             logger.exception("proof_registry_public_load_failed", extra={"proposal_id": proposal_id})
             return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    @new_app.get("/proof-artifacts/v1/{proposal_id}/card-chain")
+    async def public_card_chain_artifact(proposal_id: str, request: Request):
+        """Publish exact stored card-hash preimages without mutating the chain."""
+
+        no_store = {"Cache-Control": "no-store"}
+        base_url = public_base_url or f"{request.url.scheme}://{request.url.netloc}"
+        source_url = f"{base_url}/proof-artifacts/v1/{proposal_id}/card-chain"
+        captured_at = datetime.now(UTC).isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        )
+        try:
+            artifact = build_card_chain_artifact(
+                new_app.state.db,
+                proposal_id=proposal_id,
+                captured_at=captured_at,
+                source_url=source_url,
+            )
+        except CardChainNotFound:
+            return JSONResponse(
+                {"error": "proposal_not_found"},
+                status_code=404,
+                headers=no_store,
+            )
+        except CardChainArtifactError:
+            logger.warning(
+                "card_chain_artifact_publication_blocked",
+                extra={"proposal_id": proposal_id},
+            )
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        except Exception:
+            logger.exception(
+                "card_chain_artifact_publication_failed",
+                extra={"proposal_id": proposal_id},
+            )
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        return JSONResponse(artifact, headers=no_store)
 
     def _proof_registry_service_authorized(request: Request) -> bool:
         expected = read_secret("X402_GATEWAY_TOKEN")
