@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from scripts.verify_v3_proof import ProofVerificationError, verify_v3_proof_document
+from scripts.generate_card_chain_release_roots import (
+    ReleaseRootsError,
+    derive_card_chain_release_roots,
+    verify_existing_release_roots,
+)
 from shared.historical_odra_artifact import (
     HistoricalOdraArtifactError,
     HistoricalOdraArtifactUnavailable,
@@ -49,6 +54,15 @@ _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT40_RE = re.compile(r"^[0-9a-f]{40}$")
 _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
 _BUILT_VERIFIER_OUTPUTS: dict[str, str] = {}
+_EXACT_CHECK_STEP = {
+    "pre_quorum_finalize_reverted_with_code_8": "finalize_pre_quorum",
+    "post_quorum_mutated_envelope_reverted_with_code_10": (
+        "finalize_mutated_3000_bps"
+    ),
+    "exact_envelope_finalization_accepted": "finalize_exact",
+    "repeat_finalization_reverted_with_code_12": "finalize_again",
+    "finalization_deploy_processed_without_execution_error": "finalize_exact",
+}
 
 
 class AssemblyError(ValueError):
@@ -422,7 +436,63 @@ def _exact_finality_timing(
     return finalized_at, observed_at
 
 
-def _exact_item(artifact: _Artifact) -> tuple[dict[str, Any], dict[str, Any]]:
+def _exact_check_timing(
+    facts: Mapping[str, Any], *, verification_observed_at: str
+) -> tuple[list[dict[str, Any]], str]:
+    verification_time = _parse_timestamp(
+        verification_observed_at, "v3 verification observed_at"
+    )
+    outcomes = _mapping(
+        facts.get("contract_step_outcomes"), "v3 contract step outcomes"
+    )
+    required_steps = {
+        "propose_exact",
+        "finalize_pre_quorum",
+        "approve_a",
+        "approve_b",
+        "finalize_mutated_3000_bps",
+        "finalize_exact",
+        "finalize_again",
+    }
+    if set(outcomes) != required_steps:
+        raise AssemblyError("v3 contract step timing set is incomplete")
+    observed_by_step: dict[str, str] = {}
+    for name in sorted(required_steps):
+        outcome = _mapping(outcomes[name], f"v3 {name} outcome")
+        observed_at = _text(outcome.get("observed_at"), f"v3 {name} observed_at")
+        if _parse_timestamp(observed_at, f"v3 {name} observed_at") > verification_time:
+            raise AssemblyError(
+                f"v3 {name} observation is later than registry verification"
+            )
+        observed_by_step[name] = observed_at
+    checks: list[dict[str, Any]] = []
+    check_times: list[tuple[datetime, str]] = []
+    for check_name in REQUIRED_CHECKS_BY_PROOF_TYPE["exact_envelope_v3"]:
+        step_name = _EXACT_CHECK_STEP.get(check_name)
+        observed_at = (
+            observed_by_step[step_name]
+            if step_name is not None
+            else verification_observed_at
+        )
+        check_times.append(
+            (_parse_timestamp(observed_at, f"v3 {check_name} observed_at"), observed_at)
+        )
+        checks.append(
+            {
+                "name": check_name,
+                "required": True,
+                "passed": True,
+                "source": "exact-v3-derived",
+                "observed_at": observed_at,
+            }
+        )
+    captured_at = max(check_times, key=lambda item: item[0])[1]
+    return checks, captured_at
+
+
+def _exact_item(
+    artifact: _Artifact, *, verification_observed_at: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         facts = verify_v3_proof_document(artifact.document)
     except (ProofVerificationError, ValueError, KeyError, TypeError) as exc:
@@ -433,7 +503,10 @@ def _exact_item(artifact: _Artifact) -> tuple[dict[str, Any], dict[str, Any]]:
         "v3 typed header",
     )
     domain = _hash32(header.get("deployment_domain"), "v3 deployment domain")
-    _, observed_at = _exact_finality_timing(artifact.document)
+    _exact_finality_timing(artifact.document)
+    checks, captured_at = _exact_check_timing(
+        facts, verification_observed_at=verification_observed_at
+    )
     item = _base_item(
         proof_id="exact_envelope_v3",
         proof_type="exact_envelope_v3",
@@ -461,8 +534,11 @@ def _exact_item(artifact: _Artifact) -> tuple[dict[str, Any], dict[str, Any]]:
         contract_hash=_hash32(facts.get("contract_hash"), "v3 contract hash"),
         deployment_domain=domain,
         schema_version="concordia.v3-proof.v1",
-        captured_at=observed_at,
+        captured_at=captured_at,
     )
+    item["checks"] = [
+        {**check, "source": artifact.relative_path} for check in checks
+    ]
     return item, facts
 
 
@@ -917,6 +993,7 @@ def assemble_proof_registry(
     exact_v3_path: str | Path,
     native_treasury_path: str | Path,
     historical_v1_path: str | Path | None = None,
+    card_chain_roots_path: str | Path | None = None,
     generated_at: str | None = None,
     release: bool = False,
 ) -> dict[str, Any]:
@@ -961,6 +1038,10 @@ def assemble_proof_registry(
         if historical_v1_path is not None
         else None
     )
+    if release and card_chain_roots_path is None:
+        raise AssemblyError(
+            "release requires verifier-derived card-chain roots"
+        )
     artifacts = [artifact for artifact in (historical, exact, treasury) if artifact]
     if len({artifact.path for artifact in artifacts}) != len(artifacts):
         raise AssemblyError("producer inputs must use distinct artifact paths")
@@ -969,13 +1050,25 @@ def assemble_proof_registry(
             "producer inputs must have distinct artifact SHA-256 values"
         )
 
-    exact_item, exact_facts = _exact_item(exact)
+    exact_item, exact_facts = _exact_item(
+        exact, verification_observed_at=generated_at
+    )
     treasury_item, treasury_facts = _treasury_item(treasury)
     _same_binding(exact_item, treasury_item, exact.document, treasury_facts)
     public_items: list[dict[str, Any]] = []
     historical_facts: dict[str, object] | None = None
     if historical is not None:
         historical_item, historical_facts = _historical_item(historical)
+        try:
+            expected_roots = derive_card_chain_release_roots(historical.raw)
+            if card_chain_roots_path is not None:
+                verify_existing_release_roots(
+                    Path(card_chain_roots_path), expected_roots
+                )
+        except ReleaseRootsError as exc:
+            raise AssemblyError(
+                "card-chain roots are not derived from the verified historical receipt"
+            ) from exc
         if historical_item["proposal_id"] != exact_item["proposal_id"]:
             raise AssemblyError("historical and v3 proposal bindings differ")
         install_height = _mapping(
@@ -1066,6 +1159,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository-root", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--historical-v1", type=Path)
+    parser.add_argument("--card-chain-roots", type=Path)
     parser.add_argument("--exact-v3", type=Path, required=True)
     parser.add_argument("--native-treasury", type=Path, required=True)
     parser.add_argument("--generated-at")
@@ -1086,6 +1180,7 @@ def main() -> int:
             repository_root=repository_root,
             output_path=output,
             historical_v1_path=args.historical_v1,
+            card_chain_roots_path=args.card_chain_roots,
             exact_v3_path=args.exact_v3,
             native_treasury_path=args.native_treasury,
             generated_at=args.generated_at,

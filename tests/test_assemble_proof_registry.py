@@ -377,12 +377,45 @@ def test_assembler_emits_only_independently_verified_available_proofs(
     exact_item = next(
         item for item in public_items if item["proof_type"] == "exact_envelope_v3"
     )
-    assert exact_item["captured_at"] == finality["observed_at"]
-    assert {check["observed_at"] for check in exact_item["checks"]} == {
-        finality["observed_at"]
+    assert exact_item["captured_at"] == matched_bundle["generated_at"]
+    observed_by_name = {
+        check["name"]: check["observed_at"] for check in exact_item["checks"]
     }
+    assert observed_by_name["pre_quorum_finalize_reverted_with_code_8"] == next(
+        step["finality_block_evidence"]["observed_at"]
+        for step in matched_bundle["exact"]["run"]["steps"]
+        if step["name"] == "finalize_pre_quorum"
+    )
+    assert observed_by_name["exact_envelope_finalization_accepted"] == finality[
+        "observed_at"
+    ]
+    assert observed_by_name["source_tree_sha256_matches_release_manifest"] == (
+        matched_bundle["generated_at"]
+    )
     assert internal["finalized_at"] == finality["finalized_at"]
     assert internal["observed_at"] == finality["observed_at"]
+
+
+def test_assembler_rejects_any_step_observed_after_registry_generation(
+    matched_bundle: dict[str, object],
+) -> None:
+    root = matched_bundle["root"]
+    assert isinstance(root, Path)
+    exact = copy.deepcopy(matched_bundle["exact"])
+    exact["run"]["steps"][-1]["finality_block_evidence"]["observed_at"] = (
+        "2099-01-01T00:00:00Z"
+    )
+    path = root / "artifacts/future-step-observation.json"
+    path.write_bytes(_canonical_bytes(exact))
+
+    with pytest.raises(AssemblyError, match="later than registry verification"):
+        assemble_proof_registry(
+            repository_root=ROOT,
+            output_path=root / "registry.json",
+            exact_v3_path=path,
+            native_treasury_path=matched_bundle["treasury_path"],
+            generated_at=matched_bundle["generated_at"],
+        )
 
 
 def test_assembled_public_document_passes_packaged_verifier(

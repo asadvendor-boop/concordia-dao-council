@@ -75,7 +75,7 @@ asserted boolean and derive all results:
 
 The producer never accepts the terminal hash from the request, Host header,
 card chain, or legacy receipt summary. At process startup it reads the
-operator-selected `CONCORDIA_CARD_CHAIN_ROOTS_FILE` exactly once with no symlink
+verifier-derived `CONCORDIA_CARD_CHAIN_ROOTS_FILE` exactly once with no symlink
 following, duplicate keys, unknown fields, or unbounded input. The file is
 generated only after the combined raw-RPC historical receipt verifier passes:
 
@@ -88,7 +88,10 @@ generated only after the combined raw-RPC historical receipt verifier passes:
 }
 ```
 
-The release path is `artifacts/live/card-chain-roots-v1.json`. No placeholder
+The release path is `artifacts/live/card-chain-roots-v1.json`. It is generated
+only by `scripts/generate_card_chain_release_roots.py` after the complete
+historical v1 receipt artifact passes strict verification, and release assembly
+requires byte equality with that derived output. No placeholder
 or self-asserted root is committed before live capture. If `PUBLIC_BASE_URL`,
 the root file, or the requested proposal root is absent or invalid, the public
 route returns a no-store 503.
