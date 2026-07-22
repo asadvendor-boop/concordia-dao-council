@@ -85,6 +85,25 @@ def test_invalid_header_vectors_fail_closed(vector_name: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [("action_kind", 0), ("action_kind", 3), ("action_version", 2)],
+)
+def test_unsupported_action_selector_uses_frozen_action_error_precedence(
+    field: str,
+    value: int,
+) -> None:
+    vector = _load("header/GV-HDR-01.json")
+    header = _values(vector["typed_input"]["fields"])
+    header[field] = value
+
+    with pytest.raises(EnvelopeEncodingError) as exc_info:
+        encode_header(header)
+
+    assert exc_info.value.error_name == "InvalidActionField"
+    assert exc_info.value.field_name == field
+
+
+@pytest.mark.parametrize(
     "vector_name",
     ["GV-NT-01", "GV-NT-02", "GV-NT-03", "GV-NT-04", "GV-NT-05"],
 )

@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -109,8 +110,25 @@ def _native_document() -> dict[str, object]:
     }
 
 
-def test_clv_08_prepared_finalize_args_match_generated_odra_schema_exactly() -> None:
-    prepared = prepare_v3_envelope(_native_document())
+def _x402_document() -> dict[str, object]:
+    vector = json.loads((VECTORS / "x402_settlement/GV-X4-01.json").read_text())
+    return {
+        "schema_id": "concordia.exact-envelope-v3.input.v1",
+        "action": "OfficialX402SettlementV1",
+        "header": _fields(vector["typed_input"]["header"]),
+        "body": _fields(vector["typed_input"]["body"]),
+    }
+
+
+@pytest.mark.parametrize(
+    "document_factory",
+    [_native_document, _x402_document],
+    ids=["native-transfer", "official-x402-settlement"],
+)
+def test_clv_08_prepared_finalize_args_match_generated_odra_schema_exactly(
+    document_factory: Callable[[], dict[str, object]],
+) -> None:
+    prepared = prepare_v3_envelope(document_factory())
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
 
     assert diff_entry_point_args_against_schema(

@@ -239,9 +239,9 @@ def _validate_header(values: Mapping[str, Any]) -> None:
         if _uint(values[field], 32, field) > 10_000:
             raise EnvelopeEncodingError("InvalidEnvelopeField", field, "basis points exceed 10000")
     if _uint(values["action_kind"], 8, "action_kind") not in (1, 2):
-        raise EnvelopeEncodingError("InvalidEnvelopeField", "action_kind", "unsupported action")
+        raise EnvelopeEncodingError("InvalidActionField", "action_kind", "unsupported action")
     if _uint(values["action_version"], 32, "action_version") != 1:
-        raise EnvelopeEncodingError("InvalidEnvelopeField", "action_version", "must equal 1")
+        raise EnvelopeEncodingError("InvalidActionField", "action_version", "must equal 1")
     for name, type_name in HEADER_SCHEMA:
         canonical_value(type_name, values[name], name)
 
