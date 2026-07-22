@@ -1,0 +1,98 @@
+{
+  "canonical_hex": null,
+  "canonical_length": null,
+  "description": "Reordered WCSPR arguments are rejected even when names and values are otherwise valid.",
+  "expected_error": {
+    "code": null,
+    "name": "ExecutionArgumentOrderMismatch"
+  },
+  "expected_order": [
+    "from",
+    "to",
+    "value",
+    "valid_after",
+    "valid_before",
+    "nonce",
+    "public_key",
+    "signature"
+  ],
+  "hashes": {},
+  "kind": "execution_argument_manifest_v1",
+  "supplied_order": [
+    "to",
+    "from",
+    "value",
+    "valid_after",
+    "valid_before",
+    "nonce",
+    "public_key",
+    "signature"
+  ],
+  "typed_input": {
+    "args_in_abi_order": [
+      {
+        "name": "to",
+        "type": "Key",
+        "value": {
+          "value": "5252525252525252525252525252525252525252525252525252525252525252",
+          "variant": "Account"
+        }
+      },
+      {
+        "name": "from",
+        "type": "Key",
+        "value": {
+          "value": "5151515151515151515151515151515151515151515151515151515151515151",
+          "variant": "Account"
+        }
+      },
+      {
+        "name": "value",
+        "type": "U256",
+        "value": "25000000000"
+      },
+      {
+        "name": "valid_after",
+        "type": "u64",
+        "value": "1784750400"
+      },
+      {
+        "name": "valid_before",
+        "type": "u64",
+        "value": "1784754000"
+      },
+      {
+        "name": "nonce",
+        "type": "Bytes",
+        "value": "5656565656565656565656565656565656565656565656565656565656565656"
+      },
+      {
+        "name": "public_key",
+        "type": "PublicKey",
+        "value": {
+          "algorithm": "Ed25519",
+          "value": "5151515151515151515151515151515151515151515151515151515151515151"
+        }
+      },
+      {
+        "name": "signature",
+        "type": "Bytes",
+        "value": "01abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+      }
+    ],
+    "entry_point": {
+      "type": "String",
+      "value": "transfer_with_authorization"
+    },
+    "target": {
+      "type": "String",
+      "value": "contract-032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+    },
+    "version": {
+      "type": "u32",
+      "value": "1"
+    }
+  },
+  "valid": false,
+  "vector_id": "GV-EA-03"
+}

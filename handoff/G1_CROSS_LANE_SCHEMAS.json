@@ -1,0 +1,1741 @@
+{
+  "schema_id": "concordia-g1-cross-lane-schemas-v1",
+  "status": "ready",
+  "normative": true,
+  "claim_state": "interface_definition_only",
+  "live_success_claimed": false,
+  "safepay_v2": {
+    "schema_version": "safepay-v2",
+    "canonical_network": "casper:casper-test",
+    "provider_is_only_consumption_authority": true,
+    "gateway_consumption_ledger_forbidden": true,
+    "wire_contract": {
+      "media_type": "application/json",
+      "unknown_request_fields": "reject",
+      "quote_issue": {
+        "method": "POST",
+        "path": "/x402/v2/quotes",
+        "request_required_fields_in_order": [
+          "schema_version",
+          "proposal_id",
+          "resource_id"
+        ],
+        "request_field_types": {
+          "schema_version": "literal:safepay-quote-request-v2",
+          "proposal_id": "ascii_pattern:^[A-Z0-9-]{1,64}$",
+          "resource_id": "ascii_1_to_200_bytes"
+        },
+        "success_http_status": 402,
+        "response_required_fields_in_order": [
+          "schema_version",
+          "error",
+          "quote",
+          "payment_requirements"
+        ],
+        "response_literals": {
+          "schema_version": "safepay-v2"
+        },
+        "error_object": {"code": "payment_required", "retryable": false},
+        "payment_requirements_required_fields_in_order": [
+          "network",
+          "payee_account_hash",
+          "amount_motes",
+          "correlation_id",
+          "expires_at"
+        ],
+        "payment_requirements_rule": "every_value_must_equal_the_corresponding_immutable_quote_value",
+        "required_response_headers": {
+          "Cache-Control": "no-store",
+          "X-Concordia-SafePay-Version": "safepay-v2"
+        },
+        "issue_rule": "the_provider_persists_the_complete_immutable_quote_before_returning_402"
+      },
+      "redemption": {
+        "method": "POST",
+        "path": "/x402/v2/redemptions",
+        "request_required_fields_in_order": [
+          "schema_version",
+          "quote",
+          "payment_hash"
+        ],
+        "request_field_types": {
+          "schema_version": "literal:safepay-redemption-v2",
+          "quote": "exact_immutable_quote_object",
+          "payment_hash": "lowercase_hex_32_bytes"
+        },
+        "payment_header_forbidden": true,
+        "required_response_headers": {
+          "Cache-Control": "no-store",
+          "X-Concordia-SafePay-Version": "safepay-v2"
+        },
+        "lookup_order": [
+          "validate_canonical_network_before_any_ledger_lookup",
+          "load_persisted_quote_by_quote_id",
+          "return_404_quote_not_issued_when_absent_without_payment_lookup",
+          "compare_every_submitted_quote_field_and_recomputed_quote_hash",
+          "read_existing_consumption_by_canonical_network_and_payment_hash_without_a_write_lock",
+          "return_stored_idempotent_200_for_the_same_binding_or_terminal_409_for_a_different_binding",
+          "return_terminal_410_if_the_still_unconsumed_quote_is_expired",
+          "observe_and_verify_exact_Casper_transfer_outside_any_SQLite_write_transaction",
+          "enter_BEGIN_IMMEDIATE",
+          "reload_and_revalidate_quote_expiry_and_existing_consumption_inside_the_transaction",
+          "persist_or_return_the_immutable_fulfillment"
+        ]
+      },
+      "gateway_mapping": {
+        "wallet_intent_source": "the_gateway_must_obtain_the_provider_issued_quote_and_echo_its_correlation_id_as_the_native_transfer_id",
+        "provider_quote_must_not_be_reconstructed_by_gateway": true,
+        "provider_redemption_body": "the_gateway_submits_the_exact_issued_quote_object_and_lowercase_payment_hash_to_POST_/x402/v2/redemptions",
+        "legacy_resource_only_transfer_id_forbidden": true
+      },
+      "legacy_v1_proof_header": "X-Payment",
+      "legacy_v1_route_not_valid_for_new_v2_evidence": true
+    },
+    "issuance_abuse_controls": {
+      "quote_ttl_seconds": 900,
+      "issued_at_rule": "provider_samples_one_integer_UTC_Unix_second_once_at_the_start_of_the_final_issue_transaction_after_report_resolution",
+      "expires_at_rule": "issued_at_plus_exactly_900_seconds; the_client_cannot_supply_or_extend_expiry",
+      "per_client_limit": 12,
+      "per_client_window_seconds": 60,
+      "global_limit": 120,
+      "global_window_seconds": 60,
+      "maximum_outstanding_unconsumed_quotes": 10000,
+      "outstanding_definition": "a_persisted_quote_with_expires_at_strictly_greater_than_now_and_no_payment_consumptions_row_referencing_quote_id",
+      "maximum_retained_unconsumed_quotes_including_expired": 20000,
+      "maximum_content_addressed_report_rows": 1024,
+      "maximum_content_addressed_report_decoded_bytes": 67108864,
+      "maximum_inflight_quote_reservations": 32,
+      "reservation_ttl_seconds": 60,
+      "report_resolution_timeout_seconds": 10,
+      "algorithm": "durable_SQLite_fixed_window",
+      "window_start_formula": "floor(now_unix_seconds / 60) * 60",
+      "rate_table": "safepay_quote_rate_limits(scope TEXT, client_key TEXT, window_start INTEGER, count INTEGER, PRIMARY KEY(scope, client_key, window_start))",
+      "rate_scope_values": ["client", "global"],
+      "global_rate_row_sentinel": {"scope": "global", "client_key": "global"},
+      "stale_rate_window_gc_maximum_rows_per_transaction": 100,
+      "client_key_storage": "HMAC-SHA-256_of_normalized_client_address_with_a_runtime_only_secret; never_store_raw_address",
+      "client_identity": {
+        "trusted_header": "X-Concordia-Client-IP",
+        "proxy_attestation_header": "X-Concordia-SafePay-Proxy",
+        "caddy_operation": "remove_any_caller_supplied_value_then_overwrite_with_the_actual_remote_peer_IP",
+        "caddy_attestation_operation": "remove_any_caller_supplied_attestation_then_overwrite_with_the_server_side_proxy_secret",
+        "trusted_proxy_configuration": "SAFEPAY_TRUSTED_PROXY_CIDRS is a comma-separated list parsed at startup; production must set it explicitly and invalid CIDRs fail startup",
+        "trust_rule": "use_the_client_IP_header_only_when_the_immediate_socket_peer_belongs_to_SAFEPAY_TRUSTED_PROXY_CIDRS_and_the_proxy_attestation_matches_in_constant_time; otherwise_ignore_both_headers_and_use_the_socket_peer",
+        "normalization": "parse_with_a_standard_IP_address_parser; reject_zone_identifiers_and_invalid_values; convert_IPv4_mapped_IPv6_to_IPv4; otherwise_use_lowercase_compressed_canonical_text",
+        "hmac_configuration": {
+          "file_environment_name": "SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE",
+          "runtime_file": "/run/secrets/safepay_client_key_hmac_secret",
+          "minimum_secret_bytes": 32,
+          "digest": "HMAC-SHA-256",
+          "startup_failure_rule": "missing_unreadable_or_shorter_than_32_bytes_fails_startup"
+        },
+        "proxy_attestation_configuration": {
+          "file_environment_name": "SAFEPAY_PROXY_SECRET_FILE",
+          "runtime_file": "/run/secrets/safepay_proxy_secret",
+          "minimum_secret_bytes": 32,
+          "comparison": "constant_time_exact_bytes",
+          "startup_failure_rule": "missing_unreadable_or_shorter_than_32_bytes_fails_startup"
+        }
+      },
+      "preflight_attempt_transaction": [
+        "BEGIN_IMMEDIATE",
+        "sample_now_once_and_delete_at_most_100_stale_rate_windows_and_expired_reservations",
+        "read_per_client_and_global_fixed_window_attempt_counts",
+        "count_unexpired_pending_reservations",
+        "on_rate_or_inflight_limit_failure_ROLLBACK_without_report_resolution",
+        "increment_both_attempt_counters_without_future_refund",
+        "insert_pending_quote_issue_reservation_with_60_second_expiry",
+        "COMMIT_before_report_resolution"
+      ],
+      "report_resolution_order": "only_after_a_committed_attempt_reservation_resolve_or_render_with_a_hard_10_second_timeout_then_validate_size_and_hash_exact_report_bytes_outside_any_SQLite_write_transaction; failure_still_consumes_the_fixed_window_attempt_and_is_recorded_as_failed",
+      "final_issue_transaction": [
+        "BEGIN_IMMEDIATE",
+        "reload_pending_reservation_and_require_unexpired_exact_proposal_and_resource_binding",
+        "delete_at_most_100_GC_eligible_quote_rows",
+        "count_outstanding_quotes_by_the_frozen_definition",
+        "count_all_retained_unconsumed_quotes_including_expired",
+        "if_report_hash_is_new_check_total_report_rows_and_total_decoded_bytes_after_insert",
+        "on_capacity_failure_mark_reservation_failed_and_COMMIT_without_quote_insert",
+        "insert_or_exactly_revalidate_the_content_addressed_report_then_insert_the_complete_immutable_quote",
+        "mark_reservation_completed",
+        "COMMIT_before_returning_HTTP_402"
+      ],
+      "failed_report_transaction": "in_a_short_BEGIN_IMMEDIATE_mark_the_reservation_failed_without_decrementing_attempt_counters; never_hold_the_lock_while_handling_or_logging_the_source_error",
+      "rate_limit_result": "http_429_quote_rate_limited",
+      "capacity_result": "http_503_quote_capacity_exhausted",
+      "expired_unconsumed_gc": {
+        "eligible_after_expiry_seconds": 86400,
+        "maximum_rows_per_transaction": 100,
+        "consumed_quotes_must_never_be_deleted_by_this_gc": true,
+        "referenced_quotes_must_never_be_deleted": true,
+        "unreferenced_report_gc_maximum_rows_per_transaction": 100
+      },
+      "reservation_table": {
+        "name": "safepay_quote_issue_reservations",
+        "required_columns": [
+          "reservation_id TEXT PRIMARY KEY",
+          "client_key TEXT NOT NULL",
+          "proposal_id TEXT NOT NULL",
+          "resource_id TEXT NOT NULL",
+          "window_start INTEGER NOT NULL",
+          "state TEXT NOT NULL CHECK(state IN ('pending','completed','failed'))",
+          "created_at INTEGER NOT NULL",
+          "expires_at INTEGER NOT NULL"
+        ],
+        "pending_expiry_rule": "pending_is_eligible_for_bounded_cleanup_at_expires_at; completed_or_failed_is_eligible_after_86400_seconds",
+        "attempt_counter_refund_forbidden": true
+      }
+    },
+    "storage": {
+      "engine": "sqlite",
+      "database_path": "/data/safepay.db",
+      "docker_volume": "x402_provider_data:/data",
+      "required_pragmas": [
+        "PRAGMA foreign_keys=ON",
+        "PRAGMA journal_mode=WAL",
+        "PRAGMA synchronous=FULL",
+        "PRAGMA busy_timeout=5000"
+      ],
+      "transaction_begin": "BEGIN IMMEDIATE",
+      "quote_table": "safepay_quotes",
+      "report_table": "safepay_reports",
+      "consumption_table": "payment_consumptions",
+      "uniqueness_key": [
+        "network",
+        "payment_hash"
+      ],
+      "required_unique_index": "UNIQUE(network, payment_hash)"
+    },
+    "identifier_encoding": {
+      "hash": "BLAKE2b-256",
+      "blake2_configuration": {
+        "digest_size_bytes": 32,
+        "key": "",
+        "salt": "",
+        "personalization": ""
+      },
+      "domain_separator": "CONCORDIA_SAFEPAY_QUOTE_V2\u0000",
+      "domain_separator_hex": "434f4e434f524449415f534146455041595f51554f54455f563200",
+      "lp": "u32_big_endian_byte_length_then_exact_ascii_bytes",
+      "preimage_fields": [
+        "lp(quote_id)",
+        "lp(proposal_id)",
+        "lp(resource_id)",
+        "quote_nonce_raw_32_bytes"
+      ],
+      "digest_formula": "BLAKE2b-256(domain_separator || lp(quote_id) || lp(proposal_id) || lp(resource_id) || quote_nonce)",
+      "correlation_id_formula": "first_8_digest_bytes_interpreted_as_unsigned_big_endian_u64",
+      "native_transfer_id_rule": "the_Casper_native_transfer_id_must_equal_correlation_id",
+      "per_quote": true,
+      "resource_only_derivation_forbidden": true
+    },
+    "immutable_quote": {
+      "unknown_fields": "reject",
+      "fields_in_order": [
+        {
+          "name": "schema_version",
+          "type": "literal",
+          "value": "safepay-v2"
+        },
+        {
+          "name": "quote_id",
+          "type": "uuid_v4_lowercase"
+        },
+        {
+          "name": "proposal_id",
+          "type": "ascii",
+          "pattern": "^[A-Z0-9-]{1,64}$"
+        },
+        {
+          "name": "resource_id",
+          "type": "ascii",
+          "min_bytes": 1,
+          "max_bytes": 200
+        },
+        {
+          "name": "network",
+          "type": "literal",
+          "value": "casper:casper-test"
+        },
+        {
+          "name": "payee_account_hash",
+          "type": "lowercase_hex",
+          "hex_bytes": 32
+        },
+        {
+          "name": "amount_motes",
+          "type": "unsigned_decimal_string",
+          "minimum": "1"
+        },
+        {
+          "name": "correlation_id",
+          "type": "u64_decimal_string",
+          "derived": true
+        },
+        {
+          "name": "report_version",
+          "type": "literal",
+          "value": "safepay-report-v2"
+        },
+        {
+          "name": "report_hash",
+          "type": "lowercase_hex",
+          "hex_bytes": 32
+        },
+        {
+          "name": "expires_at",
+          "type": "unix_seconds_u64",
+          "constraint": "equals_persisted_issued_at_plus_exactly_900_seconds"
+        },
+        {
+          "name": "quote_nonce",
+          "type": "lowercase_hex",
+          "hex_bytes": 32,
+          "nonzero": true
+        },
+        {
+          "name": "quote_hash",
+          "type": "lowercase_hex",
+          "hex_bytes": 32,
+          "derived": true
+        }
+      ],
+      "quote_hash": {
+        "hash": "BLAKE2b-256",
+        "domain_separator": "CONCORDIA_SAFEPAY_QUOTE_HASH_V2\u0000",
+        "domain_separator_hex": "434f4e434f524449415f534146455041595f51554f54455f484153485f563200",
+        "encoding": "domain || lp(quote_id) || lp(proposal_id) || lp(resource_id) || lp(network) || payee_account_hash_raw_32 || amount_motes_U512_fixed_64_be || correlation_id_u64_be || lp(report_version) || report_hash_raw_32 || expires_at_u64_be || quote_nonce_raw_32",
+        "includes_schema_version": false,
+        "includes_quote_hash": false
+      }
+    },
+    "payment_observation": {
+      "unknown_fields": "reject",
+      "required_fields": [
+        "network",
+        "payment_hash",
+        "block_hash",
+        "block_height",
+        "execution_status",
+        "finality_status",
+        "from_account_hash",
+        "to_account_hash",
+        "amount_motes",
+        "transfer_id",
+        "execution_error",
+        "observed_at"
+      ],
+      "field_types": {
+        "network": "literal:casper:casper-test",
+        "payment_hash": "lowercase_hex_32_bytes",
+        "block_hash": "lowercase_hex_32_bytes",
+        "block_height": "u64",
+        "execution_status": "enum:processed,failed,pending,unknown",
+        "finality_status": "enum:finalized,not_finalized,unknown",
+        "from_account_hash": "lowercase_hex_32_bytes",
+        "to_account_hash": "lowercase_hex_32_bytes",
+        "amount_motes": "unsigned_decimal_string",
+        "transfer_id": "u64_decimal_string",
+        "execution_error": "string_or_null",
+        "observed_at": "rfc3339_utc"
+      },
+      "acceptance_predicate": [
+        "network_equals_quote_network",
+        "execution_status_equals_processed",
+        "finality_status_equals_finalized",
+        "execution_error_is_null",
+        "exactly_one_native_transfer_is_present",
+        "to_account_hash_equals_quote_payee_account_hash",
+        "amount_motes_equals_quote_amount_motes",
+        "transfer_id_equals_quote_correlation_id"
+      ],
+      "substring_matching_forbidden": true,
+      "greater_than_or_equal_amount_matching_forbidden": true
+    },
+    "report": {
+      "unknown_fields": "reject",
+      "required_fields": [
+        "report_version",
+        "proposal_id",
+        "resource_id",
+        "correlation_id",
+        "media_type",
+        "content_base64",
+        "report_hash"
+      ],
+      "media_type": "literal:application/json",
+      "maximum_decoded_content_bytes": 262144,
+      "base64_encoding": "RFC4648_standard_alphabet_with_required_canonical_padding_and_no_whitespace",
+      "report_hash_encoding": "SHA-256_over_exact_decoded_content_bytes",
+      "content_transport": "content_base64_is_base64_of_exact_report_bytes",
+      "report_hash_must_equal_quote": true,
+      "issuance_persistence_rule": "provider_generates_or_loads_the_exact_report_bytes_before_quote_issue; derives_report_hash_from_those_bytes; inserts_or_exactly_revalidates_the_content_addressed_safepay_reports_row_and_then_the_referencing_quote_before_returning_402; redemption_and_retries_use_only_those_persisted_bytes"
+    },
+    "binding_checks": {
+      "required_boolean_fields": [
+        "network_exact",
+        "payment_finalized",
+        "payment_execution_success",
+        "single_transfer_exact",
+        "payee_exact",
+        "amount_exact",
+        "transfer_id_exact",
+        "proposal_exact",
+        "resource_exact",
+        "correlation_exact",
+        "report_version_exact",
+        "report_hash_exact",
+        "quote_hash_recomputed"
+      ],
+      "authoritative_source": "nested_observations_recomputed_by_consumer",
+      "top_level_passed_boolean_authoritative": false
+    },
+    "consumption": {
+      "required_fields": [
+        "network",
+        "payment_hash",
+        "quote_id",
+        "resource_id",
+        "quote_hash",
+        "response_hash",
+        "consumed_at"
+      ],
+      "field_types": {
+        "network": "literal:casper:casper-test",
+        "payment_hash": "lowercase_hex_32_bytes",
+        "quote_id": "uuid_v4_lowercase",
+        "resource_id": "ascii_1_to_200_bytes",
+        "quote_hash": "lowercase_hex_32_bytes",
+        "response_hash": "lowercase_hex_32_bytes",
+        "consumed_at": "unix_seconds_u64"
+      },
+      "stored_response_is_immutable": true
+    },
+    "fulfillment_hash": {
+      "field_name": "response_hash",
+      "hash": "SHA-256",
+      "domain_separator": "CONCORDIA_SAFEPAY_FULFILLMENT_V2\u0000",
+      "domain_separator_hex": "434f4e434f524449415f534146455041595f46554c46494c4c4d454e545f563200",
+      "encoding": "domain || quote_hash_raw_32 || payment_hash_raw_32 || block_hash_raw_32 || block_height_u64_be || report_hash_raw_32 || consumed_at_unix_seconds_u64_be",
+      "dynamic_replay_disposition_included": false,
+      "exact_retry_must_preserve": true
+    },
+    "success_response": {
+      "http_status": 200,
+      "schema_version_literal": "safepay-v2",
+      "unknown_fields": "reject",
+      "required_fields_in_order": [
+        "schema_version",
+        "fulfillment",
+        "delivery"
+      ],
+      "fulfillment_required_fields_in_order": [
+        "quote",
+        "payment_observation",
+        "consumption",
+        "report",
+        "binding_checks",
+        "observed_at",
+        "response_hash"
+      ],
+      "delivery_required_fields": ["replay_disposition"],
+      "delivery_replay_disposition_values": ["first_consumption", "idempotent_replay"],
+      "idempotent_retry_rule": "fulfillment_and_response_hash_are_identical; only_delivery.replay_disposition_changes"
+    },
+    "error_responses": {
+      "payment_required": {
+        "http_status": 402,
+        "error_code": "payment_required",
+        "retryable": false,
+        "replay_disposition": "not_attempted"
+      },
+      "invalid_request": {
+        "http_status": 400,
+        "error_code": "invalid_request",
+        "gateway_retry_allowed": false,
+        "retryable": false,
+        "replay_disposition": "not_attempted",
+        "covers": "malformed_JSON_unknown_fields_missing_fields_and_type_or_canonical_encoding_failures"
+      },
+      "quote_not_issued": {
+        "http_status": 404,
+        "error_code": "quote_not_issued",
+        "gateway_retry_allowed": false,
+        "retryable": false,
+        "replay_disposition": "not_attempted"
+      },
+      "quote_binding_invalid": {
+        "http_status": 422,
+        "error_code": "quote_binding_invalid",
+        "gateway_retry_allowed": false,
+        "retryable": false,
+        "replay_disposition": "not_attempted"
+      },
+      "expired_quote": {
+        "http_status": 410,
+        "error_code": "quote_expired",
+        "rule": "unconsumed_quote_at_or_after_expires_at_is_terminal",
+        "gateway_retry_allowed": false,
+        "retryable": false,
+        "replay_disposition": "not_attempted"
+      },
+      "cross_binding_replay": {
+        "http_status": 409,
+        "error_code": "payment_already_consumed_for_other_binding",
+        "replay_disposition": "cross_binding_rejected",
+        "gateway_retry_allowed": false,
+        "retryable": false
+      },
+      "verification_failure": {
+        "http_status": 422,
+        "error_code": "payment_binding_invalid",
+        "gateway_retry_allowed": false,
+        "retryable": false,
+        "replay_disposition": "verification_rejected"
+      },
+      "indexer_pending": {
+        "http_status": 425,
+        "error_code": "payment_not_finalized",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "verification_pending"
+      },
+      "quote_rate_limited": {
+        "http_status": 429,
+        "error_code": "quote_rate_limited",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "not_attempted"
+      },
+      "quote_capacity_exhausted": {
+        "http_status": 503,
+        "error_code": "quote_capacity_exhausted",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "not_attempted"
+      },
+      "report_source_unavailable": {
+        "http_status": 503,
+        "error_code": "report_source_unavailable",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "not_attempted"
+      },
+      "payment_observer_unavailable": {
+        "http_status": 503,
+        "error_code": "payment_observer_unavailable",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "verification_pending"
+      },
+      "quote_provider_unavailable": {
+        "http_status": 503,
+        "error_code": "provider_unavailable",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "not_attempted",
+        "endpoint": "POST_/x402/v2/quotes"
+      },
+      "redemption_provider_unavailable": {
+        "http_status": 503,
+        "error_code": "provider_unavailable",
+        "gateway_retry_allowed": true,
+        "retryable": true,
+        "replay_disposition": "verification_pending",
+        "endpoint": "POST_/x402/v2/redemptions"
+      }
+    },
+    "endpoint_outcomes": {
+      "POST_/x402/v2/quotes": [
+        "402:payment_required",
+        "400:invalid_request",
+        "429:quote_rate_limited",
+        "503:quote_capacity_exhausted",
+        "503:report_source_unavailable",
+        "503:provider_unavailable"
+      ],
+      "POST_/x402/v2/redemptions": [
+        "200:success",
+        "400:invalid_request",
+        "404:quote_not_issued",
+        "409:payment_already_consumed_for_other_binding",
+        "410:quote_expired",
+        "422:quote_binding_invalid",
+        "422:payment_binding_invalid",
+        "425:payment_not_finalized",
+        "503:payment_observer_unavailable",
+        "503:provider_unavailable"
+      ]
+    },
+    "error_wire_contract": {
+      "unknown_fields": "reject",
+      "standard_error_required_fields_in_order": ["schema_version", "error", "delivery"],
+      "schema_version_literal": "safepay-v2",
+      "error_required_fields_in_order": ["code", "retryable"],
+      "delivery_required_fields_in_order": ["replay_disposition"],
+      "body_derivation": "for_each_non_402_error_responses_entry_on_either_endpoint_emit_exactly_schema_version_literal_plus_error_code_and_retryable_plus_delivery_replay_disposition; no_message_or_extra_boolean",
+      "quote_issue_402_exception": "uses_wire_contract.quote_issue.response_required_fields_in_order_and_its_exact_error_object_without_a_delivery_object",
+      "exception_handler": "provider_registers_validation_and_catch_all_exception_handlers; validation_maps_to_400_invalid_request; every_uncaught_storage_timeout_or_internal_failure_maps_to_the_endpoint_specific_503_provider_unavailable_body; response_and_logs_never_include_exception_text_request_body_headers_secrets_or_upstream_body",
+      "stable_log_fields_only": ["event_id", "endpoint_id", "exception_class", "timestamp"]
+    },
+    "retry_semantics": {
+      "exact_retry_identity": [
+        "network",
+        "payment_hash",
+        "quote_id",
+        "resource_id",
+        "quote_hash"
+      ],
+      "exact_retry_result": "return_the_same_immutable_fulfillment_content_and_response_hash_with_replay_disposition_idempotent_replay; the_outer_response_need_not_be_byte_identical",
+      "exact_retry_consumes_again": false,
+      "exact_retry_after_quote_expiry_when_already_consumed": "return_stored_success_payload",
+      "unconsumed_expired_quote_result": "http_410_quote_expired",
+      "same_payment_different_quote_or_resource_result": "http_409_cross_binding_rejected"
+    },
+    "ledger_row": {
+      "table": "payment_consumptions",
+      "required_columns": [
+        "network TEXT NOT NULL",
+        "payment_hash TEXT NOT NULL",
+        "quote_id TEXT NOT NULL",
+        "proposal_id TEXT NOT NULL",
+        "resource_id TEXT NOT NULL",
+        "quote_hash TEXT NOT NULL",
+        "report_hash TEXT NOT NULL",
+        "correlation_id TEXT NOT NULL",
+        "fulfillment_json TEXT NOT NULL",
+        "response_hash TEXT NOT NULL",
+        "consumed_at INTEGER NOT NULL CHECK(consumed_at >= 0)",
+        "PRIMARY KEY(network, payment_hash)"
+      ]
+    },
+    "quote_ledger_row": {
+      "table": "safepay_quotes",
+      "required_columns": [
+        "quote_id TEXT PRIMARY KEY",
+        "proposal_id TEXT NOT NULL",
+        "resource_id TEXT NOT NULL",
+        "network TEXT NOT NULL",
+        "payee_account_hash TEXT NOT NULL",
+        "amount_motes TEXT NOT NULL",
+        "correlation_id TEXT NOT NULL",
+        "report_version TEXT NOT NULL",
+        "report_hash TEXT NOT NULL REFERENCES safepay_reports(report_hash)",
+        "issued_at INTEGER NOT NULL",
+        "expires_at INTEGER NOT NULL",
+        "quote_nonce TEXT NOT NULL UNIQUE",
+        "quote_hash TEXT NOT NULL UNIQUE"
+      ],
+      "authenticity_rule": "redemption_loads_by_quote_id_and_requires_every_submitted_quote_field_and_recomputed_quote_hash_to_equal_the_persisted_row",
+      "caller_computable_unkeyed_quote_hash_is_not_authentication": true,
+      "report_byte_persistence": "quote_references_a_content_addressed_report_row_whose_exact_bytes_hash_to_report_hash_before_quote_INSERT",
+      "restart_persistence_required": true,
+      "transaction_mode": "BEGIN IMMEDIATE",
+      "redemption_transaction": "initial_quote_validation_and_read_only_consumption_lookup_happen_first_so_existing_exact_or_cross_binding_retries_need_no_chain_call; only_an_unconsumed_unexpired_payment_is_observed_externally_without_a_SQLite_write_lock; final_quote_expiry_and_existing_consumption_are_reloaded_and_revalidated_with_the_atomic_unique_claim_and_fulfillment_persist_inside_one_BEGIN_IMMEDIATE_transaction"
+    },
+    "report_ledger_row": {
+      "table": "safepay_reports",
+      "required_columns": [
+        "report_hash TEXT PRIMARY KEY",
+        "report_media_type TEXT NOT NULL CHECK(report_media_type = 'application/json')",
+        "report_bytes BLOB NOT NULL CHECK(length(report_bytes) <= 262144)",
+        "decoded_length INTEGER NOT NULL CHECK(decoded_length = length(report_bytes) AND decoded_length >= 0 AND decoded_length <= 262144)",
+        "created_at INTEGER NOT NULL CHECK(created_at >= 0)"
+      ],
+      "content_address": "report_hash_is_lowercase_SHA-256_of_report_bytes",
+      "insert_conflict_rule": "an_existing_report_hash_must_have_identical_media_type_bytes_and_decoded_length_or_the_issue_transaction_fails_closed",
+      "response_encoding": "derive_canonical_padded_RFC4648_content_base64_from_persisted_report_bytes",
+      "retention_rule": "delete_only_when_no_quote_consumption_or_fulfillment_references_the_report_and_only_in_the_bounded_GC_transaction"
+    }
+  },
+  "approval_boundary_v1": {
+    "routes": [
+      "GET /approve/{proposal_id}",
+      "POST /approve/{proposal_id}"
+    ],
+    "runtime_configuration": [
+      {
+        "logical_name": "proxy_secret",
+        "environment_name": "APPROVAL_PROXY_SECRET",
+        "file_environment_name": "APPROVAL_PROXY_SECRET_FILE",
+        "runtime_file": "/run/secrets/approval_proxy_secret"
+      },
+      {
+        "logical_name": "basic_auth_user",
+        "environment_name": "APPROVAL_UI_USER",
+        "file_environment_name": "APPROVAL_UI_USER_FILE",
+        "runtime_file": "/run/secrets/approval_ui_user"
+      },
+      {
+        "logical_name": "approver_id",
+        "environment_name": "APPROVAL_UI_APPROVER_ID",
+        "file_environment_name": "APPROVAL_UI_APPROVER_ID_FILE",
+        "runtime_file": "/run/secrets/approval_ui_approver_id"
+      },
+      {
+        "logical_name": "bcrypt_hash",
+        "environment_name": "APPROVAL_UI_BCRYPT_HASH",
+        "file_environment_name": "APPROVAL_UI_BCRYPT_HASH_FILE",
+        "runtime_file": "/run/secrets/approval_ui_bcrypt_hash"
+      },
+      {
+        "logical_name": "csrf_secret",
+        "environment_name": "APPROVAL_UI_CSRF_SECRET",
+        "file_environment_name": "APPROVAL_UI_CSRF_SECRET_FILE",
+        "runtime_file": "/run/secrets/approval_ui_csrf_secret"
+      }
+    ],
+    "request_headers": {
+      "basic_auth": "Authorization",
+      "proxy_attestation": "X-Proxy-Secret"
+    },
+    "caddy_contract": {
+      "basic_auth_required": true,
+      "proxy_header_operation": "overwrite",
+      "caller_supplied_proxy_header_forwarded": false,
+      "direct_gateway_route_publicly_reachable": false
+    },
+    "gateway_checks_in_order": [
+      "proxy_secret_constant_time_match",
+      "basic_authorization_syntax",
+      "username_exact_match",
+      "bcrypt_password_verification",
+      "approver_id_allowlist_membership",
+      "csrf_hmac_verification",
+      "nonce_validation",
+      "nonce_atomic_consumption"
+    ],
+    "trusted_result": {
+      "sender_type": "User",
+      "sender_id_source": "APPROVAL_UI_APPROVER_ID",
+      "message_source": "approval_boundary_v1",
+      "generic_room_message_is_approval": false
+    }
+  },
+  "demo_capability_v1": {
+    "authority": {
+      "issuer_validator_and_consumption_authority": "gateway",
+      "durable_ledger_owner": "gateway_sqlite",
+      "dashboard_role": "thin_same_origin_proxy_and_ephemeral_client_cookie_manager",
+      "dashboard_holds_operator_or_hmac_secret": false,
+      "gateway_operator_token_browser_exposure": false
+    },
+    "public_endpoints": {
+      "issue": "POST /dashboard/api/demo/capability",
+      "activate": "POST /dashboard/api/demo/activate",
+      "reset": null
+    },
+    "internal_gateway_endpoints": {
+      "issue": "POST /internal/demo/capability",
+      "activate": "POST /internal/demo/activate",
+      "publicly_routable_through_caddy": false,
+      "authentication_header": "X-Concordia-Dashboard-Token",
+      "authentication_secret_file": "/run/secrets/dashboard_demo_gateway_token",
+      "authentication_secret_file_environment_name": "DASHBOARD_DEMO_GATEWAY_TOKEN_FILE",
+      "client_nonce_header": "X-Concordia-Demo-Client",
+      "client_nonce_wire": "unpadded_base64url_of_exactly_32_random_bytes"
+    },
+    "allowed_scenarios": [
+      "treasury",
+      "defi-treasury",
+      "oracle",
+      "yield",
+      "exposure",
+      "policy",
+      "credential",
+      "rwa-onboarding"
+    ],
+    "issue_request": {
+      "required_fields": [
+        "scenario_id"
+      ],
+      "unknown_fields": "reject"
+    },
+    "issue_response": {
+      "required_fields": ["schema_version", "capability", "scenario_id", "expires_at"],
+      "fixed_values": {"schema_version": "demo-capability-v1"},
+      "field_types": {
+        "capability": "opaque_capability_token",
+        "scenario_id": "allowed_scenario_enum",
+        "expires_at": "unix_seconds_u64"
+      }
+    },
+    "capability_payload": {
+      "format": "unpadded_base64url(typed_payload_bytes).unpadded_base64url(hmac_sha256_tag)",
+      "typed_payload_encoding": "u32_be(schema_version=1) || uuid_16_raw(capability_id) || lp_ascii(scenario_id) || u64_be(issued_at) || u64_be(expires_at) || client_binding_hash_raw_32 || nonce_raw_32",
+      "hmac_input": "ASCII(CONCORDIA_DEMO_CAPABILITY_V1) || 0x00 || typed_payload_bytes",
+      "hmac_algorithm": "HMAC-SHA-256",
+      "hmac_verification": "constant_time",
+      "required_fields": [
+        "schema_version",
+        "capability_id",
+        "scenario_id",
+        "issued_at",
+        "expires_at",
+        "client_binding_hash",
+        "nonce"
+      ],
+      "fixed_values": {
+        "schema_version": 1
+      },
+      "field_types": {
+        "capability_id": "uuid_v4_lowercase",
+        "scenario_id": "allowed_scenario_enum",
+        "issued_at": "unix_seconds_u64",
+        "expires_at": "unix_seconds_u64",
+        "client_binding_hash": "lowercase_hex_32_bytes",
+        "nonce": "lowercase_hex_32_bytes"
+      },
+      "maximum_lifetime_seconds": 120,
+      "operator_token_present": false
+    },
+    "client_binding": {
+      "cookie_name": "__Host-concordia-demo-client",
+      "cookie_value": "server_generated_random_32_bytes_unpadded_base64url",
+      "cookie_attributes": ["Secure", "HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=600"],
+      "hash_formula": "SHA-256(ASCII(CONCORDIA_DEMO_CLIENT_V1) || 0x00 || raw_cookie_nonce_32_bytes)",
+      "ip_address_or_user_agent_in_binding_forbidden": true,
+      "cross_client_capability_replay_rejected": true
+    },
+    "signing_secret": {
+      "file_environment_name": "DEMO_CAPABILITY_HMAC_SECRET_FILE",
+      "runtime_file": "/run/secrets/demo_capability_hmac_secret",
+      "minimum_random_bytes": 32,
+      "operator_or_approval_secret_reuse_forbidden": true,
+      "repository_or_log_exposure_forbidden": true,
+      "rotation_effect": "outstanding_capabilities_become_invalid_and_must_be_reissued"
+    },
+    "activation_request": {
+      "required_fields": [
+        "capability",
+        "scenario_id"
+      ],
+      "unknown_fields": "reject",
+      "scenario_must_equal_signed_payload": true
+    },
+    "activation_response": {
+      "required_fields": [
+        "schema_version",
+        "status",
+        "demo_run_id",
+        "scenario_id",
+        "is_demo",
+        "created_proposal_ids"
+      ],
+      "fixed_values": {
+        "schema_version": "demo-run-v1",
+        "is_demo": true
+      },
+      "status_values": [
+        "started",
+        "idempotent_replay"
+      ]
+    },
+    "durable_capability_record": {
+      "table": "demo_capabilities",
+      "unique_key": "capability_id",
+      "required_columns": [
+        "capability_id",
+        "scenario_id",
+        "client_binding_hash",
+        "nonce_hash",
+        "issued_at",
+        "expires_at",
+        "demo_run_id",
+        "consumed_at",
+        "response_json"
+      ],
+      "atomic_consumption": true,
+      "exact_retry_returns_stored_response": true
+    },
+    "record_provenance": {
+      "required_on_every_created_record": [
+        "demo_run_id",
+        "is_demo"
+      ],
+      "is_demo_value": true,
+      "cleanup_selector": "exact_demo_run_id_and_is_demo_true",
+      "prefix_cleanup_forbidden": true,
+      "canonical_proposal_ids_always_excluded": true
+    },
+    "abuse_controls": {
+      "per_client_limit": "3_activations_per_10_minutes",
+      "global_limit": "20_activations_per_10_minutes",
+      "maximum_concurrent_runs": 2,
+      "operator_token_browser_exposure": false
+    }
+  },
+  "room_identity_v1": {
+    "authentication_header": "X-Agent-Key",
+    "principal_shape": {
+      "required_fields": [
+        "key_id",
+        "agent_id",
+        "role",
+        "sender_type"
+      ],
+      "sender_type_for_agent_keys": "Agent",
+      "authoritative_source": "server_side_authenticated_key_mapping"
+    },
+    "roles": [
+      "gateway",
+      "recorder",
+      "triage",
+      "diagnosis",
+      "safety_reviewer",
+      "commander",
+      "operator"
+    ],
+    "caller_supplied_identity_fields": {
+      "sender_id": "forbidden",
+      "sender_role": "forbidden",
+      "sender_type": "forbidden",
+      "participant_role": "forbidden",
+      "rejection_status": 400,
+      "rejection_code": "identity_fields_are_server_derived"
+    },
+    "role_operation_matrix": {
+      "gateway": [
+        "create_room",
+        "join_participant",
+        "list_rooms",
+        "read_messages",
+        "post_message"
+      ],
+      "recorder": [
+        "create_room",
+        "join_participant:triage",
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ],
+      "triage": [
+        "join_participant:diagnosis",
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ],
+      "diagnosis": [
+        "join_participant:safety_reviewer",
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ],
+      "safety_reviewer": [
+        "join_participant:commander",
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ],
+      "commander": [
+        "join_participant:operator",
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ],
+      "operator": [
+        "list_member_rooms",
+        "read_member_room_messages",
+        "post_member_room_message"
+      ]
+    },
+    "operation_contracts": {
+      "create_room": {
+        "request_fields": [
+          "title",
+          "proposal_id"
+        ],
+        "creator_auto_joined": true
+      },
+      "join_participant": {
+        "request_fields": [
+          "participant_id"
+        ],
+        "participant_role_derived_from_registered_agent_id": true,
+        "target_role_must_match_role_operation_matrix": true,
+        "requester_must_be_room_member_unless_gateway": true
+      },
+      "list_rooms": {
+        "caller_selected_participant_id_forbidden": true,
+        "non_gateway_result_scope": "authenticated_principal_membership_only"
+      },
+      "read_messages": {
+        "membership_required": true,
+        "gateway_bypass": true
+      },
+      "post_message": {
+        "membership_required": true,
+        "sender_id": "authenticated_principal_agent_id",
+        "sender_role": "authenticated_principal_role",
+        "sender_type": "Agent",
+        "user_or_system_sender_type_allowed": false
+      }
+    },
+    "human_approval": {
+      "entry_path": "approval_boundary_v1_only",
+      "agent_key_can_emit_user": false,
+      "agent_key_can_emit_system": false
+    },
+    "production_gateway_secret_fallback_for_agent_traffic": false
+  },
+  "official_x402_service_v1": {
+    "service": {
+      "compose_service_name": "x402-official",
+      "container_name_alias": "concordia-x402-official",
+      "listen_address": "0.0.0.0",
+      "container_port": 8787,
+      "internal_base_url": "http://x402-official:8787",
+      "public_origin": "https://x402.concordiadao.xyz",
+      "ledger_database_path": "/data/x402-official.db",
+      "docker_volume": "x402_official_data:/data"
+    },
+    "dependencies": {
+      "@make-software/casper-x402": "1.0.0",
+      "@x402/core": "2.15.0",
+      "casper-js-sdk": "5.0.12",
+      "@casper-ecosystem/casper-eip-712": "1.2.1",
+      "source_audit_commit": "14c364bb30838003302074423b7500b4360df889",
+      "lockfile_required": true,
+      "version_ranges_forbidden": true
+    },
+    "environment": [
+      {
+        "name": "NODE_ENV",
+        "value": "production"
+      },
+      {
+        "name": "X402_OFFICIAL_PORT",
+        "value": "8787"
+      },
+      {
+        "name": "X402_FACILITATOR_URL",
+        "value": "https://x402-facilitator.cspr.cloud"
+      },
+      {
+        "name": "X402_NETWORK",
+        "value": "casper:casper-test"
+      },
+      {
+        "name": "X402_SCHEME",
+        "value": "exact"
+      },
+      {
+        "name": "X402_WCSPR_PACKAGE_HASH",
+        "value": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e"
+      },
+      {
+        "name": "X402_WCSPR_CONTRACT_HASH",
+        "value": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+      },
+      {
+        "name": "X402_WCSPR_CONTRACT_VERSION",
+        "value": "8"
+      },
+      {
+        "name": "X402_TOKEN_NAME",
+        "value": "Wrapped CSPR"
+      },
+      {
+        "name": "X402_TOKEN_SYMBOL",
+        "value": "WCSPR"
+      },
+      {
+        "name": "X402_TOKEN_DECIMALS",
+        "value": "9"
+      },
+      {
+        "name": "X402_TOKEN_DOMAIN_VERSION",
+        "value": "1"
+      },
+      {
+        "name": "X402_LEDGER_PATH",
+        "value": "/data/x402-official.db"
+      },
+      {
+        "name": "X402_GATEWAY_INTERNAL_URL",
+        "value": "http://gateway:8000"
+      },
+      {
+        "name": "X402_SETTLEMENT_COMPATIBILITY_STATE",
+        "value": "blocked_fail_closed"
+      }
+    ],
+    "secret_files": [
+      {
+        "environment_name": "X402_CSPR_CLOUD_TOKEN_FILE",
+        "runtime_file": "/run/secrets/x402_official_cspr_cloud_token",
+        "authorization_header_format": "raw_token_without_bearer"
+      },
+      {
+        "environment_name": "X402_SIGNER_FILE",
+        "runtime_file": "/run/secrets/x402_official_signer"
+      },
+      {
+        "environment_name": "X402_GATEWAY_TOKEN_FILE",
+        "runtime_file": "/run/secrets/x402_official_gateway_token"
+      }
+    ],
+    "local_endpoints": [
+      "GET /health",
+      "GET /supported",
+      "GET /resource/{resource_id}",
+      "POST /verify",
+      "POST /settle"
+    ],
+    "http_payment_headers": {
+      "payment_required_response": "PAYMENT-REQUIRED",
+      "payment_signature_request": "PAYMENT-SIGNATURE",
+      "payment_response": "PAYMENT-RESPONSE"
+    },
+    "resource_info": {
+      "required_fields": [
+        "url",
+        "description",
+        "mimeType"
+      ],
+      "optional_fields": [],
+      "unknown_fields": "reject",
+      "configured_resource_object_is_immutable": true
+    },
+    "payment_requirements": {
+      "unknown_fields": "reject",
+      "required_fields": [
+        "scheme",
+        "network",
+        "asset",
+        "amount",
+        "payTo",
+        "maxTimeoutSeconds",
+        "extra"
+      ],
+      "fixed_fields": {
+        "scheme": "exact",
+        "network": "casper:casper-test",
+        "asset": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
+        "extra": {
+          "name": "Wrapped CSPR",
+          "version": "1",
+          "decimals": "9",
+          "symbol": "WCSPR"
+        }
+      },
+      "extra_exact_keys": ["name", "version", "decimals", "symbol"],
+      "amount_type": "canonical_unsigned_decimal_string_no_sign_whitespace_exponent_or_leading_zero_except_zero",
+      "amount_minimum": "1",
+      "payTo_type": "00_plus_64_lowercase_hex_account_hash",
+      "maxTimeoutSeconds_type": "integer_1_through_4294967295"
+    },
+    "payment_required": {
+      "required_fields": [
+        "x402Version",
+        "resource",
+        "accepts"
+      ],
+      "optional_fields": [
+        "error",
+        "extensions"
+      ],
+      "extensions_rule": "absent_or_empty_object_only",
+      "x402Version": 2,
+      "accepts_cardinality": 1
+    },
+    "payment_payload": {
+      "required_fields": [
+        "x402Version",
+        "resource",
+        "accepted",
+        "payload"
+      ],
+      "optional_fields": ["extensions"],
+      "x402Version_constraint": "copy_outer_protocol_version_from_upstream_payment_payload_type_and_require_value_2",
+      "resource_equality": "exact_three_field_structural_equality_after_type_validation; no extra resource keys",
+      "accepted_equality": "exact_structural_equality_after_canonical_decimal_and_account_validation; no extra keys except the frozen extra object",
+      "extensions_rule": "absent_or_empty_object_only",
+      "payload": {
+        "required_fields": [
+          "signature",
+          "publicKey",
+          "authorization"
+        ],
+        "signature_type": "lowercase_hex_65_bytes",
+        "publicKey_type": "algorithm_prefixed_casper_public_key_hex",
+        "authorization": {
+          "required_fields": [
+            "from",
+            "to",
+            "value",
+            "validAfter",
+            "validBefore",
+            "nonce"
+          ],
+          "from_type": "00_plus_64_lowercase_hex_account_hash",
+          "to_type": "00_plus_64_lowercase_hex_account_hash",
+          "value_type": "canonical_unsigned_decimal_string_no_sign_whitespace_exponent_or_leading_zero_except_zero; minimum_1",
+          "validAfter_type": "canonical_unsigned_u64_decimal_string_no_sign_whitespace_exponent_or_leading_zero_except_zero",
+          "validBefore_type": "canonical_unsigned_u64_decimal_string_no_sign_whitespace_exponent_or_leading_zero_except_zero",
+          "nonce_type": "lowercase_hex_32_bytes"
+        }
+      }
+    },
+    "hash_encodings": {
+      "hash": "BLAKE2b-256_RFC7693_digest_size_32_empty_key_salt_personalization",
+      "length_prefix": "u32_big_endian_byte_length_then_exact_bytes",
+      "resource_url_hash": "BLAKE2b-256(ASCII(CONCORDIA_RESOURCE_URL_V1) || 0x00 || lp(exact_resource_url_ascii))",
+      "report_hash": "BLAKE2b-256(ASCII(CONCORDIA_X402_REPORT_V1) || 0x00 || lp(exact_report_bytes))",
+      "payment_requirements_hash": "BLAKE2b-256(ASCII(CONCORDIA_PAYMENT_REQUIREMENTS_V1) || 0x00 || lp(scheme) || lp(network) || wcspr_package_raw_32 || value_U256_fixed_32_be || payee_account_hash_raw_32 || maxTimeoutSeconds_u32_be || lp(token_name) || lp(eip712_domain_version) || token_decimals_u8 || lp(token_symbol))",
+      "signed_payment_payload_hash": "BLAKE2b-256(ASCII(CONCORDIA_SIGNED_PAYMENT_PAYLOAD_V1) || 0x00 || paymentPayload.x402Version_u32_be || lp(resource.url) || lp(resource.description) || lp(resource.mimeType) || payment_requirements_hash_raw_32 || lp(signature_raw_65) || canonical_Casper_PublicKey || payer_account_hash_raw_32 || payee_account_hash_raw_32 || value_U256_fixed_32_be || validAfter_u64_be || validBefore_u64_be || nonce_raw_32 || u32_be(0_for_empty_extensions))",
+      "casper_account_hash_from_public_key": "BLAKE2b-256(ASCII(ed25519_or_secp256k1) || 0x00 || raw_public_key_bytes_without_algorithm_tag); must_equal_pinned_Casper_SDK_PublicKey.accountHash()"
+    },
+    "verify_request": {
+      "required_fields": [
+        "x402Version",
+        "paymentPayload",
+        "paymentRequirements"
+      ],
+      "x402Version": 2,
+      "paymentPayload": "payment_payload",
+      "paymentRequirements": "payment_requirements",
+      "full_paymentRequirements_equality_required": true,
+      "proof_registry_authorization_required": true,
+      "processing_order": [
+        "local_shape_canonical_number_account_and_signature_validation",
+        "compute_signed_payment_payload_hash",
+        "unique_verified_v3_registry_lookup",
+        "active_v8_pre_verify_drift_guard",
+        "credentialed_hosted_facilitator_verify_call"
+      ],
+      "ungoverned_or_ambiguous_payload_upstream_calls": 0
+    },
+    "verify_response": {
+      "required_fields": [
+        "isValid"
+      ],
+      "optional_fields": [
+        "invalidReason",
+        "invalidMessage",
+        "payer",
+        "extensions",
+        "extra"
+      ],
+      "isValid_true_proves_settlement": false
+    },
+    "settle_request": {
+      "required_fields": [
+        "x402Version",
+        "paymentPayload",
+        "paymentRequirements"
+      ],
+      "x402Version": 2,
+      "paymentPayload": "payment_payload",
+      "paymentRequirements": "payment_requirements",
+      "full_paymentRequirements_equality_required": true,
+      "proof_registry_authorization_required": true
+    },
+    "settle_response": {
+      "required_fields": [
+        "success",
+        "transaction",
+        "network"
+      ],
+      "optional_fields": [
+        "errorReason",
+        "errorMessage",
+        "payer",
+        "amount",
+        "extensions",
+        "extra"
+      ],
+      "success_true_required": true,
+      "network_must_equal": "casper:casper-test",
+      "transaction_must_finalize_on_chain": true,
+      "http_200_alone_is_success": false
+    },
+    "governance_interlock": {
+      "lookup_key": "signed_payment_payload_hash_computed_from_the_validated_request",
+      "registry_field": "v3_finalized_exact",
+      "required_value": true,
+      "verification_status_required": "verified",
+      "every_required_exact_envelope_check_must_be_present_and_passed": true,
+      "caller_supplied_action_id_or_envelope_hash_accepted": false,
+      "same_resource_url_hash_required": true,
+      "same_report_hash_required": true,
+      "same_payment_requirements_hash_required": true,
+      "same_signed_payment_payload_hash_required": true
+    },
+    "ledger": {
+      "engine": "sqlite",
+      "table": "x402_fulfillments",
+      "primary_key": [
+        "network",
+        "signed_payment_payload_hash"
+      ],
+      "authorization_unique_key": [
+        "network",
+        "wcspr_contract",
+        "payer_account_hash",
+        "authorization_nonce"
+      ],
+      "stored_binding_fields": [
+        "action_id",
+        "envelope_hash",
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "payer_account_hash",
+        "payee_account_hash",
+        "value_atomic",
+        "authorization_nonce",
+        "settlement_transaction_hash",
+        "settlement_response_hash",
+        "settled_at"
+      ],
+      "same_key_same_binding": "idempotent_stored_response",
+      "same_key_different_binding": "terminal_409_cross_binding_rejected",
+      "same_authorization_key_different_payload_or_binding": "terminal_409_before_facilitator_submission",
+      "atomic_claim_required": true,
+      "restart_persistence_required": true,
+      "state_machine": [
+        "claimed",
+        "verified",
+        "submission_started",
+        "transaction_observed",
+        "finalized",
+        "failed_terminal"
+      ],
+      "state_transition_rule": "every_transition_is_durable_and_monotonic; submission_started_is_committed_before_the_facilitator_call",
+      "reconciliation_rule": "after_restart_or_lost_HTTP_response_reconcile_by_payer_authorization_nonce_and_recorded_transaction_hash; never issue a blind second settlement",
+      "report_release_state": "finalized_only"
+    },
+    "active_v8_drift_guards": {
+      "package_hash": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
+      "enabled_version": 8,
+      "enabled_contract_hash": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a",
+      "package_lock_status": "Unlocked",
+      "metadata": {
+        "name": "Wrapped CSPR",
+        "symbol": "WCSPR",
+        "decimals": 9,
+        "chain_name": "casper:casper-test"
+      },
+      "transfer_with_authorization_arguments_in_order": [
+        "from:Key",
+        "to:Key",
+        "value:U256",
+        "valid_after:U64",
+        "valid_before:U64",
+        "nonce:List<U8>",
+        "public_key:PublicKey",
+        "signature:List<U8>"
+      ],
+      "return_type": "Unit",
+      "startup_behavior_on_any_drift": "unhealthy_and_settlement_blocked_fail_closed",
+      "runtime_argument_name": "value",
+      "automatic_amount_value_fallback_forbidden": true,
+      "current_upstream_runtime_argument_conflict": "published_1.0.0_settlement_builder_uses_amount",
+      "initial_settlement_state": "blocked_fail_closed",
+      "lift_condition": "successful_finalized_testnet_v8_transfer_with_authorization_bound_to_the_exact_v3_envelope"
+    },
+    "facilitator_security": {
+      "authorization_header": "Authorization",
+      "authorization_value_format": "raw_token_without_bearer",
+      "credentialed_error_body_logging_forbidden": true,
+      "verbose_http_trace_forbidden": true,
+      "unknown_or_malformed_response_behavior": "fail_closed"
+    }
+  },
+  "internal_proof_registry_v1": {
+    "endpoints": {
+      "by_action_id": "GET /internal/proof-registry/v1/actions/{action_id_hex}",
+      "by_signed_payment_payload_hash": "GET /internal/proof-registry/v1/x402/{signed_payment_payload_hash}"
+    },
+    "network_scope": "concordia-internal_only",
+    "authentication": {
+      "type": "service_token",
+      "header": "X-Concordia-Service-Token",
+      "secret_file_environment_name": "X402_GATEWAY_TOKEN_FILE",
+      "runtime_file": "/run/secrets/x402_official_gateway_token",
+      "comparison": "constant_time",
+      "missing_status": 403,
+      "invalid_status": 403
+    },
+    "path_parameters": {
+      "action_id_hex": "lowercase_hex_32_bytes",
+      "signed_payment_payload_hash": "lowercase_hex_32_bytes"
+    },
+    "success_response": {
+      "http_status": 200,
+      "unknown_fields": "reject",
+      "required_fields": [
+        "schema_version",
+        "proposal_id",
+        "proposal_hash",
+        "proposal_nonce",
+        "action_id",
+        "action_kind",
+        "action_version",
+        "envelope_hash",
+        "deployment_domain",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "v3_finalized_exact",
+        "finalization_transaction",
+        "finalized_at",
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "verification_status",
+        "observed_at",
+        "checks"
+      ],
+      "field_types": {
+        "schema_version": "literal_integer:1",
+        "proposal_id": "ascii_proposal_id",
+        "proposal_hash": "lowercase_hex_32_bytes",
+        "proposal_nonce": "lowercase_hex_32_bytes",
+        "action_id": "lowercase_hex_32_bytes",
+        "action_kind": "enum:NativeTransferV1,OfficialX402SettlementV1",
+        "action_version": "u32",
+        "envelope_hash": "lowercase_hex_32_bytes",
+        "deployment_domain": "lowercase_hex_32_bytes",
+        "network": "literal:casper:casper-test",
+        "package_hash": "lowercase_hex_32_bytes",
+        "contract_hash": "lowercase_hex_32_bytes",
+        "v3_finalized_exact": "boolean",
+        "finalization_transaction": "lowercase_hex_32_bytes_or_null",
+        "finalized_at": "rfc3339_utc_or_null",
+        "resource_url_hash": "lowercase_hex_32_bytes_or_null",
+        "report_hash": "lowercase_hex_32_bytes_or_null",
+        "payment_requirements_hash": "lowercase_hex_32_bytes_or_null",
+        "signed_payment_payload_hash": "lowercase_hex_32_bytes_or_null",
+        "verification_status": "enum:verified,pending,stale,unavailable,invalid",
+        "observed_at": "rfc3339_utc",
+        "checks": "array_of_observed_check"
+      },
+      "x402_hashes_must_be_non_null_for": "OfficialX402SettlementV1",
+      "x402_hashes_must_be_null_for": "NativeTransferV1",
+      "v3_finalized_exact_true_requires_non_null": [
+        "proposal_id",
+        "proposal_hash",
+        "proposal_nonce",
+        "action_id",
+        "envelope_hash",
+        "deployment_domain",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "finalization_transaction",
+        "finalized_at"
+      ]
+    },
+    "observed_check": {
+      "required_fields": [
+        "name",
+        "required",
+        "passed",
+        "source",
+        "observed_at"
+      ],
+      "optional_fields": ["detail_code"],
+      "required_type": "boolean",
+      "passed_type": "boolean",
+      "source_type": "artifact_path_or_public_chain_url",
+      "observed_at_type": "rfc3339_utc",
+      "name_unique_within_record": true,
+      "required_check_name_cardinality": "every_required_exact_envelope_check_occurs_exactly_once",
+      "mapped_required_name_may_set_required_false": false,
+      "extra_required_check_failure_blocks_authorization": true,
+      "duplicate_name_behavior": "record_is_invalid_and_v3_finalized_exact_is_false"
+    },
+    "not_found_response": {
+      "http_status": 404,
+      "body": {
+        "error": "action_not_found"
+      }
+    },
+    "ambiguous_x402_response": {
+      "http_status": 409,
+      "body": {"error": "ambiguous_governance_binding"}
+    },
+    "lookup_uniqueness": "exactly_one_current_verified_OfficialX402SettlementV1_registry_record_may_have_the_requested_signed_payment_payload_hash; zero_is_404_and_more_than_one_is_409_fail_closed",
+    "caller_supplied_action_id_allowed": false,
+    "unverified_response_rule": "record_may_be_returned_but_v3_finalized_exact_must_be_false_unless_all_required_checks_pass"
+  },
+  "public_proof_registry_v1": {
+    "transport": {
+      "endpoint": "GET /proof-registry/v1/{proposal_id}",
+      "path_parameter": "ascii_proposal_id",
+      "success_status": 200,
+      "unknown_top_level_fields": "reject",
+      "required_top_level_fields": ["schema_version", "generated_at", "proposal_id", "items"],
+      "field_types": {
+        "schema_version": "literal_integer:1",
+        "generated_at": "rfc3339_utc",
+        "proposal_id": "ascii_proposal_id",
+        "items": "array_of_proof_item"
+      },
+      "known_proposal_without_proofs": "200_with_empty_items_and_no_synthetic_green_item",
+      "unknown_proposal": {"status": 404, "body": {"error": "proposal_not_found"}}
+    },
+    "proof_type_enum": [
+      "historical_odra_receipt_v2",
+      "exact_envelope_v3",
+      "native_treasury_execution_v1",
+      "safepay_v2",
+      "official_x402_settlement_v1",
+      "approval_boundary_v1",
+      "demo_capability_v1",
+      "room_identity_v1",
+      "snapshot"
+    ],
+    "dimensions": {
+      "lineage": [
+        "canonical",
+        "supplemental"
+      ],
+      "observation_mode": [
+        "live",
+        "snapshot",
+        "unavailable"
+      ],
+      "temporal_scope": [
+        "current",
+        "historical"
+      ],
+      "verification_status": [
+        "verified",
+        "pending",
+        "stale",
+        "unavailable",
+        "invalid"
+      ],
+      "execution_outcome": [
+        "accepted",
+        "expected_rejection",
+        "not_applicable",
+        "unexpected_rejection",
+        "not_attempted",
+        "unknown"
+      ]
+    },
+    "item_required_fields": [
+      "proof_id",
+      "proof_type",
+      "generation",
+      "lineage",
+      "observation_mode",
+      "temporal_scope",
+      "verification_status",
+      "execution_outcome",
+      "claim_scope",
+      "enforcement_scope",
+      "proposal_id",
+      "action_id",
+      "envelope_hash",
+      "artifact_path",
+      "artifact_sha256",
+      "source_commit",
+      "deployment_commit",
+      "network",
+      "package_hash",
+      "contract_hash",
+      "schema_version",
+      "captured_at",
+      "payment_requirements_hash",
+      "signed_payment_payload_hash",
+      "report_hash",
+      "settlement_transaction",
+      "checks",
+      "links"
+    ],
+    "item_field_types": {
+      "proof_id": "ascii_machine_identifier_1_to_64",
+      "proof_type": "proof_type_enum",
+      "generation": "enum:v1,v2,v3,none",
+      "lineage": "enum:canonical,supplemental",
+      "observation_mode": "enum:live,snapshot,unavailable",
+      "temporal_scope": "enum:current,historical",
+      "verification_status": "enum:verified,pending,stale,unavailable,invalid",
+      "execution_outcome": "enum:accepted,expected_rejection,not_applicable,unexpected_rejection,not_attempted,unknown",
+      "claim_scope": "nonempty_ascii_string",
+      "enforcement_scope": "nonempty_ascii_string",
+      "proposal_id": "ascii_proposal_id_or_null",
+      "action_id": "lowercase_hex_32_bytes_or_null",
+      "envelope_hash": "lowercase_hex_32_bytes_or_null",
+      "artifact_path": "repository_relative_path_or_null",
+      "artifact_sha256": "lowercase_hex_32_bytes_or_null",
+      "source_commit": "lowercase_git_sha40_or_null",
+      "deployment_commit": "lowercase_git_sha40_or_null",
+      "network": "ascii_network_identifier_or_null",
+      "package_hash": "lowercase_hex_32_bytes_or_null",
+      "contract_hash": "lowercase_hex_32_bytes_or_null",
+      "schema_version": "ascii_string_or_null",
+      "captured_at": "rfc3339_utc_or_null",
+      "payment_requirements_hash": "lowercase_hex_32_bytes_or_null",
+      "signed_payment_payload_hash": "lowercase_hex_32_bytes_or_null",
+      "report_hash": "lowercase_hex_32_bytes_or_null",
+      "settlement_transaction": "lowercase_hex_32_bytes_or_null",
+      "checks": "array_of_observed_check",
+      "links": "array_of_typed_link"
+    },
+    "nullability_rules": [
+      "unavailable_items_may_use_null_for_artifact_commit_network_chain_and_x402_identity_fields_but_must_never_fabricate_values",
+      "verified_items_require_non_null_artifact_path_artifact_sha256_source_commit_schema_version_and_captured_at",
+      "verified_live_current_items_also_require_non_null_deployment_commit",
+      "exact_envelope_v3_and_execution_items_require_non_null_proposal_id_action_id_envelope_hash_network_package_hash_and_contract_hash",
+      "official_x402_settlement_v1_requires_all_four_x402_hash_or_transaction_fields_non_null_when_verified"
+    ],
+    "observed_check": {
+      "required_fields": ["name", "required", "passed", "source", "observed_at"],
+      "optional_fields": ["detail_code"],
+      "field_types": {
+        "name": "ascii_machine_identifier_1_to_64",
+        "required": "boolean",
+        "passed": "boolean",
+        "source": "repository_relative_path_or_https_url",
+        "observed_at": "rfc3339_utc",
+        "detail_code": "ascii_machine_identifier_1_to_64_or_null"
+      },
+      "name_unique_within_item": true,
+      "required_check_name_cardinality": "every_name_in_required_checks_by_proof_type_occurs_exactly_once",
+      "mapped_required_name_may_set_required_false": false,
+      "extra_required_check_failure_blocks_green": true,
+      "duplicate_name_behavior": "item_is_invalid"
+    },
+    "typed_link": {
+      "required_fields": ["rel", "label", "href", "kind"],
+      "field_types": {
+        "rel": "ascii_machine_identifier_1_to_64",
+        "label": "nonempty_ascii_string",
+        "href": "absolute_https_url_or_dashboard_basepath_relative_path",
+        "kind": "enum:artifact,chain,source,ui,download"
+      }
+    },
+    "green_visual_predicate": "verification_status_equals_verified_and_every_mapped_required_check_occurs_exactly_once_required_true_passed_true_and_every_extra_required_check_passes_and_observation_mode_is_not_unavailable_and_execution_outcome_is_one_of_accepted_expected_rejection_not_applicable",
+    "top_level_asserted_boolean_can_verify": false,
+    "required_checks_by_proof_type": {
+      "historical_odra_receipt_v2": [
+        "artifact_hash_recomputed",
+        "historical_card_chain_recomputed",
+        "deploy_processed_without_execution_error",
+        "receipt_arguments_match_historical_artifact",
+        "package_and_contract_match_historical_manifest",
+        "historical_lineage_matches_frozen_inventory"
+      ],
+      "exact_envelope_v3": [
+        "source_tree_sha256_matches_release_manifest",
+        "wasm_sha256_matches_release_manifest",
+        "generated_schema_sha256_matches_release_manifest",
+        "envelope_hash_recomputed_from_typed_fields",
+        "proposal_commitment_matches_envelope_hash",
+        "signer_set_and_threshold_match_deployment",
+        "pre_quorum_finalize_reverted_with_code_8",
+        "post_quorum_mutated_envelope_reverted_with_code_10",
+        "exact_envelope_finalization_accepted",
+        "repeat_finalization_reverted_with_code_12",
+        "finalization_deploy_processed_without_execution_error",
+        "contract_readback_marks_proposal_finalized",
+        "contract_readback_marks_action_authorized",
+        "package_contract_and_deployment_domain_match_manifest"
+      ],
+      "native_treasury_execution_v1": [
+        "exact_envelope_v3_verified",
+        "executor_journal_signed_bytes_hash_matches",
+        "single_broadcast_or_reconciled_by_deploy_hash",
+        "snapshot_block_hash_height_and_state_root_are_canonical",
+        "source_balance_at_snapshot_state_root_equals_treasury_snapshot_balance_motes",
+        "snapshot_precedes_v3_finalization_and_native_execution",
+        "transfer_source_exact",
+        "transfer_recipient_exact",
+        "transfer_amount_exact",
+        "transfer_id_exact",
+        "deploy_finalized_without_execution_error",
+        "post_execution_source_and_recipient_balances_observed",
+        "no_second_native_transaction_for_action_id"
+      ],
+      "safepay_v2": [
+        "quote_hash_recomputed",
+        "issued_quote_row_matches_and_survives_restart",
+        "per_quote_correlation_id_recomputed_and_equals_native_transfer_id",
+        "payment_deploy_finalized_without_execution_error",
+        "single_native_transfer_exact",
+        "payee_amount_and_transfer_id_exact",
+        "proposal_resource_and_correlation_exact",
+        "report_hash_recomputed_and_matches_quote",
+        "provider_consumption_row_matches_payment_and_binding",
+        "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
+        "cross_binding_reuse_returned_terminal_409"
+      ],
+      "official_x402_settlement_v1": [
+        "exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash",
+        "resource_object_equals_configured_resource",
+        "accepted_equals_current_payment_requirements",
+        "payment_requirements_argument_equals_accepted",
+        "eip712_signature_verified",
+        "public_key_account_hash_equals_payer",
+        "authorization_equals_envelope_payer_payee_value_nonce_and_window",
+        "resource_url_hash_matches_envelope",
+        "report_hash_matches_envelope",
+        "payment_requirements_hash_matches_envelope",
+        "signed_payment_payload_hash_matches_envelope",
+        "active_wcspr_v8_pre_verify_drift_guard_passed",
+        "facilitator_verify_returned_isValid_true",
+        "active_wcspr_v8_pre_settle_drift_guard_passed",
+        "facilitator_settlement_response_success_true",
+        "settlement_transaction_finalized_without_execution_error",
+        "active_wcspr_v8_post_settle_target_and_args_readback_passed",
+        "fulfillment_authorization_nonce_unique_binding_matches",
+        "fulfillment_restart_reconciliation_passed",
+        "exact_retry_returned_stored_fulfillment_without_second_settlement",
+        "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission",
+        "protected_report_released_only_after_finalized_state"
+      ],
+      "approval_boundary_v1": [
+        "caddy_basic_auth_observed",
+        "proxy_secret_header_overwritten_by_caddy",
+        "gateway_bcrypt_check_passed",
+        "approver_allowlist_check_passed",
+        "csrf_check_passed",
+        "nonce_consumed_exactly_once",
+        "trusted_human_message_origin_matches_approval_boundary"
+      ],
+      "demo_capability_v1": [
+        "capability_signature_valid",
+        "scenario_and_client_binding_exact",
+        "capability_unexpired_at_first_consumption",
+        "capability_consumed_atomically",
+        "demo_run_provenance_present_on_all_created_records",
+        "cleanup_scope_exact_demo_run_id",
+        "canonical_ids_excluded_from_cleanup"
+      ],
+      "room_identity_v1": [
+        "sender_identity_derived_from_authenticated_key",
+        "sender_role_derived_from_authenticated_key",
+        "agent_sender_type_is_agent",
+        "room_membership_enforced",
+        "role_operation_matrix_enforced",
+        "gateway_secret_fallback_not_used"
+      ],
+      "snapshot": [
+        "artifact_sha256_recomputed",
+        "capture_time_present",
+        "source_https_url_present",
+        "staleness_check_passed"
+      ]
+    },
+    "initial_state_for_new_unobserved_proof": {
+      "lineage": "supplemental",
+      "observation_mode": "unavailable",
+      "temporal_scope": "current",
+      "verification_status": "unavailable",
+      "execution_outcome": "not_attempted",
+      "checks": []
+    },
+    "historical_isolation": {
+      "historical_canonical_chain_mutable": false,
+      "new_v3_or_execution_proofs_append_to_historical_chain": false,
+      "new_proofs_are_separate_versioned_items": true
+    }
+  }
+}

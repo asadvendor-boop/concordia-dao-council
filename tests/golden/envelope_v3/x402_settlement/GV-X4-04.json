@@ -1,0 +1,241 @@
+{
+  "action_core_hex": "00000002000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a0000000c5772617070656420435350520000000557435350520000000131095e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c5252525252525252525252525252525252525252525252525252525252525252ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa39d3847673413912aa69caf2fe80e8c9d7ab8001acefddbcb32bd86da612e36a3acb5075c53fa7ab7f4fdaeaad576858280956d7d6ada07b8a607a6406e94971c5656565656565656565656565656565656565656565656565656565656565656000000006a612140000000006a612f5000000016637370722d636c6f75642d666163696c697461746f7200000001",
+  "canonical_hex": "00000002000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a0000000c5772617070656420435350520000000557435350520000000131095e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c5252525252525252525252525252525252525252525252525252525252525252ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa39d3847673413912aa69caf2fe80e8c9d7ab8001acefddbcb32bd86da612e36a3acb5075c53fa7ab7f4fdaeaad576858280956d7d6ada07b8a607a6406e94971c5656565656565656565656565656565656565656565656565656565656565656000000006a612140000000006a612f50585858585858585858585858585858585858585858585858585858585858585800000016637370722d636c6f75642d666163696c697461746f7200000001",
+  "canonical_length": 464,
+  "description": "U256 is always fixed 32-byte big-endian at zero, one, and maximum.",
+  "expected_error": null,
+  "hashes": {
+    "action_id": "a3d65261fc018d6519f26954d91ce77059d5c7bebb21eced2bc0c46d8c5280c4",
+    "envelope_hash": "529a194680672e8ee6a1847d89fb86963c8a4b5e9bab3e9b9e9d671ff39366e8"
+  },
+  "kind": "official_x402_settlement_v1",
+  "typed_input": {
+    "body": [
+      {
+        "name": "x402_version",
+        "type": "u32",
+        "value": "2"
+      },
+      {
+        "name": "scheme",
+        "type": "String",
+        "value": "exact"
+      },
+      {
+        "name": "caip2_network",
+        "type": "String",
+        "value": "casper:casper-test"
+      },
+      {
+        "name": "wcspr_package",
+        "type": "Bytes32",
+        "value": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e"
+      },
+      {
+        "name": "wcspr_contract",
+        "type": "Bytes32",
+        "value": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+      },
+      {
+        "name": "token_name",
+        "type": "String",
+        "value": "Wrapped CSPR"
+      },
+      {
+        "name": "token_symbol",
+        "type": "String",
+        "value": "WCSPR"
+      },
+      {
+        "name": "eip712_domain_version",
+        "type": "String",
+        "value": "1"
+      },
+      {
+        "name": "token_decimals",
+        "type": "u8",
+        "value": "9"
+      },
+      {
+        "name": "payer",
+        "type": "AccountHash",
+        "value": "5e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c"
+      },
+      {
+        "name": "payee",
+        "type": "AccountHash",
+        "value": "5252525252525252525252525252525252525252525252525252525252525252"
+      },
+      {
+        "name": "value",
+        "type": "U256",
+        "value": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      },
+      {
+        "name": "resource_url_hash",
+        "type": "Bytes32",
+        "value": "20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798"
+      },
+      {
+        "name": "report_hash",
+        "type": "Bytes32",
+        "value": "f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3"
+      },
+      {
+        "name": "payment_requirements_hash",
+        "type": "Bytes32",
+        "value": "9d3847673413912aa69caf2fe80e8c9d7ab8001acefddbcb32bd86da612e36a3"
+      },
+      {
+        "name": "signed_payment_payload_hash",
+        "type": "Bytes32",
+        "value": "acb5075c53fa7ab7f4fdaeaad576858280956d7d6ada07b8a607a6406e94971c"
+      },
+      {
+        "name": "eip712_auth_nonce",
+        "type": "Bytes32",
+        "value": "5656565656565656565656565656565656565656565656565656565656565656"
+      },
+      {
+        "name": "valid_after",
+        "type": "u64",
+        "value": "1784750400"
+      },
+      {
+        "name": "valid_before",
+        "type": "u64",
+        "value": "1784754000"
+      },
+      {
+        "name": "action_nonce",
+        "type": "Bytes32",
+        "value": "5858585858585858585858585858585858585858585858585858585858585858"
+      },
+      {
+        "name": "settlement_target",
+        "type": "String",
+        "value": "cspr-cloud-facilitator"
+      },
+      {
+        "name": "settlement_version",
+        "type": "u32",
+        "value": "1"
+      }
+    ],
+    "header": [
+      {
+        "name": "schema_version",
+        "type": "u32",
+        "value": "3"
+      },
+      {
+        "name": "deployment_domain",
+        "type": "Bytes32",
+        "value": "40804e79504df011ccbe7326898a9d7e489e01b445f483a199467584ddfb5726"
+      },
+      {
+        "name": "casper_chain_name",
+        "type": "String",
+        "value": "casper-test"
+      },
+      {
+        "name": "proposal_id",
+        "type": "String",
+        "value": "X402-U256-MAX"
+      },
+      {
+        "name": "proposal_nonce",
+        "type": "Bytes32",
+        "value": "6060606060606060606060606060606060606060606060606060606060606060"
+      },
+      {
+        "name": "decision_code",
+        "type": "u8",
+        "value": "1"
+      },
+      {
+        "name": "requested_allocation_bps",
+        "type": "u32",
+        "value": "0"
+      },
+      {
+        "name": "approved_allocation_bps",
+        "type": "u32",
+        "value": "0"
+      },
+      {
+        "name": "action_kind",
+        "type": "u8",
+        "value": "2"
+      },
+      {
+        "name": "action_version",
+        "type": "u32",
+        "value": "1"
+      },
+      {
+        "name": "action_id",
+        "type": "Bytes32",
+        "value": "a3d65261fc018d6519f26954d91ce77059d5c7bebb21eced2bc0c46d8c5280c4"
+      },
+      {
+        "name": "proposal_hash",
+        "type": "Bytes32",
+        "value": "3131313131313131313131313131313131313131313131313131313131313131"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Bytes32",
+        "value": "3232323232323232323232323232323232323232323232323232323232323232"
+      },
+      {
+        "name": "plan_hash",
+        "type": "Bytes32",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "name": "final_card_hash",
+        "type": "Bytes32",
+        "value": "3434343434343434343434343434343434343434343434343434343434343434"
+      },
+      {
+        "name": "dissent_hash",
+        "type": "Bytes32",
+        "value": "3535353535353535353535353535353535353535353535353535353535353535"
+      },
+      {
+        "name": "agent_action_hash",
+        "type": "Bytes32",
+        "value": "3636363636363636363636363636363636363636363636363636363636363636"
+      },
+      {
+        "name": "preauth_evidence_root",
+        "type": "Bytes32",
+        "value": "3737373737373737373737373737373737373737373737373737373737373737"
+      },
+      {
+        "name": "authorized_metadata_root",
+        "type": "Bytes32",
+        "value": "3838383838383838383838383838383838383838383838383838383838383838"
+      }
+    ]
+  },
+  "u256_cases": [
+    {
+      "canonical_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "decimal": "0",
+      "scalar_encoding_only": true,
+      "valid_settlement_value": false
+    },
+    {
+      "canonical_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "decimal": "1"
+    },
+    {
+      "canonical_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "decimal": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+    }
+  ],
+  "valid": true,
+  "vector_id": "GV-X4-04"
+}

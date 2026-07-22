@@ -1,0 +1,113 @@
+{
+  "canonical_hex": null,
+  "canonical_length": null,
+  "description": "Basis points above 10000 are rejected before encoding.",
+  "expected_error": {
+    "code": 15,
+    "name": "InvalidEnvelopeField"
+  },
+  "failed_field": "requested_allocation_bps",
+  "hashes": {},
+  "kind": "envelope_header_v3",
+  "typed_input": {
+    "fields": [
+      {
+        "name": "schema_version",
+        "type": "u32",
+        "value": "3"
+      },
+      {
+        "name": "deployment_domain",
+        "type": "Bytes32",
+        "value": "40804e79504df011ccbe7326898a9d7e489e01b445f483a199467584ddfb5726"
+      },
+      {
+        "name": "casper_chain_name",
+        "type": "String",
+        "value": "casper-test"
+      },
+      {
+        "name": "proposal_id",
+        "type": "String",
+        "value": "DAO-PROP-V3-001"
+      },
+      {
+        "name": "proposal_nonce",
+        "type": "Bytes32",
+        "value": "1010101010101010101010101010101010101010101010101010101010101010"
+      },
+      {
+        "name": "decision_code",
+        "type": "u8",
+        "value": "2"
+      },
+      {
+        "name": "requested_allocation_bps",
+        "type": "u32",
+        "value": "10001"
+      },
+      {
+        "name": "approved_allocation_bps",
+        "type": "u32",
+        "value": "800"
+      },
+      {
+        "name": "action_kind",
+        "type": "u8",
+        "value": "1"
+      },
+      {
+        "name": "action_version",
+        "type": "u32",
+        "value": "1"
+      },
+      {
+        "name": "action_id",
+        "type": "Bytes32",
+        "value": "2020202020202020202020202020202020202020202020202020202020202020"
+      },
+      {
+        "name": "proposal_hash",
+        "type": "Bytes32",
+        "value": "3131313131313131313131313131313131313131313131313131313131313131"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Bytes32",
+        "value": "3232323232323232323232323232323232323232323232323232323232323232"
+      },
+      {
+        "name": "plan_hash",
+        "type": "Bytes32",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "name": "final_card_hash",
+        "type": "Bytes32",
+        "value": "3434343434343434343434343434343434343434343434343434343434343434"
+      },
+      {
+        "name": "dissent_hash",
+        "type": "Bytes32",
+        "value": "3535353535353535353535353535353535353535353535353535353535353535"
+      },
+      {
+        "name": "agent_action_hash",
+        "type": "Bytes32",
+        "value": "3636363636363636363636363636363636363636363636363636363636363636"
+      },
+      {
+        "name": "preauth_evidence_root",
+        "type": "Bytes32",
+        "value": "3737373737373737373737373737373737373737373737373737373737373737"
+      },
+      {
+        "name": "authorized_metadata_root",
+        "type": "Bytes32",
+        "value": "3838383838383838383838383838383838383838383838383838383838383838"
+      }
+    ]
+  },
+  "valid": false,
+  "vector_id": "GV-HDR-05"
+}

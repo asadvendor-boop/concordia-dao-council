@@ -1,0 +1,102 @@
+{
+  "schema": "concordia-wcspr-facilitator-readback-v1",
+  "observed_at": "2026-07-22T18:40:51Z",
+  "network": "casper:casper-test",
+  "chainspec_name": "casper-test",
+  "rpc": "https://node.testnet.casper.network/rpc",
+  "observation": {
+    "block_hash": "55e5c5715d9c6fd17d01b5de758fa1274d7360fcac56adfc12c0af80ee1f27c2",
+    "block_height": 8590556,
+    "block_timestamp": "2026-07-22T18:34:15.635Z",
+    "state_root_hash": "ab8e7bf40bcf17d83b2bc1cdcdede8363485d277373089eafe411f2af96f8d93",
+    "protocol_version": "2.2.2"
+  },
+  "package": {
+    "hash": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
+    "lock_status": "Unlocked",
+    "enabled_version": 8,
+    "enabled_contract_hash": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a",
+    "disabled_versions": [1, 2, 3, 4, 5, 6, 7]
+  },
+  "metadata": {
+    "name": {"cl_type": "String", "value": "Wrapped CSPR"},
+    "symbol": {"cl_type": "String", "value": "WCSPR"},
+    "decimals": {"cl_type": "U8", "value": 9},
+    "chain_name": {"cl_type": "String", "value": "casper:casper-test"},
+    "eip712_version": {
+      "value": "1",
+      "source": "official SDK convention; not an on-chain named key"
+    }
+  },
+  "transfer_with_authorization": {
+    "access": "Public",
+    "entry_point_type": "Called",
+    "arguments": [
+      {"name": "from", "cl_type": "Key"},
+      {"name": "to", "cl_type": "Key"},
+      {"name": "value", "cl_type": "U256"},
+      {"name": "valid_after", "cl_type": "U64"},
+      {"name": "valid_before", "cl_type": "U64"},
+      {"name": "nonce", "cl_type": "List<U8>"},
+      {"name": "public_key", "cl_type": "PublicKey"},
+      {"name": "signature", "cl_type": "List<U8>"}
+    ],
+    "return": "Unit"
+  },
+  "facilitator": {
+    "base_url": "https://x402-facilitator.cspr.cloud",
+    "authorization": "raw token in Authorization header; never Bearer",
+    "credential_reflection_risk": "401 response can include the submitted authorization value; response bodies and verbose traces are forbidden for credentialed probes",
+    "authenticated_supported_probe": {
+      "http_status": 200,
+      "response_keys": ["extensions", "kinds", "signers"],
+      "supported_kinds": [
+        {"x402Version": 2, "scheme": "exact", "network": "casper:casper"},
+        {"x402Version": 2, "scheme": "exact", "network": "casper:casper-test"}
+      ],
+      "credential_or_body_printed": false,
+      "proves": "capability discovery only"
+    }
+  },
+  "wire": {
+    "outer_x402Version": 2,
+    "paymentPayload_x402Version": 2,
+    "requirements_amount_field": "amount as decimal string",
+    "authorization_value_field": "value as decimal string",
+    "asset": "bare 64-hex package hash",
+    "account_wire": "00 plus 64-hex account hash",
+    "network": "casper:casper-test",
+    "extra": {
+      "name": "Wrapped CSPR",
+      "version": "1",
+      "decimals": "9",
+      "symbol": "WCSPR"
+    }
+  },
+  "compatibility_finding": {
+    "severity": "release_blocking_until_live_canary",
+    "official_js_runtime_arg": "amount",
+    "official_go_runtime_arg": "amount",
+    "live_v8_runtime_arg": "value",
+    "go_domain_observation": "appears to use casper-test while JS/live EIP-712 domain uses casper:casper-test",
+    "required_behavior": "blocked_fail_closed",
+    "automatic_fallback_forbidden": true,
+    "verification_is_not_settlement": true,
+    "lift_condition": "successful finalized Testnet v8 transfer_with_authorization through the hosted CSPR.cloud facilitator bound to the exact v3 envelope",
+    "success_status": "official_hosted_verified_live",
+    "self_hosted_status": "self_hosted_compatibility_proof",
+    "self_hosted_satisfies_official_deliverable": false
+  },
+  "primary_sources": [
+    "https://docs.cspr.cloud/x402-facilitator-api/reference.md",
+    "https://docs.cspr.cloud/x402-facilitator-api/supported.md",
+    "https://docs.cspr.cloud/x402-facilitator-api/verify.md",
+    "https://github.com/make-software/casper-x402/blob/14c364bb30838003302074423b7500b4360df889/.env.testnet#L2-L12",
+    "https://github.com/make-software/casper-x402/blob/14c364bb30838003302074423b7500b4360df889/js/packages/mechanisms/casper/src/types.ts#L5-L30",
+    "https://github.com/make-software/casper-x402/blob/14c364bb30838003302074423b7500b4360df889/js/packages/mechanisms/casper/src/exact/client/scheme.ts#L7-L15",
+    "https://github.com/make-software/casper-x402/blob/14c364bb30838003302074423b7500b4360df889/js/packages/mechanisms/casper/src/exact/facilitator/scheme.ts#L471-L495",
+    "https://github.com/make-software/casper-x402/blob/14c364bb30838003302074423b7500b4360df889/go/x402/mechanisms/casper/exact/facilitator/scheme.go#L281-L288",
+    "https://github.com/x402-foundation/x402/blob/b32a7023e93f3acb99fcc55ebb70151f5296948b/typescript/packages/core/src/types/payments.ts#L12-L36",
+    "https://github.com/x402-foundation/x402/blob/b32a7023e93f3acb99fcc55ebb70151f5296948b/typescript/packages/core/src/types/facilitator.ts#L4-L49"
+  ]
+}
