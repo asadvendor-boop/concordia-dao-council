@@ -30,9 +30,13 @@ function run(...args) {
 
 test("first public release requires interactive 2FA and does not force an unsupported provenance claim", async () => {
   const metadata = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
+  const readme = await readFile(path.join(PACKAGE_ROOT, "README.md"), "utf8");
   assert.deepEqual(metadata.publishConfig, { access: "public" });
   assert.equal(Object.hasOwn(metadata.publishConfig, "provenance"), false);
   assert.equal(Object.hasOwn(metadata.scripts, "publish"), false);
+  assert.match(readme, /registry\/artifact modes use bounded `GET` requests/);
+  assert.match(readme, /Live mode sends `POST`\s+requests only for an explicit allowlist of read-only Casper JSON-RPC methods/);
+  assert.doesNotMatch(readme, /performs\s+only `GET` requests/);
 });
 
 before(async () => {
