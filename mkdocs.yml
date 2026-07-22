@@ -1,0 +1,83 @@
+# Concordia DAO Council — public documentation site.
+#
+# SAFETY: docs_dir is the curated docs-site/ tree, NOT the internal docs/
+# directory. Internal working documents in docs/ are source material only and
+# must never be auto-exposed. Navigation is explicit; nothing is auto-discovered.
+
+site_name: Concordia DAO Council
+site_url: https://docs.concordiadao.xyz/
+site_description: >-
+  Concordia DAO Council is the Casper governance firewall for AI-run DAOs:
+  advisory agents deliberate, a deterministic core seals evidence, and only the
+  exact approved envelope can execute on-chain.
+
+repo_url: https://github.com/asadvendor-boop/concordia-dao-council
+repo_name: concordia-dao-council
+edit_uri: ""
+
+docs_dir: docs-site
+
+# Safety net: even inside the curated tree, never publish drafts, partials,
+# or editor leftovers.
+exclude_docs: |
+  drafts/
+  internal/
+  *.draft.md
+  *.tmp
+  *.orig
+  *.bak
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.footer
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.integrate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - On-Chain Governance Receipts: governance-receipts.md
+  - Proof & Verification: proof-verification.md
+  - SafePay Lite: safepay-lite.md
+  - Official x402: official-x402.md
+  - Judge Walkthrough Quickstart: judge-walkthrough.md
+  - Links: links.md
