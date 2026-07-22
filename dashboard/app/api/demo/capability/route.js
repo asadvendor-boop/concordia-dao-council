@@ -6,36 +6,30 @@ import {
   clientNonceFromCookie,
   gatewayUrl,
   liveDemoDisabledResponse,
+  mintClientNonce,
   readDashboardToken,
   readGatewayResponse,
   setClientCookie,
 } from "../_shared";
 
 /**
- * Thin same-origin proxy: activate a previously issued demo capability
- * (demo capability v1). The browser presents only the opaque capability and
- * its binding cookie; the Gateway validates and runs the scenario. The
- * dashboard never holds the operator token or the capability HMAC secret,
- * and there is no public reset path.
+ * Thin same-origin proxy: request a demo capability from the Gateway
+ * (demo capability v1). Manages only the ephemeral client-binding cookie;
+ * the Gateway is the sole issuer and HMAC validator. No operator token.
  */
 export async function POST(request) {
   const disabled = liveDemoDisabledResponse(NextResponse);
   if (disabled) return disabled;
 
-  let capability = "";
   let scenarioId = "";
   try {
     const body = await request.json();
-    capability = String(body?.capability || "").trim();
     scenarioId = String(body?.scenario_id || "").trim();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  if (!capability || !scenarioId) {
-    return NextResponse.json(
-      { error: "capability and scenario_id are required" },
-      { status: 400 }
-    );
+  if (!scenarioId) {
+    return NextResponse.json({ error: "scenario_id is required" }, { status: 400 });
   }
 
   const dashboardToken = readDashboardToken();
@@ -46,28 +40,26 @@ export async function POST(request) {
     );
   }
 
-  const clientNonce = clientNonceFromCookie(request);
+  // Server-generated random 32-byte client nonce (cookie ⇄ header binding).
+  let clientNonce = clientNonceFromCookie(request);
   if (!clientNonce) {
-    // Without the binding cookie the capability can never validate.
-    return NextResponse.json(
-      { error: "Demo client is not initialized — request a capability first." },
-      { status: 400 }
-    );
+    clientNonce = mintClientNonce();
   }
 
   try {
-    const response = await fetch(`${gatewayUrl()}/internal/demo/activate`, {
+    const response = await fetch(`${gatewayUrl()}/internal/demo/capability`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         [DASHBOARD_TOKEN_HEADER]: dashboardToken,
         [CLIENT_NONCE_HEADER]: clientNonce,
       },
-      body: JSON.stringify({ capability, scenario_id: scenarioId }),
+      body: JSON.stringify({ scenario_id: scenarioId }),
       cache: "no-store",
     });
     const data = await readGatewayResponse(response);
     const proxied = NextResponse.json(data, { status: response.status });
+    // Always refresh the ephemeral binding cookie (Max-Age 600).
     return setClientCookie(proxied, clientNonce);
   } catch {
     return NextResponse.json(
