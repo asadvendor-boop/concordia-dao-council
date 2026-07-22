@@ -1,0 +1,192 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { before, test } from "node:test";
+
+import { canonicalTranscriptJson, parseJsonStrict, verifyExactEnvelopeV3Artifact } from "../dist/index.js";
+
+const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
+let baseline;
+
+function sha256Canonical(value) {
+  return createHash("sha256")
+    .update(canonicalTranscriptJson(value, "test transcript"), "ascii")
+    .digest("hex");
+}
+
+before(() => {
+  const script = [
+    "import json",
+    "from tests.test_clvalue_roundtrip import _bound_v3_proof",
+    "proof, _, _ = _bound_v3_proof()",
+    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
+  ].join("\n");
+  const raw = execFileSync("uv", ["run", "--frozen", "python", "-c", script], {
+    cwd: REPOSITORY,
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  baseline = parseJsonStrict(raw);
+});
+
+test("exact-envelope v3 adapter independently verifies the frozen seven-step proof", () => {
+  const facts = verifyExactEnvelopeV3Artifact(baseline);
+  assert.equal(facts.schemaId, "concordia.v3-proof-verification.v1");
+  assert.equal(facts.network, "casper-test");
+  assert.equal(facts.proposalId, "DAO-PROP-V3-001");
+  assert.equal(facts.actionId, baseline.prepared.action_id);
+  assert.equal(facts.envelopeHash, baseline.prepared.envelope_hash);
+  assert.equal(facts.packageHash, baseline.deployment.package_hash);
+  assert.equal(facts.contractHash, baseline.deployment.contract_hash);
+  assert.equal(facts.deploymentDomain, baseline.deployment.deployment_domain);
+  assert.equal(facts.installDeployHash, baseline.deployment.install_deploy_hash.toLowerCase());
+  assert.equal(facts.contractStepOutcomes.finalize_pre_quorum.userError, 8);
+  assert.equal(facts.contractStepOutcomes.finalize_mutated_3000_bps.userError, 10);
+  assert.equal(facts.contractStepOutcomes.finalize_exact.success, true);
+  assert.equal(facts.contractStepOutcomes.finalize_again.userError, 12);
+  assert.ok(facts.finalizationBlockHeight <= facts.observedBlockHeight);
+});
+
+test("exact-envelope v3 adapter rejects every unbound summary or raw-evidence mutation", () => {
+  const mutations = [
+    ["unknown top-level assertion", (proof) => { proof.valid = true; }, /frozen own fields/i],
+    ["typed amount", (proof) => { proof.input.body.amount_motes = "1"; }, /amount|recomputation|prepared/i],
+    ["prepared CLValue bytes", (proof) => { proof.prepared.runtime_args[0].bytes = "00"; }, /CLValue|String|bytes/i],
+    ["release source hash", (proof) => { proof.deployment.source.lib_rs_sha256 = "ff".repeat(32); }, /deployment source|packaged/i],
+    ["install wasm", (proof) => {
+      const session = proof.deployment.raw_rpc.install_deploy.response.result.deploy.session.ModuleBytes;
+      session.module_bytes = `${session.module_bytes.startsWith("00") ? "ff" : "00"}${session.module_bytes.slice(2)}`;
+    }, /body hash|Wasm|release/i],
+    ["impossible install timestamp", (proof) => {
+      proof.deployment.raw_rpc.install_deploy.response.result.deploy.header.timestamp = "2026-02-31T00:00Z";
+    }, /timestamp/i],
+    ["run signature", (proof) => {
+      proof.run.steps[0].deploy.approvals[0].signature = `01${"00".repeat(64)}`;
+    }, /signature/i],
+    ["node-returned deploy", (proof) => {
+      proof.run.steps[0].finality_transcript.response.result.deploy.header.gas_price = 2;
+    }, /checksum|hash|node-returned/i],
+    ["wrong rejection code", (proof) => {
+      proof.run.steps[1].finality_transcript.response.result.execution_info.execution_result.Version2.error_message = "User error: 9";
+    }, /checksum|outcome|User error/i],
+    ["readback fact", (proof) => { proof.readback.facts.action_authorized = false; }, /checksum|facts|authorization|readback/i],
+    ["raw state", (proof) => {
+      const state = proof.readback.transcripts.find((item) => item.method === "state_get_dictionary_item");
+      state.response.result.stored_value.CLValue.parsed[0] ^= 1;
+    }, /checksum|parsed|CLValue|readback/i],
+  ];
+  for (const [label, mutate, pattern] of mutations) {
+    const proof = structuredClone(baseline);
+    mutate(proof);
+    assert.throws(() => verifyExactEnvelopeV3Artifact(proof), pattern, label);
+  }
+});
+
+test("exact-envelope v3 adapter requires own frozen fields", () => {
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(Object.create(baseline)),
+    /own fields/i,
+  );
+});
+
+test("exact-envelope v3 adapter reads the installer package key only from a strict Account.named_keys", () => {
+  const conflicting = structuredClone(baseline);
+  const storedValue = conflicting.deployment.raw_rpc.installer_account.response.result.stored_value;
+  const expected = storedValue.Account.named_keys[0].key;
+  storedValue.Account.named_keys[0].key = `hash-${"bb".repeat(32)}`;
+  storedValue.decoy = {
+    name: "concordia_governance_receipt_v3",
+    key: expected,
+  };
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(conflicting),
+    /stored value|named key|Account/i,
+  );
+
+  const duplicate = structuredClone(baseline);
+  duplicate.deployment.raw_rpc.installer_account.response.result.stored_value.Account.named_keys.push({
+    name: "concordia_governance_receipt_v3",
+    key: `hash-${"cc".repeat(32)}`,
+  });
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(duplicate),
+    /duplicate.*named key/i,
+  );
+});
+
+test("exact-envelope v3 adapter rejects nonmonotonic step finality after checksums are resealed", () => {
+  const proof = structuredClone(baseline);
+  const transcript = proof.run.steps[1].finality_transcript;
+  transcript.response.result.execution_info.block_height =
+    proof.run.steps[0].finality_transcript.response.result.execution_info.block_height - 1;
+  transcript.canonical_sha256 = sha256Canonical({
+    request: transcript.request,
+    response: transcript.response,
+  });
+  assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /nonmonotonic/i);
+});
+
+test("exact-envelope v3 adapter rejects two different canonical blocks at one step height", () => {
+  const proof = structuredClone(baseline);
+  const transcript = proof.run.steps[1].finality_transcript;
+  transcript.response.result.execution_info.block_hash = "ef".repeat(32);
+  transcript.canonical_sha256 = sha256Canonical({
+    request: transcript.request,
+    response: transcript.response,
+  });
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(proof),
+    /another block at the same height/i,
+  );
+});
+
+test("exact-envelope v3 adapter requires contract choreography after the install block", () => {
+  const proof = structuredClone(baseline);
+  const deployment = proof.deployment;
+  deployment.raw_rpc.install_deploy.response.result.execution_info.block_height = 9_002;
+  deployment.verified_install_deploy.block_height = 9_002;
+  deployment.install_block_height = 9_002;
+  deployment.finality.block_height = 9_002;
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(proof),
+    /after the verified contract installation/i,
+  );
+});
+
+test("exact-envelope v3 adapter rejects a validly resealed readback from before finalization", () => {
+  const proof = structuredClone(baseline);
+  const finalizeHeight = proof.run.steps[5].finality_transcript.response.result.execution_info.block_height;
+  const blockTranscript = proof.readback.transcripts.find((item) => item.method === "chain_get_block");
+  blockTranscript.response.result.block_with_signatures.block.Version2.header.height = finalizeHeight - 1;
+  blockTranscript.canonical_sha256 = sha256Canonical({
+    request: blockTranscript.request,
+    response: blockTranscript.response,
+  });
+  proof.readback.facts.observed_block_height = finalizeHeight - 1;
+  const withoutHash = structuredClone(proof.readback);
+  delete withoutHash.artifact_sha256;
+  proof.readback.artifact_sha256 = sha256Canonical(withoutHash);
+  proof.run.readback = structuredClone(proof.readback);
+  assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /predates.*finalization/i);
+});
+
+test("exact-envelope v3 adapter rejects a readback from a competing block at the finalization height", () => {
+  const proof = structuredClone(baseline);
+  const finalizeHeight = proof.run.steps[5].finality_transcript.response.result.execution_info.block_height;
+  const blockTranscript = proof.readback.transcripts.find((item) => item.method === "chain_get_block");
+  blockTranscript.response.result.block_with_signatures.block.Version2.header.height = finalizeHeight;
+  blockTranscript.canonical_sha256 = sha256Canonical({
+    request: blockTranscript.request,
+    response: blockTranscript.response,
+  });
+  proof.readback.facts.observed_block_height = finalizeHeight;
+  const withoutHash = structuredClone(proof.readback);
+  delete withoutHash.artifact_sha256;
+  proof.readback.artifact_sha256 = sha256Canonical(withoutHash);
+  proof.run.readback = structuredClone(proof.readback);
+  assert.throws(
+    () => verifyExactEnvelopeV3Artifact(proof),
+    /conflicts.*finalization block.*same height/i,
+  );
+});
