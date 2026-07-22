@@ -56,9 +56,11 @@ concordia-verify live DAO-PROP-EXAMPLE \
   --rpc-endpoint https://node-b.example/rpc
 ```
 
-All CLI results are stable, pretty-printed JSON on stdout. The CLI performs
-only `GET` requests, rejects redirects and embedded URL credentials, and never
-submits a transaction.
+All CLI results are stable, pretty-printed JSON on stdout. URL and proposal
+registry/artifact modes use bounded `GET` requests. Live mode sends `POST`
+requests only for an explicit allowlist of read-only Casper JSON-RPC methods.
+All modes reject embedded URL credentials, network redirects are not followed,
+and no mode submits a transaction or invokes a mutation RPC method.
 
 ## Library
 
