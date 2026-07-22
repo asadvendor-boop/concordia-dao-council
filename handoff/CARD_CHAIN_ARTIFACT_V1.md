@@ -102,9 +102,13 @@ route returns a no-store 503.
 - Before public deployment, the exact historical preimages must pass the
   repository secret/redaction scanner. Any secret-like value blocks release;
   the preimages may not be altered to make the scan pass.
-- The historical `historical_odra_receipt_v2` registry item links this artifact
-  with `rel=card_chain`, `kind=download`, its SHA-256, capture time, and source
-  commit.
+- The **v1-generation** `historical_odra_receipt_v2` registry item links this
+  canonical artifact with `rel=card_chain`, `kind=download`, its SHA-256,
+  capture time, and source commit. (`v2` in the proof-type name is the proof
+  schema generation, not the deployed contract generation.)
+- A v2-contract registry item cannot link this v1-rooted artifact or become a
+  passing combined proof. It remains unavailable until an independently
+  exported chain terminates at v2's distinct signed root.
 - Missing, malformed, unaudited, stale, or unreachable artifacts are
   `unavailable` or `invalid`, never verified.
 - Publishing this read-only artifact does not rewrite the frozen 12-card chain
