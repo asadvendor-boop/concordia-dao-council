@@ -1149,7 +1149,27 @@ def test_unsigned_cspr_click_receipt_deploy_is_wallet_ready(monkeypatch):
 
 
 def test_unsigned_x402_transfer_deploy_is_wallet_ready(monkeypatch):
-    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper-test")
+    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper")
+    result = build_unsigned_casper_transfer_deploy(
+        signer_public_key="01" + ("2" * 64),
+        target_public_key="01" + ("3" * 64),
+        amount_motes=1_000_000,
+        correlation_id=42,
+        chain_name="casper-test",
+    )
+    assert result["status"] == "ready"
+    assert result["payload_kind"] == "deploy"
+    assert result["chain_name"] == "casper-test"
+    assert result["wallet_payload"]["header"]["chain_name"] == "casper-test"
+    assert result["transfer_amount_motes"] == 1_000_000
+    assert result["wallet_payload"]["session"]["Transfer"]["args"][0][0] == "amount"
+    assert result["wallet_payload"]["approvals"] == []
+
+
+def test_unsigned_x402_transfer_legacy_caller_still_uses_chain_environment(
+    monkeypatch,
+):
+    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper-test-legacy")
     result = build_unsigned_casper_transfer_deploy(
         signer_public_key="01" + ("2" * 64),
         target_public_key="01" + ("3" * 64),
@@ -1157,10 +1177,10 @@ def test_unsigned_x402_transfer_deploy_is_wallet_ready(monkeypatch):
         correlation_id=42,
     )
     assert result["status"] == "ready"
-    assert result["payload_kind"] == "deploy"
-    assert result["transfer_amount_motes"] == 1_000_000
-    assert result["wallet_payload"]["session"]["Transfer"]["args"][0][0] == "amount"
-    assert result["wallet_payload"]["approvals"] == []
+    assert result["chain_name"] == "casper-test-legacy"
+    assert result["wallet_payload"]["header"]["chain_name"] == (
+        "casper-test-legacy"
+    )
 
 
 def test_unsigned_odra_quorum_call_is_wallet_ready(monkeypatch):
@@ -1687,11 +1707,13 @@ def test_x402_transfer_proof_parser_requires_processed_transfer(monkeypatch):
         "transfers": [
             {
                 "target_account_hash": "account-hash-" + ("a" * 64),
-                "amount": "1200000",
+                "amount": "1000000",
             }
         ],
     }
     assert _extract_transfer_proof_status(payload)["valid"] is True
+    payload["transfers"][0]["amount"] = "1200000"
+    assert _extract_transfer_proof_status(payload)["valid"] is False
 
 
 def test_x402_payment_correlation_id_is_stable():

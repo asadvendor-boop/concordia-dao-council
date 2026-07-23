@@ -149,11 +149,19 @@ def parse_safepay_v2_strict_json(raw: bytes) -> Any:
     def reject_constant(_value: str) -> None:
         raise ValueError("non-finite JSON number")
 
+    def reject_float(_value: str) -> None:
+        # SafePay's frozen wire schema contains only strings, booleans, null,
+        # and bounded integers. Reject every JSON float token at the parser
+        # boundary, including exponent overflow such as ``1e9999`` which
+        # CPython would otherwise silently decode as positive infinity.
+        raise ValueError("SafePay JSON floats are forbidden")
+
     try:
         value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=object_pairs,
             parse_constant=reject_constant,
+            parse_float=reject_float,
         )
     except (
         json.JSONDecodeError,
@@ -619,10 +627,7 @@ def validate_safepay_v2_gateway_quote(
     expected_amount = (
         expected_amount_motes
         if expected_amount_motes is not None
-        else (
-            os.getenv("SAFEPAY_AMOUNT_MOTES", "").strip()
-            or os.getenv("X402_PAYMENT_AMOUNT", "").strip()
-        )
+        else os.getenv("SAFEPAY_AMOUNT_MOTES", "").strip()
     )
     if (
         not isinstance(expected_amount, str)
@@ -940,6 +945,8 @@ async def _call_safepay_v2_provider(
         base_url=origin,
         timeout=20.0,
         transport=transport,
+        trust_env=False,
+        follow_redirects=False,
         headers={
             "Accept": "application/json",
             "Content-Type": "application/json",

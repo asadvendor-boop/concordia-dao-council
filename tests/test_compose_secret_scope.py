@@ -205,9 +205,7 @@ def test_safepay_v2_provider_has_durable_ledger_and_frozen_runtime_terms() -> No
     assert environment["SAFEPAY_PAYEE_ACCOUNT_HASH"] == (
         "${SAFEPAY_PAYEE_ACCOUNT_HASH:?Set SAFEPAY_PAYEE_ACCOUNT_HASH}"
     )
-    assert environment["SAFEPAY_AMOUNT_MOTES"] == (
-        "${SAFEPAY_AMOUNT_MOTES:?Set SAFEPAY_AMOUNT_MOTES}"
-    )
+    assert environment["SAFEPAY_AMOUNT_MOTES"] == "1000000"
     assert provider["volumes"] == ["x402_provider_data:/data"]
     assert "x402_provider_data" in document["volumes"]
     assert "ports" not in provider
@@ -226,6 +224,13 @@ def test_gateway_has_safepay_proxy_identity_and_quote_capability_configuration()
     )
     assert environment["SAFEPAY_QUOTE_TOKEN_SECRET_FILE"] == (
         "/run/secrets/safepay_quote_token_secret"
+    )
+    assert environment["SAFEPAY_AMOUNT_MOTES"] == "1000000"
+    assert (
+        environment["SAFEPAY_AMOUNT_MOTES"]
+        == document["services"]["x402-provider"]["environment"][
+            "SAFEPAY_AMOUNT_MOTES"
+        ]
     )
 
 

@@ -63,6 +63,7 @@ def approval_env(monkeypatch, tmp_path):
     """Production-mode fixture: the five frozen _FILE names point at tmp
     files; direct value variables are NOT set; CONCORDIA_TEST_MODE is unset."""
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     for env_name, value in _FILE_NAMES.items():
         monkeypatch.delenv(env_name, raising=False)
         secret_file = tmp_path / f"{env_name.lower()}.secret"
@@ -229,6 +230,7 @@ def test_direct_env_values_ignored_in_production(monkeypatch, tmp_path):
     """Direct value variables must be ignored when CONCORDIA_TEST_MODE is
     off — plain-env configuration cannot enable the approval UI."""
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     for env_name, value in _FILE_NAMES.items():
         monkeypatch.delenv(f"{env_name}_FILE", raising=False)
         monkeypatch.setenv(env_name, value)

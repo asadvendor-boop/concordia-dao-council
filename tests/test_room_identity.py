@@ -53,6 +53,7 @@ def room_env(monkeypatch):
     monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     gateway_auth._reset_for_testing()
     yield
     gateway_auth._reset_for_testing()
@@ -491,6 +492,7 @@ def dup_agent_client(monkeypatch, tmp_path):
     monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     gateway_auth._reset_for_testing()
     with TestClient(create_app(db_path=str(tmp_path / "dup.db"))) as test_client:
         yield test_client

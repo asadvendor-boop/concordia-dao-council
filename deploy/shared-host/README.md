@@ -29,6 +29,7 @@ https://concordia.47.84.232.193.sslip.io
     approval_proxy_secret
     approval_ui_bcrypt_hash
     approval_ui_csrf_secret
+    safepay_proxy_secret
     concordia_operator_token
     casper_secret_key.pem
     casper_public_key.pem
@@ -47,6 +48,21 @@ docker network create concordia-edge
 2. Copy `Caddyfile.snippet` into the shared proxy Caddyfile.
 3. Add `CONCORDIA_HOSTNAME=concordia.47.84.232.193.sslip.io` to the shared proxy environment.
 4. Attach the proxy container to `concordia-edge`.
+5. Mount the same SafePay proxy-attestation file read-only at
+   `/run/secrets/safepay_proxy_secret` inside the independently managed shared
+   Caddy container. Concordia Compose does not own or imply this mount.
+6. Run the runtime mount check before every Caddy adapt/reload; it reads no
+   secret value into host output and verifies that the external Caddy mount is
+   byte-identical to the application secret source:
+
+```bash
+CADDY_CONTAINER=<shared-caddy-container> \
+  SAFEPAY_APP_SECRET_PATH=/opt/apps/concordia/secrets/safepay_proxy_secret \
+  ./scripts/preflight_shared_caddy_safepay_secret.sh
+```
+
+Do not adapt or reload the shared Caddy configuration unless this preflight
+passes.
 
 ## Start
 

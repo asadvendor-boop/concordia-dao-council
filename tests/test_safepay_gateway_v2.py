@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 import gateway.app as gateway_app
 import shared.x402_payments as safepay_module
 from gateway.app import create_app
+from gateway.rate_limit import SafePayAdmissionLimiter
 from shared.x402_payments import (
     SAFEPAY_V2_BINDING_CHECK_FIELDS,
     SAFEPAY_V2_PROVIDER_ORIGIN,
@@ -195,6 +197,7 @@ def _gateway_safepay_env(
     proxy_secret.write_text(PROXY_SECRET, encoding="utf-8")
     proxy_secret.chmod(0o600)
     monkeypatch.setenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", RECEIVER_PUBLIC_KEY)
+    monkeypatch.setenv("SAFEPAY_AMOUNT_MOTES", AMOUNT_MOTES)
     monkeypatch.setenv("X402_PAYMENT_AMOUNT", AMOUNT_MOTES)
     monkeypatch.setenv("X402_MAX_ATTEMPTS", "3")
     monkeypatch.setenv("X402_RETRY_DELAY_SECONDS", "0")
@@ -218,6 +221,78 @@ def _quote_capability(quote: dict[str, Any]) -> str:
     return issue_safepay_v2_quote_capability(quote, QUOTE_CAPABILITY_SECRET)
 
 
+def _u512_bytes(value: int) -> str:
+    raw = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "little")
+    return bytes([len(raw)]).hex() + raw.hex()
+
+
+def _valid_unsigned_transfer(
+    *,
+    signer_public_key: str = SIGNER_PUBLIC_KEY,
+    target_public_key: str = RECEIVER_PUBLIC_KEY,
+    amount_motes: int = int(AMOUNT_MOTES),
+    correlation_id: int = int(CORRELATION_ID),
+    chain_name: str = "casper-test",
+) -> dict[str, Any]:
+    deploy = {
+        "approvals": [],
+        "hash": "de" * 32,
+        "header": {
+            "account": signer_public_key,
+            "chain_name": chain_name,
+        },
+        "session": {
+            "Transfer": {
+                "args": [
+                    [
+                        "amount",
+                        {
+                            "cl_type": "U512",
+                            "bytes": _u512_bytes(amount_motes),
+                            "parsed": str(amount_motes),
+                        },
+                    ],
+                    [
+                        "target",
+                        {
+                            "cl_type": "PublicKey",
+                            "bytes": target_public_key,
+                            "parsed": target_public_key,
+                        },
+                    ],
+                    [
+                        "id",
+                        {
+                            "cl_type": {"Option": "U64"},
+                            "bytes": (
+                                "01"
+                                + correlation_id.to_bytes(
+                                    8, "little", signed=False
+                                ).hex()
+                            ),
+                            "parsed": correlation_id,
+                        },
+                    ],
+                ]
+            }
+        },
+    }
+    return {
+        "status": "ready",
+        "driver": "test",
+        "payload_kind": "deploy",
+        "chain_name": chain_name,
+        "transfer_amount_motes": amount_motes,
+        "correlation_id": correlation_id,
+        "signer_public_key": signer_public_key,
+        "target_public_key": target_public_key,
+        "deploy_hash": deploy["hash"],
+        "deploy_json": deploy,
+        "wallet_payload": copy.deepcopy(deploy),
+        "wallet_payload_wrapped": {"deploy": copy.deepcopy(deploy)},
+    }
+
+
 def test_account_hash_derivation_matches_casper_ed25519_vector() -> None:
     assert (
         safepay_v2_account_hash_from_public_key(RECEIVER_PUBLIC_KEY)
@@ -235,6 +310,21 @@ def test_account_hash_derivation_matches_casper_secp256k1_vector() -> None:
 def test_quote_correlation_id_matches_the_frozen_golden_derivation() -> None:
     assert CORRELATION_ID == "1994822504869016532"
     assert validate_safepay_v2_gateway_quote(_quote()) is None
+
+
+def test_gateway_v2_amount_never_falls_back_to_legacy_payment_amount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SAFEPAY_AMOUNT_MOTES", AMOUNT_MOTES)
+    monkeypatch.setenv("X402_PAYMENT_AMOUNT", "9999999")
+    assert validate_safepay_v2_gateway_quote(_quote()) is None
+
+    monkeypatch.delenv("SAFEPAY_AMOUNT_MOTES", raising=False)
+    monkeypatch.setenv("X402_PAYMENT_AMOUNT", AMOUNT_MOTES)
+    assert (
+        validate_safepay_v2_gateway_quote(_quote())
+        == "expected_amount_motes_invalid"
+    )
 
 
 def test_rehashed_wrong_correlation_is_not_a_valid_gateway_quote() -> None:
@@ -422,12 +512,7 @@ def test_wallet_intent_uses_the_exact_quote_payment_terms(
 
     def fake_build(**kwargs: Any) -> dict[str, Any]:
         observed.update(kwargs)
-        return {
-            "status": "ready",
-            "driver": "test",
-            "deploy_json": {"hash": "unsigned"},
-            "wallet_payload": {"hash": "unsigned"},
-        }
+        return _valid_unsigned_transfer(**kwargs)
 
     monkeypatch.setattr(
         gateway_app, "build_unsigned_casper_transfer_deploy", fake_build
@@ -452,6 +537,7 @@ def test_wallet_intent_uses_the_exact_quote_payment_terms(
         "target_public_key": RECEIVER_PUBLIC_KEY,
         "amount_motes": int(quote["amount_motes"]),
         "correlation_id": int(quote["correlation_id"]),
+        "chain_name": "casper-test",
     }
     payload = response.json()
     assert payload["quote"] == quote
@@ -459,6 +545,156 @@ def test_wallet_intent_uses_the_exact_quote_payment_terms(
     assert (
         payload["payment_requirements"]["payee_account_hash"]
         == quote["payee_account_hash"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.update(status="failed"),
+        lambda value: value.update(chain_name="casper"),
+        lambda value: value["deploy_json"]["header"].update(chain_name="casper"),
+        lambda value: value.update(target_public_key="01" + ("99" * 32)),
+        lambda value: value["deploy_json"]["session"]["Transfer"]["args"][1][
+            1
+        ].update(parsed="01" + ("99" * 32)),
+        lambda value: value.update(transfer_amount_motes=int(AMOUNT_MOTES) + 1),
+        lambda value: value["deploy_json"]["session"]["Transfer"]["args"][0][
+            1
+        ].update(parsed=str(int(AMOUNT_MOTES) + 1)),
+        lambda value: value.update(correlation_id=int(CORRELATION_ID) + 1),
+        lambda value: value["deploy_json"]["session"]["Transfer"]["args"][2][
+            1
+        ].update(parsed=int(CORRELATION_ID) + 1),
+        lambda value: value.update(signer_public_key="01" + ("99" * 32)),
+        lambda value: value["deploy_json"]["header"].update(
+            account="01" + ("99" * 32)
+        ),
+        lambda value: value["wallet_payload"]["header"].update(
+            chain_name="casper"
+        ),
+    ],
+    ids=[
+        "status",
+        "top-level-chain",
+        "serialized-chain",
+        "top-level-target",
+        "serialized-target",
+        "top-level-amount",
+        "serialized-amount",
+        "top-level-correlation",
+        "serialized-correlation",
+        "top-level-signer",
+        "serialized-signer",
+        "wallet-payload-divergence",
+    ],
+)
+def test_wallet_intent_refuses_every_forged_builder_field(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[dict[str, Any]], None],
+) -> None:
+    quote = _quote()
+
+    def fake_build(**kwargs: Any) -> dict[str, Any]:
+        unsigned = _valid_unsigned_transfer(**kwargs)
+        mutation(unsigned)
+        return unsigned
+
+    monkeypatch.setattr(
+        gateway_app, "build_unsigned_casper_transfer_deploy", fake_build
+    )
+    with _client(
+        lambda _request: pytest.fail("wallet intent must not call the provider")
+    ) as client:
+        response = client.post(
+            "/x402/v2/payment-intent",
+            json={
+                "schema_version": SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+                "quote": quote,
+                "quote_capability": _quote_capability(quote),
+                "signer_public_key": SIGNER_PUBLIC_KEY,
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == safepay_v2_error_body(
+        "wallet_intent_unavailable", False, "not_attempted"
+    )
+
+
+def test_wallet_intent_validator_fails_closed_on_truncated_serialized_args() -> None:
+    quote = _quote()
+    unsigned = _valid_unsigned_transfer()
+    unsigned["deploy_json"]["session"]["Transfer"]["args"] = [
+        ["amount"],
+        ["target"],
+        ["id"],
+    ]
+    unsigned["wallet_payload"] = copy.deepcopy(unsigned["deploy_json"])
+    unsigned["wallet_payload_wrapped"] = {
+        "deploy": copy.deepcopy(unsigned["deploy_json"])
+    }
+
+    assert not gateway_app._safepay_unsigned_transfer_matches(
+        unsigned,
+        signer_public_key=SIGNER_PUBLIC_KEY,
+        receiver_public_key=RECEIVER_PUBLIC_KEY,
+        quote=quote,
+    )
+
+
+def test_wallet_intent_chain_is_literal_testnet_despite_ambient_chain_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    observed: dict[str, Any] = {}
+    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper")
+
+    def fake_build(**kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return _valid_unsigned_transfer(**kwargs)
+
+    monkeypatch.setattr(
+        gateway_app, "build_unsigned_casper_transfer_deploy", fake_build
+    )
+    with _client(
+        lambda _request: pytest.fail("wallet intent must not call the provider")
+    ) as client:
+        response = client.post(
+            "/x402/v2/payment-intent",
+            json={
+                "schema_version": SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+                "quote": quote,
+                "quote_capability": _quote_capability(quote),
+                "signer_public_key": SIGNER_PUBLIC_KEY,
+            },
+        )
+
+    assert response.status_code == 200
+    assert observed["chain_name"] == "casper-test"
+    assert response.json()["chain_name"] == "casper-test"
+    assert response.json()["deploy_json"]["header"]["chain_name"] == "casper-test"
+
+
+def test_wallet_intent_validator_accepts_real_pycspr_checksum_serialization() -> None:
+    signer = "01" + ("ab" * 32)
+    target = "01" + ("cd" * 32)
+    quote = _quote(
+        payee_account_hash=safepay_v2_account_hash_from_public_key(target)
+    )
+    unsigned = gateway_app.build_unsigned_casper_transfer_deploy(
+        signer_public_key=signer,
+        target_public_key=target,
+        amount_motes=int(quote["amount_motes"]),
+        correlation_id=int(quote["correlation_id"]),
+        chain_name="casper-test",
+    )
+
+    assert gateway_app._safepay_unsigned_transfer_matches(
+        unsigned,
+        signer_public_key=signer,
+        receiver_public_key=target,
+        quote=quote,
     )
 
 
@@ -840,6 +1076,90 @@ def test_transport_failure_is_sanitized_and_not_retried(
     assert calls == 1
 
 
+def test_internal_provider_client_ignores_ambient_proxy_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    constructor_calls: list[dict[str, Any]] = []
+    ambient_proxy_capture: list[str] = []
+    original_async_client = httpx.AsyncClient
+    monkeypatch.setenv(
+        "HTTP_PROXY", "http://ambient-user:ambient-secret@127.0.0.1:9"
+    )
+    monkeypatch.setenv(
+        "ALL_PROXY", "http://ambient-user:ambient-secret@127.0.0.1:9"
+    )
+    monkeypatch.setenv("NO_PROXY", "")
+
+    class AuditedAsyncClient(original_async_client):
+        def __init__(self, **kwargs: Any) -> None:
+            constructor_calls.append(dict(kwargs))
+            if kwargs.get("trust_env", True):
+                ambient_proxy_capture.append("ambient-proxy-enabled")
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        safepay_module.httpx, "AsyncClient", AuditedAsyncClient
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "proxy-authorization" not in request.headers
+        assert all(
+            "ambient-secret" not in value for value in request.headers.values()
+        )
+        return _provider_response(402, _quote_issue_body(quote))
+
+    with _client(handler) as client:
+        response = client.post(
+            "/x402/v2/quotes",
+            json={
+                "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                "proposal_id": PROPOSAL_ID,
+                "resource_id": RESOURCE_ID,
+            },
+        )
+
+    assert response.status_code == 402
+    assert ambient_proxy_capture == []
+    assert constructor_calls
+    assert constructor_calls[-1]["trust_env"] is False
+    assert constructor_calls[-1]["follow_redirects"] is False
+
+
+def test_internal_provider_redirect_is_never_followed() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if len(calls) > 1:
+            raise AssertionError("SafePay internal redirects must never be followed")
+        return httpx.Response(
+            307,
+            content=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "Location": "https://attacker.invalid/collect",
+                **V2_HEADERS,
+            },
+        )
+
+    with _client(handler) as client:
+        response = client.post(
+            "/x402/v2/quotes",
+            json={
+                "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                "proposal_id": PROPOSAL_ID,
+                "resource_id": RESOURCE_ID,
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == safepay_v2_error_body(
+        "provider_unavailable", True, "not_attempted"
+    )
+    assert calls == [f"{SAFEPAY_V2_PROVIDER_ORIGIN}/x402/v2/quotes"]
+
+
 def test_malformed_provider_success_is_sanitized_instead_of_raising() -> None:
     quote = _quote()
     malformed = _success_body(quote)
@@ -986,6 +1306,240 @@ def test_gateway_preserves_distinct_trusted_client_quota_identities() -> None:
     ]
 
 
+def test_generic_rate_limiter_never_handles_safepay_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    calls = 0
+    monkeypatch.setenv("CONCORDIA_RATE_LIMIT_PER_MINUTE", "1")
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "10")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _provider_response(402, _quote_issue_body(quote))
+
+    with _client(handler) as client:
+        responses = [
+            client.post(
+                "/x402/v2/quotes",
+                json={
+                    "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                    "proposal_id": PROPOSAL_ID,
+                    "resource_id": RESOURCE_ID,
+                },
+                headers={"Authorization": "Bearer one-fixed-caller"},
+            )
+            for _index in range(3)
+        ]
+
+    assert [response.status_code for response in responses] == [402, 402, 402]
+    assert calls == 3
+    assert all(b"Rate limit exceeded" not in response.content for response in responses)
+
+
+def test_safepay_quote_admission_isolated_by_attested_client_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    calls = 0
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "1")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _provider_response(402, _quote_issue_body(quote))
+
+    with _client(handler, client_host="10.1.2.3") as client:
+        def issue(client_ip: str) -> httpx.Response:
+            return client.post(
+                "/x402/v2/quotes",
+                json={
+                    "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                    "proposal_id": PROPOSAL_ID,
+                    "resource_id": RESOURCE_ID,
+                },
+                headers={
+                    "X-Concordia-Client-IP": client_ip,
+                    "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+                },
+            )
+
+        first_a = issue("198.51.100.10")
+        second_a = issue("198.51.100.10")
+        first_b = issue("198.51.100.11")
+
+    assert first_a.status_code == 402
+    assert second_a.status_code == 429
+    assert second_a.json() == safepay_v2_error_body(
+        "quote_rate_limited", True, "not_attempted"
+    )
+    assert first_b.status_code == 402
+    assert calls == 2
+
+
+def test_safepay_authorization_and_xff_cannot_reset_admission_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "1")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _provider_response(402, _quote_issue_body(quote))
+
+    with _client(handler, client_host="10.1.2.3") as client:
+        responses = []
+        for index in range(3):
+            responses.append(
+                client.post(
+                    "/x402/v2/quotes",
+                    json={
+                        "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                        "proposal_id": PROPOSAL_ID,
+                        "resource_id": RESOURCE_ID,
+                    },
+                    headers={
+                        "Authorization": f"Bearer caller-{index}",
+                        "X-Forwarded-For": f"198.51.100.{index + 1}",
+                        "X-Concordia-Client-IP": "198.51.100.20",
+                        "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+                    },
+                )
+            )
+
+    assert responses[0].status_code == 402
+    assert [response.status_code for response in responses[1:]] == [429, 429]
+    for response in responses[1:]:
+        assert response.json() == safepay_v2_error_body(
+            "quote_rate_limited", True, "not_attempted"
+        )
+        assert b"Rate limit exceeded" not in response.content
+
+
+def test_safepay_quote_and_redemption_admission_are_separate_and_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    success = _success_body(quote)
+    quote_calls = 0
+    redemption_calls = 0
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "1")
+    monkeypatch.setenv("SAFEPAY_GATEWAY_REDEMPTION_REQUESTS_PER_WINDOW", "1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal quote_calls, redemption_calls
+        if request.url.path.endswith("/quotes"):
+            quote_calls += 1
+            return _provider_response(402, _quote_issue_body(quote))
+        redemption_calls += 1
+        return _provider_response(200, success)
+
+    headers = {
+        "X-Concordia-Client-IP": "198.51.100.30",
+        "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+    }
+    with _client(handler, client_host="10.1.2.3") as client:
+        issued = client.post(
+            "/x402/v2/quotes",
+            json={
+                "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                "proposal_id": PROPOSAL_ID,
+                "resource_id": RESOURCE_ID,
+            },
+            headers=headers,
+        )
+        redemption_body = {
+            "schema_version": SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
+            "quote": quote,
+            "payment_hash": PAYMENT_HASH,
+        }
+        first_redemption = client.post(
+            "/x402/v2/redemptions", json=redemption_body, headers=headers
+        )
+        second_redemption = client.post(
+            "/x402/v2/redemptions", json=redemption_body, headers=headers
+        )
+
+    assert issued.status_code == 402
+    assert first_redemption.status_code == 200
+    assert second_redemption.status_code == 503
+    assert second_redemption.json() == safepay_v2_error_body(
+        "provider_unavailable", True, "verification_pending"
+    )
+    assert b"Rate limit exceeded" not in second_redemption.content
+    assert quote_calls == 1
+    assert redemption_calls == 1
+
+
+def test_safepay_payment_intent_has_its_own_attested_admission_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    monkeypatch.setenv(
+        "SAFEPAY_GATEWAY_PAYMENT_INTENT_REQUESTS_PER_WINDOW", "1"
+    )
+    monkeypatch.setattr(
+        gateway_app,
+        "build_unsigned_casper_transfer_deploy",
+        lambda **kwargs: _valid_unsigned_transfer(**kwargs),
+    )
+    body = {
+        "schema_version": SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+        "quote": quote,
+        "quote_capability": _quote_capability(quote),
+        "signer_public_key": SIGNER_PUBLIC_KEY,
+    }
+    headers = {
+        "X-Concordia-Client-IP": "198.51.100.40",
+        "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+    }
+
+    with _client(
+        lambda _request: pytest.fail("wallet intent must not call the provider"),
+        client_host="10.1.2.3",
+    ) as client:
+        first = client.post(
+            "/x402/v2/payment-intent", json=body, headers=headers
+        )
+        second = client.post(
+            "/x402/v2/payment-intent",
+            json=body,
+            headers={
+                **headers,
+                "Authorization": "Bearer quota-reset-attempt",
+                "X-Forwarded-For": "203.0.113.99",
+            },
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 503
+    assert second.json() == safepay_v2_error_body(
+        "wallet_intent_unavailable", False, "not_attempted"
+    )
+    assert b"Rate limit exceeded" not in second.content
+
+
+def test_safepay_admission_bucket_table_is_strictly_bounded() -> None:
+    now = [120.0]
+    limiter = SafePayAdmissionLimiter(
+        quote_requests_per_window=2,
+        payment_intent_requests_per_window=2,
+        redemption_requests_per_window=2,
+        window_seconds=60,
+        max_buckets=2,
+        clock=lambda: now[0],
+    )
+
+    assert limiter.admit("quotes", "198.51.100.1")
+    assert limiter.admit("quotes", "198.51.100.2")
+    assert not limiter.admit("quotes", "198.51.100.3")
+    assert len(limiter._buckets) == 2
+
+    now[0] = 180.0
+    assert limiter.admit("quotes", "198.51.100.3")
+    assert len(limiter._buckets) == 1
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -1003,6 +1557,37 @@ def test_invalid_mixed_proxy_cidrs_fail_gateway_startup(
         match="SAFEPAY_TRUSTED_PROXY_CIDRS contains an invalid CIDR",
     ):
         create_app(db_path=":memory:")
+
+
+@pytest.mark.parametrize("raw", [None, "", " ", ",", " , "])
+def test_gateway_requires_nonempty_proxy_cidrs_outside_explicit_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str | None,
+) -> None:
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    if raw is None:
+        monkeypatch.delenv("SAFEPAY_TRUSTED_PROXY_CIDRS", raising=False)
+    else:
+        monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", raw)
+    with pytest.raises(
+        RuntimeError,
+        match="SAFEPAY_TRUSTED_PROXY_CIDRS requires at least one valid CIDR",
+    ):
+        create_app(db_path=":memory:")
+
+
+def test_gateway_accepts_multiple_proxy_cidrs_outside_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv(
+        "SAFEPAY_TRUSTED_PROXY_CIDRS",
+        "10.1.2.3/8, 2001:db8::1/64",
+    )
+    app = create_app(db_path=":memory:")
+    assert tuple(
+        str(network) for network in app.state.safepay_trusted_proxy_networks
+    ) == ("10.0.0.0/8", "2001:db8::/64")
 
 
 def test_gateway_canonicalizes_host_bit_and_ipv6_proxy_cidrs_once_at_startup(
@@ -1126,6 +1711,12 @@ def test_public_safepay_json_parser_fails_closed_without_provider_io(raw: bytes)
         "invalid_request", False, "not_attempted"
     )
     assert calls == 0
+
+
+@pytest.mark.parametrize("raw", [b'{"value":1.0}', b'{"value":1e9999}'])
+def test_strict_safepay_json_helper_rejects_every_float(raw: bytes) -> None:
+    with pytest.raises(ValueError, match="invalid SafePay JSON"):
+        safepay_module.parse_safepay_v2_strict_json(raw)
 
 
 def test_public_safepay_request_body_is_bounded_before_provider_io() -> None:

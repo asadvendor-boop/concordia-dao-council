@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from .database import init_db
-from .rate_limit import RateLimitMiddleware
+from .rate_limit import RateLimitMiddleware, SafePayAdmissionLimiter
 from shared import llm_reasoning as llm_runtime
 from shared.casper_executor import (
     CasperReceiptRequest,
@@ -220,6 +220,15 @@ def _parse_safepay_trusted_proxy_networks(
             raise RuntimeError(
                 "SAFEPAY_TRUSTED_PROXY_CIDRS contains an invalid CIDR"
             ) from exc
+    test_mode = os.getenv("CONCORDIA_TEST_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not networks and not test_mode:
+        raise RuntimeError(
+            "SAFEPAY_TRUSTED_PROXY_CIDRS requires at least one valid CIDR"
+        )
     return tuple(networks)
 
 
@@ -257,6 +266,122 @@ def _safepay_proxy_headers(request: Request) -> dict[str, str] | None:
         "X-Concordia-Client-IP": resolved,
         "X-Concordia-SafePay-Proxy": proxy_secret,
     }
+
+
+def _safepay_u512_cl_bytes(value: int) -> str:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("SafePay U512 value is invalid")
+    raw = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "little")
+    if len(raw) > 64:
+        raise ValueError("SafePay U512 value is too large")
+    return (bytes([len(raw)]) + raw).hex()
+
+
+def _safepay_unsigned_transfer_matches(
+    unsigned: Any,
+    *,
+    signer_public_key: str,
+    receiver_public_key: str,
+    quote: dict[str, Any],
+) -> bool:
+    """Independently verify both summary fields and serialized transfer bytes."""
+
+    try:
+        expected_signer = signer_public_key.strip().lower()
+        expected_target = receiver_public_key.strip().lower()
+        expected_amount = int(quote["amount_motes"])
+        expected_correlation = int(quote["correlation_id"])
+        expected_chain = "casper-test"
+        if (
+            not isinstance(unsigned, dict)
+            or unsigned.get("status") != "ready"
+            or unsigned.get("payload_kind") != "deploy"
+            or unsigned.get("chain_name") != expected_chain
+            or unsigned.get("signer_public_key") != expected_signer
+            or unsigned.get("target_public_key") != expected_target
+            or type(unsigned.get("transfer_amount_motes")) is not int
+            or unsigned["transfer_amount_motes"] != expected_amount
+            or type(unsigned.get("correlation_id")) is not int
+            or unsigned["correlation_id"] != expected_correlation
+            or not hmac.compare_digest(
+                safepay_v2_account_hash_from_public_key(expected_target),
+                quote["payee_account_hash"],
+            )
+        ):
+            return False
+
+        deploy = unsigned.get("deploy_json")
+        if (
+            not isinstance(deploy, dict)
+            or deploy != unsigned.get("wallet_payload")
+            or unsigned.get("wallet_payload_wrapped") != {"deploy": deploy}
+            or unsigned.get("deploy_hash") != deploy.get("hash")
+            or deploy.get("approvals") != []
+        ):
+            return False
+        header = deploy.get("header")
+        if (
+            not isinstance(header, dict)
+            or header.get("chain_name") != expected_chain
+            or not isinstance(header.get("account"), str)
+            or header["account"].lower() != expected_signer
+        ):
+            return False
+        session = deploy.get("session")
+        if not isinstance(session, dict) or set(session) != {"Transfer"}:
+            return False
+        transfer = session["Transfer"]
+        if not isinstance(transfer, dict) or set(transfer) != {"args"}:
+            return False
+        args = transfer["args"]
+        if (
+            not isinstance(args, list)
+            or len(args) != 3
+            or any(
+                not isinstance(item, (list, tuple)) or len(item) != 2
+                for item in args
+            )
+            or [item[0] for item in args] != ["amount", "target", "id"]
+        ):
+            return False
+        amount_cl, target_cl, id_cl = (item[1] for item in args)
+        if (
+            not isinstance(amount_cl, dict)
+            or set(amount_cl) != {"cl_type", "bytes", "parsed"}
+            or amount_cl["cl_type"] != "U512"
+            or amount_cl["parsed"] != str(expected_amount)
+            or not isinstance(amount_cl["bytes"], str)
+            or amount_cl["bytes"].lower()
+            != _safepay_u512_cl_bytes(expected_amount)
+            or not isinstance(target_cl, dict)
+            or set(target_cl) != {"cl_type", "bytes", "parsed"}
+            or target_cl["cl_type"] != "PublicKey"
+            or not isinstance(target_cl["parsed"], str)
+            or target_cl["parsed"].lower() != expected_target
+            or not isinstance(target_cl["bytes"], str)
+            or target_cl["bytes"].lower() != expected_target
+            or not hmac.compare_digest(
+                safepay_v2_account_hash_from_public_key(target_cl["parsed"]),
+                quote["payee_account_hash"],
+            )
+            or not isinstance(id_cl, dict)
+            or set(id_cl) != {"cl_type", "bytes", "parsed"}
+            or id_cl["cl_type"] != {"Option": "U64"}
+            or type(id_cl["parsed"]) is not int
+            or id_cl["parsed"] != expected_correlation
+            or not isinstance(id_cl["bytes"], str)
+            or id_cl["bytes"].lower()
+            != (
+                "01"
+                + expected_correlation.to_bytes(
+                    8, "little", signed=False
+                ).hex()
+            )
+        ):
+            return False
+        return True
+    except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+        return False
 
 
 def _safepay_quote_capability_secret() -> bytes | None:
@@ -591,6 +716,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     # Tests replace this with an httpx MockTransport. Production leaves it
     # unset and always uses the pinned internal provider origin.
     new_app.state.safepay_v2_transport = None
+    new_app.state.safepay_admission = SafePayAdmissionLimiter()
     new_app.state.proof_registry = ProofRegistryRepository(
         os.getenv("CONCORDIA_PROOF_REGISTRY_DIR", "artifacts/live/proof-registry")
     )
@@ -812,6 +938,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 retryable=True,
                 replay_disposition="not_attempted",
             )
+        if not new_app.state.safepay_admission.admit(
+            "quotes", proxy_headers["X-Concordia-Client-IP"]
+        ):
+            return _safepay_v2_local_error(
+                429,
+                "quote_rate_limited",
+                retryable=True,
+                replay_disposition="not_attempted",
+            )
         result = await request_safepay_v2_quote(
             proposal_id=body.get("proposal_id"),
             resource_id=body.get("resource_id"),
@@ -863,6 +998,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
 
         quote = body["quote"]
+        proxy_headers = _safepay_proxy_headers(request)
+        if proxy_headers is None or not new_app.state.safepay_admission.admit(
+            "payment_intents", proxy_headers["X-Concordia-Client-IP"]
+        ):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
         quote_secret = _safepay_quote_capability_secret()
         if quote_secret is None:
             return _safepay_v2_local_error(
@@ -882,7 +1027,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 retryable=False,
                 replay_disposition="not_attempted",
             )
-        receiver_public_key = os.getenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", "").strip()
+        signer_public_key = body["signer_public_key"].strip().lower()
+        receiver_public_key = (
+            os.getenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", "").strip().lower()
+        )
         try:
             derived_payee = safepay_v2_account_hash_from_public_key(receiver_public_key)
         except (TypeError, ValueError):
@@ -900,13 +1048,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 replay_disposition="not_attempted",
             )
 
-        unsigned = build_unsigned_casper_transfer_deploy(
-            signer_public_key=body["signer_public_key"].strip(),
-            target_public_key=receiver_public_key,
-            amount_motes=int(quote["amount_motes"]),
-            correlation_id=int(quote["correlation_id"]),
-        )
-        if unsigned.get("status") != "ready":
+        try:
+            unsigned = build_unsigned_casper_transfer_deploy(
+                signer_public_key=signer_public_key,
+                target_public_key=receiver_public_key,
+                amount_motes=int(quote["amount_motes"]),
+                correlation_id=int(quote["correlation_id"]),
+                chain_name="casper-test",
+            )
+        except Exception:
+            unsigned = {}
+        if not _safepay_unsigned_transfer_matches(
+            unsigned,
+            signer_public_key=signer_public_key,
+            receiver_public_key=receiver_public_key,
+            quote=quote,
+        ):
             return _safepay_v2_local_error(
                 503,
                 "wallet_intent_unavailable",
@@ -951,6 +1108,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
             )
         proxy_headers = _safepay_proxy_headers(request)
         if proxy_headers is None:
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="verification_pending",
+            )
+        if not new_app.state.safepay_admission.admit(
+            "redemptions", proxy_headers["X-Concordia-Client-IP"]
+        ):
             return _safepay_v2_local_error(
                 503,
                 "provider_unavailable",
