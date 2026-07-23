@@ -101,12 +101,8 @@ logger = logging.getLogger("concordia.gateway")
 # but maddening to debug at 2 AM).
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
-    # Load approval secrets (only available on prod VM)
-    try:
-        load_dotenv("/etc/concordia/approval.env", override=False)
-    except Exception:
-        pass
 except ImportError:
     pass  # python-dotenv not installed — env vars must be set externally
 
@@ -395,6 +391,42 @@ def _usage_dict(response: Any) -> dict[str, int]:
     }
 
 
+def _run_receipt_is_verified(
+    repository: ProofRegistryRepository,
+    *,
+    proposal_id: str,
+    receipt_card_present: bool,
+) -> bool:
+    """Require one green historical-receipt proof for run-summary verification."""
+
+    if not receipt_card_present:
+        return False
+    try:
+        item = repository.unique_green_public_item(
+            proposal_id,
+            "historical_odra_receipt_v2",
+            temporal_scope="historical",
+        )
+    except (OSError, ValueError):
+        return False
+    return item is not None
+
+
+def _approval_ui_is_configured() -> bool:
+    """Require every approval-boundary value through its mounted secret file."""
+
+    return all(
+        read_secret_file_only(name)
+        for name in (
+            "APPROVAL_PROXY_SECRET",
+            "APPROVAL_UI_USER",
+            "APPROVAL_UI_APPROVER_ID",
+            "APPROVAL_UI_BCRYPT_HASH",
+            "APPROVAL_UI_CSRF_SECRET",
+        )
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup."""
@@ -403,9 +435,10 @@ async def lifespan(app: FastAPI):
     validate_agent_identity_configuration()
     db_path = getattr(app.state, "_db_path", None) or os.getenv("GATEWAY_DB_PATH", "concordia.db")
     app.state.db = init_db(db_path)
-    csrf = os.getenv("APPROVAL_UI_CSRF_SECRET", "")
-    if not csrf:
-        logging.getLogger("gateway").warning("APPROVAL_UI_CSRF_SECRET not set — approval UI disabled")
+    if not _approval_ui_is_configured():
+        logging.getLogger("gateway").warning(
+            "approval UI file-secret set is incomplete — approval UI disabled"
+        )
     try:
         yield
     finally:
@@ -2441,7 +2474,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 (proposal_id,),
             ).fetchone()
             human_intervention = human_auth is not None
-            receipt_verified = receipt_time is not None
+            receipt_verified = _run_receipt_is_verified(
+                new_app.state.proof_registry,
+                proposal_id=proposal_id,
+                receipt_card_present=receipt_time is not None,
+            )
 
             agent_secs = _seconds_between(signal_time, plan_time)
             resolution_secs = _seconds_between(signal_time, terminal_time)
