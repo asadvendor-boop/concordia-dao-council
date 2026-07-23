@@ -1,96 +1,108 @@
--- 0002: append-only durable journal of every credentialed upstream /settle
--- call. One row per EVENT, never mutated: `request_started` is committed
--- (synchronous=FULL) BEFORE any network I/O, and exactly one terminal event
--- (`response_observed` on a 2xx read, `request_failed` otherwise) may follow.
--- UPDATE and DELETE always abort — evidence is only ever appended.
---
--- The migration is idempotent (IF NOT EXISTS throughout) so re-applying it on
--- an existing volume is a no-op.
-
+BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS x402_upstream_settle_calls (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_type TEXT NOT NULL CHECK (event_type IN
-    ('request_started', 'response_observed', 'request_failed')),
-  call_id TEXT NOT NULL CHECK (call_id GLOB
-    '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
-  network TEXT NOT NULL,
-  wcspr_contract TEXT NOT NULL,
-  signed_payment_payload_hash TEXT NOT NULL,
-  payer_account_hash TEXT NOT NULL,
-  authorization_nonce TEXT NOT NULL,
-  resource_id TEXT NOT NULL,
-  action_id TEXT NOT NULL,
-  envelope_hash TEXT NOT NULL,
-  request_method TEXT NOT NULL,
-  request_url TEXT NOT NULL,
-  request_headers_json TEXT NOT NULL,
-  request_body TEXT NOT NULL,
-  request_body_sha256 TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('request_started','response_observed','request_failed')),
+  call_id TEXT NOT NULL CHECK (length(call_id) = 64 AND call_id NOT GLOB '*[^0-9a-f]*'),
+  network TEXT NOT NULL CHECK (network = 'casper:casper-test'),
+  wcspr_contract TEXT NOT NULL CHECK (length(wcspr_contract) = 64 AND wcspr_contract NOT GLOB '*[^0-9a-f]*'),
+  signed_payment_payload_hash TEXT NOT NULL CHECK (length(signed_payment_payload_hash) = 64 AND signed_payment_payload_hash NOT GLOB '*[^0-9a-f]*'),
+  payer_account_hash TEXT NOT NULL CHECK (length(payer_account_hash) = 64 AND payer_account_hash NOT GLOB '*[^0-9a-f]*'),
+  authorization_nonce TEXT NOT NULL CHECK (length(authorization_nonce) = 64 AND authorization_nonce NOT GLOB '*[^0-9a-f]*'),
+  resource_id TEXT NOT NULL CHECK (length(resource_id) BETWEEN 1 AND 128),
+  action_id TEXT NOT NULL CHECK (length(action_id) = 64 AND action_id NOT GLOB '*[^0-9a-f]*'),
+  envelope_hash TEXT NOT NULL CHECK (length(envelope_hash) = 64 AND envelope_hash NOT GLOB '*[^0-9a-f]*'),
+  request_method TEXT,
+  request_url TEXT,
+  request_headers_canonical_json BLOB,
+  request_body BLOB,
+  request_body_sha256 TEXT,
   response_status INTEGER,
-  response_headers_json TEXT,
-  response_body TEXT,
+  response_headers_canonical_json BLOB,
+  response_body BLOB,
   response_body_sha256 TEXT,
   failure_code TEXT,
-  observed_at TEXT NOT NULL
+  observed_at TEXT NOT NULL CHECK (length(observed_at) BETWEEN 20 AND 32),
+  CHECK (
+    (event_type = 'request_started'
+      AND request_method = 'POST'
+      AND request_url = 'https://x402-facilitator.cspr.cloud/settle'
+      AND typeof(request_headers_canonical_json) = 'blob'
+      AND length(request_headers_canonical_json) BETWEEN 2 AND 4096
+      AND typeof(request_body) = 'blob'
+      AND length(request_body) BETWEEN 2 AND 65536
+      AND length(request_body_sha256) = 64
+      AND request_body_sha256 NOT GLOB '*[^0-9a-f]*'
+      AND response_status IS NULL
+      AND response_headers_canonical_json IS NULL
+      AND response_body IS NULL
+      AND response_body_sha256 IS NULL
+      AND failure_code IS NULL)
+    OR
+    (event_type = 'response_observed'
+      AND request_method IS NULL
+      AND request_url IS NULL
+      AND request_headers_canonical_json IS NULL
+      AND request_body IS NULL
+      AND request_body_sha256 IS NULL
+      AND response_status = 200
+      AND typeof(response_headers_canonical_json) = 'blob'
+      AND length(response_headers_canonical_json) BETWEEN 2 AND 4096
+      AND typeof(response_body) = 'blob'
+      AND length(response_body) BETWEEN 2 AND 65536
+      AND length(response_body_sha256) = 64
+      AND response_body_sha256 NOT GLOB '*[^0-9a-f]*'
+      AND failure_code IS NULL)
+    OR
+    (event_type = 'request_failed'
+      AND request_method IS NULL
+      AND request_url IS NULL
+      AND request_headers_canonical_json IS NULL
+      AND request_body IS NULL
+      AND request_body_sha256 IS NULL
+      AND (response_status IS NULL OR response_status BETWEEN 400 AND 599)
+      AND response_headers_canonical_json IS NULL
+      AND response_body IS NULL
+      AND response_body_sha256 IS NULL
+      AND length(failure_code) BETWEEN 1 AND 64)
+  )
 );
-
--- Append-only: any mutation of recorded evidence aborts.
+CREATE UNIQUE INDEX IF NOT EXISTS x402_upstream_settle_calls_one_start
+  ON x402_upstream_settle_calls(call_id) WHERE event_type = 'request_started';
+CREATE UNIQUE INDEX IF NOT EXISTS x402_upstream_settle_calls_one_terminal
+  ON x402_upstream_settle_calls(call_id) WHERE event_type IN ('response_observed','request_failed');
+CREATE UNIQUE INDEX IF NOT EXISTS x402_upstream_settle_calls_authorization_once
+  ON x402_upstream_settle_calls(network,wcspr_contract,payer_account_hash,authorization_nonce)
+  WHERE event_type = 'request_started';
+CREATE UNIQUE INDEX IF NOT EXISTS x402_upstream_settle_calls_payload_once
+  ON x402_upstream_settle_calls(network,signed_payment_payload_hash)
+  WHERE event_type = 'request_started';
+CREATE TRIGGER IF NOT EXISTS x402_upstream_settle_calls_terminal_binding
+BEFORE INSERT ON x402_upstream_settle_calls
+WHEN NEW.event_type IN ('response_observed','request_failed')
+BEGIN
+  SELECT RAISE(ABORT, 'x402_settle_journal_orphan_or_binding_mismatch')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM x402_upstream_settle_calls AS started
+    WHERE started.event_type = 'request_started'
+      AND started.call_id = NEW.call_id
+      AND started.network = NEW.network
+      AND started.wcspr_contract = NEW.wcspr_contract
+      AND started.signed_payment_payload_hash = NEW.signed_payment_payload_hash
+      AND started.payer_account_hash = NEW.payer_account_hash
+      AND started.authorization_nonce = NEW.authorization_nonce
+      AND started.resource_id = NEW.resource_id
+      AND started.action_id = NEW.action_id
+      AND started.envelope_hash = NEW.envelope_hash
+  );
+END;
 CREATE TRIGGER IF NOT EXISTS x402_upstream_settle_calls_no_update
 BEFORE UPDATE ON x402_upstream_settle_calls
 BEGIN
-  SELECT RAISE(ABORT, 'x402_upstream_settle_calls_append_only');
+  SELECT RAISE(ABORT, 'x402_settle_journal_append_only');
 END;
-
 CREATE TRIGGER IF NOT EXISTS x402_upstream_settle_calls_no_delete
 BEFORE DELETE ON x402_upstream_settle_calls
 BEGIN
-  SELECT RAISE(ABORT, 'x402_upstream_settle_calls_append_only');
+  SELECT RAISE(ABORT, 'x402_settle_journal_append_only');
 END;
-
--- Exactly one start and at most one terminal per call.
-CREATE UNIQUE INDEX IF NOT EXISTS x402_settle_one_start_per_call
-  ON x402_upstream_settle_calls (call_id)
-  WHERE event_type = 'request_started';
-
-CREATE UNIQUE INDEX IF NOT EXISTS x402_settle_one_terminal_per_call
-  ON x402_upstream_settle_calls (call_id)
-  WHERE event_type IN ('response_observed', 'request_failed');
-
--- The ledger's exclusive-submission gate promises at most ONE /settle per
--- authorization and per signed payload, EVER; the journal enforces the same
--- promise independently at the evidence layer.
-CREATE UNIQUE INDEX IF NOT EXISTS x402_settle_one_start_per_authorization
-  ON x402_upstream_settle_calls
-    (network, wcspr_contract, payer_account_hash, authorization_nonce)
-  WHERE event_type = 'request_started';
-
-CREATE UNIQUE INDEX IF NOT EXISTS x402_settle_one_start_per_payload
-  ON x402_upstream_settle_calls (network, signed_payment_payload_hash)
-  WHERE event_type = 'request_started';
-
--- A terminal event must follow a start for the SAME call and carry the
--- identical binding: a terminal with no matching start (or a drifted
--- binding field) aborts, so an outcome can never be attributed to a call
--- that was not journaled first.
-CREATE TRIGGER IF NOT EXISTS x402_settle_terminal_matches_start
-BEFORE INSERT ON x402_upstream_settle_calls
-WHEN NEW.event_type IN ('response_observed', 'request_failed')
-BEGIN
-  SELECT RAISE(ABORT, 'x402_settle_terminal_without_matching_start')
-  WHERE NOT EXISTS (
-    SELECT 1 FROM x402_upstream_settle_calls
-    WHERE event_type = 'request_started'
-      AND call_id = NEW.call_id
-      AND network = NEW.network
-      AND wcspr_contract = NEW.wcspr_contract
-      AND signed_payment_payload_hash = NEW.signed_payment_payload_hash
-      AND payer_account_hash = NEW.payer_account_hash
-      AND authorization_nonce = NEW.authorization_nonce
-      AND resource_id = NEW.resource_id
-      AND action_id = NEW.action_id
-      AND envelope_hash = NEW.envelope_hash
-      AND request_method = NEW.request_method
-      AND request_url = NEW.request_url
-      AND request_body_sha256 = NEW.request_body_sha256
-  );
-END;
+COMMIT;

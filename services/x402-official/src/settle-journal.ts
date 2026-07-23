@@ -1,18 +1,26 @@
 /**
  * Durable append-only journal of every credentialed upstream `/settle` call.
  *
- * The fulfillment ledger promises at most one facilitator `/settle` per
- * authorization; this journal is the EVIDENCE for that promise. Every call
- * appends `request_started` durably (synchronous=FULL) BEFORE any network
- * I/O, then exactly one terminal event: `response_observed` (the raw 2xx
- * bytes, recorded BEFORE parsing) or `request_failed` (bounded — a
- * credentialed non-2xx body is never stored, because it can reflect the
- * token). UPDATE and DELETE always abort at the schema layer.
+ * The SCHEMA IS FROZEN by the release contract
+ * (`UPSTREAM_SETTLE_JOURNAL_MIGRATION` in
+ * `tests/test_release_official_x402_adapter.py`): the repository migration
+ * must match it byte-for-byte, and this module only PRODUCES rows the
+ * frozen CHECKs accept:
  *
- * Secrets never enter the journal: request headers are recorded as the
- * constant `{"content-type":"application/json"}` (the Authorization header
- * is deliberately not part of the record), and response headers pass a safe
- * allowlist.
+ * - `request_started` carries the full request record (method, frozen
+ *   production URL, canonical-JSON header blob, exact body bytes, body
+ *   hash) and is committed durably (synchronous=FULL) BEFORE any network
+ *   I/O;
+ * - `response_observed` requires upstream status EXACTLY 200 and carries
+ *   the raw response bytes (journaled BEFORE parsing) with every request
+ *   field NULL;
+ * - `request_failed` carries ONLY a bounded failure code and an optional
+ *   4xx/5xx status — never a body, never headers — with every request
+ *   field NULL (a credentialed non-2xx body can reflect the token).
+ *
+ * UPDATE and DELETE always abort at the schema layer; partial unique
+ * indexes pin one start and one terminal per call, one start per
+ * authorization identity, and one start per signed payload.
  */
 
 import DatabaseConstructor from "better-sqlite3";
@@ -23,11 +31,10 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ServiceRefusal } from "./errors.js";
-import { lp } from "./hashes.js";
 import type { SettleCallBinding } from "./types.js";
 
-/** Domain separator for the call identity hash (trailing NUL included). */
-export const SETTLE_CALL_DOMAIN = "CONCORDIA_X402_SETTLE_CALL_V1\0";
+/** Frozen domain separator for the call identity hash (trailing NUL). */
+export const SETTLE_CALL_DOMAIN = "CONCORDIA_X402_UPSTREAM_SETTLE_CALL_V1\0";
 
 export const SETTLE_EVENT_TYPES = [
   "request_started",
@@ -37,14 +44,9 @@ export const SETTLE_EVENT_TYPES = [
 
 export type SettleEventType = (typeof SETTLE_EVENT_TYPES)[number];
 
-/** The exact request-header record: the credential is never journaled. */
-export const JOURNALED_REQUEST_HEADERS_JSON = JSON.stringify({
-  "content-type": "application/json",
-});
-
 /**
- * Response headers that may be journaled. Everything else — including any
- * Set-Cookie, Authorization echo, or proxy token — is dropped, never stored.
+ * Response headers that may enter the canonical journal record. Everything
+ * else — any Set-Cookie, Authorization echo, or proxy token — is dropped.
  */
 const RESPONSE_HEADER_ALLOWLIST: ReadonlySet<string> = new Set([
   "content-type",
@@ -56,53 +58,59 @@ const RESPONSE_HEADER_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 const BOUNDED_FAILURE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
 
-export function sha256Hex(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
+export function sha256Hex(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
 }
 
 /**
- * call_id = SHA256("CONCORDIA_X402_SETTLE_CALL_V1\0" || lp(field)…) over the
- * length-prefixed UTF-8 fields, in order: network, WCSPR contract,
- * signed-payload hash, payer, nonce, resource ID, action ID, envelope hash,
- * request-body SHA256.
+ * Canonical JSON bytes of a flat string map: lowercase keys sorted
+ * lexicographically, compact separators — byte-compatible with the release
+ * adapter's Python `_canonical` for the same map.
  */
-export function settleCallId(
-  binding: SettleCallBinding,
-  requestBodySha256: string,
-): string {
-  const fields = [
-    binding.network,
-    binding.wcsprContract,
-    binding.signedPaymentPayloadHash,
-    binding.payerAccountHash,
-    binding.authorizationNonce,
-    binding.resourceId,
-    binding.actionId,
-    binding.envelopeHash,
-    requestBodySha256,
-  ];
-  const hash = createHash("sha256");
-  hash.update(Buffer.from(SETTLE_CALL_DOMAIN, "utf8"));
-  for (const field of fields) {
-    hash.update(lp(Buffer.from(field, "utf8")));
+export function canonicalJsonBytes(map: Record<string, string>): Buffer {
+  const sorted: Record<string, string> = {};
+  for (const key of Object.keys(map).sort()) {
+    sorted[key] = map[key] as string;
   }
-  return hash.digest("hex");
+  return Buffer.from(JSON.stringify(sorted), "utf8");
 }
 
-/** Allowlisted, lowercase-keyed, key-sorted response-header record. */
-export function sanitizeResponseHeaders(headers: Headers): string {
-  const out: Record<string, string> = {};
-  const keys: string[] = [];
-  headers.forEach((_value, key) => {
-    keys.push(key.toLowerCase());
-  });
-  for (const key of keys.sort()) {
-    if (RESPONSE_HEADER_ALLOWLIST.has(key)) {
-      out[key] = headers.get(key) ?? "";
-    }
+/** The frozen request-header record: the credential is never journaled. */
+export const JOURNALED_REQUEST_HEADERS: Buffer = canonicalJsonBytes({
+  "content-type": "application/json",
+});
+
+/**
+ * Frozen call identity:
+ * `SHA256("CONCORDIA_X402_UPSTREAM_SETTLE_CALL_V1\0" ||
+ *   signed_payment_payload_hash_bytes || authorization_nonce_bytes)`.
+ */
+export function settleCallId(binding: SettleCallBinding): string {
+  if (
+    !HEX64.test(binding.signedPaymentPayloadHash) ||
+    !HEX64.test(binding.authorizationNonce)
+  ) {
+    throw new ServiceRefusal(500, "settle_journal_binding_invalid", "internal");
   }
-  return JSON.stringify(out);
+  return createHash("sha256")
+    .update(Buffer.from(SETTLE_CALL_DOMAIN, "utf8"))
+    .update(Buffer.from(binding.signedPaymentPayloadHash, "hex"))
+    .update(Buffer.from(binding.authorizationNonce, "hex"))
+    .digest("hex");
+}
+
+/** Allowlisted, lowercase-keyed, key-sorted canonical response headers. */
+export function sanitizeResponseHeaders(headers: Headers): Buffer {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (RESPONSE_HEADER_ALLOWLIST.has(lower)) {
+      out[lower] = value;
+    }
+  });
+  return canonicalJsonBytes(out);
 }
 
 export interface SettleJournalEvent {
@@ -117,14 +125,14 @@ export interface SettleJournalEvent {
   resourceId: string;
   actionId: string;
   envelopeHash: string;
-  requestMethod: string;
-  requestUrl: string;
-  requestHeadersJson: string;
-  requestBody: string;
-  requestBodySha256: string;
+  requestMethod: string | null;
+  requestUrl: string | null;
+  requestHeadersCanonicalJson: Buffer | null;
+  requestBody: Buffer | null;
+  requestBodySha256: string | null;
   responseStatus: number | null;
-  responseHeadersJson: string | null;
-  responseBody: string | null;
+  responseHeadersCanonicalJson: Buffer | null;
+  responseBody: Buffer | null;
   responseBodySha256: string | null;
   failureCode: string | null;
   observedAt: string;
@@ -142,14 +150,14 @@ interface JournalDbRow {
   resource_id: string;
   action_id: string;
   envelope_hash: string;
-  request_method: string;
-  request_url: string;
-  request_headers_json: string;
-  request_body: string;
-  request_body_sha256: string;
+  request_method: string | null;
+  request_url: string | null;
+  request_headers_canonical_json: Buffer | null;
+  request_body: Buffer | null;
+  request_body_sha256: string | null;
   response_status: number | null;
-  response_headers_json: string | null;
-  response_body: string | null;
+  response_headers_canonical_json: Buffer | null;
+  response_body: Buffer | null;
   response_body_sha256: string | null;
   failure_code: string | null;
   observed_at: string;
@@ -170,11 +178,11 @@ function toEvent(r: JournalDbRow): SettleJournalEvent {
     envelopeHash: r.envelope_hash,
     requestMethod: r.request_method,
     requestUrl: r.request_url,
-    requestHeadersJson: r.request_headers_json,
+    requestHeadersCanonicalJson: r.request_headers_canonical_json,
     requestBody: r.request_body,
     requestBodySha256: r.request_body_sha256,
     responseStatus: r.response_status,
-    responseHeadersJson: r.response_headers_json,
+    responseHeadersCanonicalJson: r.response_headers_canonical_json,
     responseBody: r.response_body,
     responseBodySha256: r.response_body_sha256,
     failureCode: r.failure_code,
@@ -182,20 +190,19 @@ function toEvent(r: JournalDbRow): SettleJournalEvent {
   };
 }
 
-/** Identity of one journaled call: the start row's request-side fields. */
+/** Identity of one journaled call: the start row's request-side record. */
 export interface SettleCallStart {
   callId: string;
   binding: SettleCallBinding;
   requestMethod: string;
   requestUrl: string;
-  requestBody: string;
+  requestBody: Buffer;
   requestBodySha256: string;
 }
 
 function journalAppendFailure(): never {
-  // A journal append that cannot commit means the call must not proceed (for
-  // a start) or must never be reported as success (for a terminal). The code
-  // is stable and secret-free.
+  // A journal append that cannot commit means the call must not proceed
+  // (for a start) or must never be reported as success (for a terminal).
   throw new ServiceRefusal(503, "settle_journal_append_failed", "upstream_unavailable");
 }
 
@@ -224,15 +231,20 @@ export class SettleJournal {
   /**
    * Durably journal the start of a credentialed `/settle` call. Throws (and
    * therefore forbids the network call) if the append cannot commit — which
-   * includes a second start for the same call, authorization, or payload.
+   * includes a second start for the same call, authorization, or payload,
+   * and any request record the frozen CHECKs reject.
    */
   recordRequestStarted(start: SettleCallStart): void {
     try {
-      this.insert({
+      this.insert(start, {
         event_type: "request_started",
-        start,
+        request_method: start.requestMethod,
+        request_url: start.requestUrl,
+        request_headers_canonical_json: JOURNALED_REQUEST_HEADERS,
+        request_body: start.requestBody,
+        request_body_sha256: start.requestBodySha256,
         response_status: null,
-        response_headers_json: null,
+        response_headers_canonical_json: null,
         response_body: null,
         response_body_sha256: null,
         failure_code: null,
@@ -243,21 +255,27 @@ export class SettleJournal {
   }
 
   /**
-   * Journal the raw 2xx response bytes. MUST be called before the bytes are
+   * Journal the raw 200 response bytes. MUST be called before the bytes are
    * parsed; a failed append here means the caller can never report success.
+   * The frozen schema accepts ONLY status 200 here and forces every request
+   * field to NULL on terminal rows.
    */
   recordResponseObserved(
     start: SettleCallStart,
     responseStatus: number,
-    responseHeadersJson: string,
-    responseBody: string,
+    responseHeadersCanonicalJson: Buffer,
+    responseBody: Buffer,
   ): void {
     try {
-      this.insert({
+      this.insert(start, {
         event_type: "response_observed",
-        start,
+        request_method: null,
+        request_url: null,
+        request_headers_canonical_json: null,
+        request_body: null,
+        request_body_sha256: null,
         response_status: responseStatus,
-        response_headers_json: responseHeadersJson,
+        response_headers_canonical_json: responseHeadersCanonicalJson,
         response_body: responseBody,
         response_body_sha256: sha256Hex(responseBody),
         failure_code: null,
@@ -268,26 +286,33 @@ export class SettleJournal {
   }
 
   /**
-   * Journal a bounded failure. A credentialed non-2xx body is NEVER stored —
-   * only the status, allowlisted headers, and a bounded failure code.
+   * Journal a bounded failure: ONLY the bounded failure code and an
+   * optional 4xx/5xx status — never a body, never headers (frozen CHECK).
    * Best-effort by design: the caller is already failing, and a journal
    * error here must not mask the original refusal.
    */
   recordRequestFailed(
     start: SettleCallStart,
     responseStatus: number | null,
-    responseHeadersJson: string | null,
     failureCode: string,
   ): void {
     const bounded = BOUNDED_FAILURE_CODE.test(failureCode)
       ? failureCode
       : "settle_call_failed";
+    const status =
+      responseStatus !== null && responseStatus >= 400 && responseStatus <= 599
+        ? responseStatus
+        : null;
     try {
-      this.insert({
+      this.insert(start, {
         event_type: "request_failed",
-        start,
-        response_status: responseStatus,
-        response_headers_json: responseHeadersJson,
+        request_method: null,
+        request_url: null,
+        request_headers_canonical_json: null,
+        request_body: null,
+        request_body_sha256: null,
+        response_status: status,
+        response_headers_canonical_json: null,
         response_body: null,
         response_body_sha256: null,
         failure_code: bounded,
@@ -314,37 +339,44 @@ export class SettleJournal {
     return rows.map(toEvent);
   }
 
-  private insert(row: {
-    event_type: SettleEventType;
-    start: SettleCallStart;
-    response_status: number | null;
-    response_headers_json: string | null;
-    response_body: string | null;
-    response_body_sha256: string | null;
-    failure_code: string | null;
-  }): void {
-    const { start } = row;
+  private insert(
+    start: SettleCallStart,
+    row: {
+      event_type: SettleEventType;
+      request_method: string | null;
+      request_url: string | null;
+      request_headers_canonical_json: Buffer | null;
+      request_body: Buffer | null;
+      request_body_sha256: string | null;
+      response_status: number | null;
+      response_headers_canonical_json: Buffer | null;
+      response_body: Buffer | null;
+      response_body_sha256: string | null;
+      failure_code: string | null;
+    },
+  ): void {
     this.db
       .prepare(
         `INSERT INTO x402_upstream_settle_calls (
            event_type, call_id, network, wcspr_contract,
            signed_payment_payload_hash, payer_account_hash,
            authorization_nonce, resource_id, action_id, envelope_hash,
-           request_method, request_url, request_headers_json, request_body,
-           request_body_sha256, response_status, response_headers_json,
-           response_body, response_body_sha256, failure_code, observed_at
+           request_method, request_url, request_headers_canonical_json,
+           request_body, request_body_sha256, response_status,
+           response_headers_canonical_json, response_body,
+           response_body_sha256, failure_code, observed_at
          ) VALUES (
            @event_type, @call_id, @network, @wcspr_contract,
            @signed_payment_payload_hash, @payer_account_hash,
            @authorization_nonce, @resource_id, @action_id, @envelope_hash,
-           @request_method, @request_url, @request_headers_json,
+           @request_method, @request_url, @request_headers_canonical_json,
            @request_body, @request_body_sha256, @response_status,
-           @response_headers_json, @response_body, @response_body_sha256,
-           @failure_code, @observed_at
+           @response_headers_canonical_json, @response_body,
+           @response_body_sha256, @failure_code, @observed_at
          )`,
       )
       .run({
-        event_type: row.event_type,
+        ...row,
         call_id: start.callId,
         network: start.binding.network,
         wcspr_contract: start.binding.wcsprContract,
@@ -354,16 +386,6 @@ export class SettleJournal {
         resource_id: start.binding.resourceId,
         action_id: start.binding.actionId,
         envelope_hash: start.binding.envelopeHash,
-        request_method: start.requestMethod,
-        request_url: start.requestUrl,
-        request_headers_json: JOURNALED_REQUEST_HEADERS_JSON,
-        request_body: start.requestBody,
-        request_body_sha256: start.requestBodySha256,
-        response_status: row.response_status,
-        response_headers_json: row.response_headers_json,
-        response_body: row.response_body,
-        response_body_sha256: row.response_body_sha256,
-        failure_code: row.failure_code,
         observed_at: new Date().toISOString(),
       });
   }
@@ -381,4 +403,11 @@ function loadMigrationSql(): string {
     migrationSqlCache = readFileSync(path, "utf8");
   }
   return migrationSqlCache;
+}
+
+/** Repo path of the frozen migration (for byte-exactness tests). */
+export function migrationFilePath(): string {
+  return fileURLToPath(
+    new URL("../migrations/0002_upstream_settle_journal.sql", import.meta.url),
+  );
 }

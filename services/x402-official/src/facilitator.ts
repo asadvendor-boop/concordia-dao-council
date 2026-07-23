@@ -21,7 +21,7 @@ import {
   REFUSAL_CODES,
   ServiceRefusal,
 } from "./errors.js";
-import { readBoundedJson, readBoundedText } from "./http.js";
+import { readBoundedBytes, readBoundedJson } from "./http.js";
 import {
   sanitizeResponseHeaders,
   settleCallId,
@@ -203,16 +203,18 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
       throw new ServiceRefusal(500, "settle_journal_not_configured", "internal");
     }
     const token = this.tokenProvider();
-    const requestBody = JSON.stringify(body);
+    const requestBody = Buffer.from(JSON.stringify(body), "utf8");
     const start: SettleCallStart = {
-      callId: "",
+      callId: settleCallId(binding),
       binding,
       requestMethod: "POST",
+      // The frozen schema pins the start row's URL to the production
+      // /settle endpoint; a transport pointed anywhere else cannot even
+      // journal a start, and therefore cannot settle.
       requestUrl: `${this.baseUrl}/settle`,
       requestBody,
       requestBodySha256: sha256Hex(requestBody),
     };
-    start.callId = settleCallId(binding, start.requestBodySha256);
 
     // Durable start BEFORE any credentialed I/O; a failed append throws and
     // nothing is sent.
@@ -233,49 +235,46 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
         body: requestBody,
       });
     } catch {
-      settleJournal.recordRequestFailed(
-        start,
-        null,
-        null,
-        "facilitator_unreachable",
-      );
+      settleJournal.recordRequestFailed(start, null, "facilitator_unreachable");
       throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
     }
 
-    if (!response.ok) {
-      // Never read a credentialed non-2xx body (401 reflects the token) —
-      // and never store one: the journal gets status + allowlisted headers.
+    if (response.status !== 200) {
+      // The release proof requires upstream success to be EXACTLY 200.
+      // Anything else fails closed without reading (or storing) the body —
+      // a credentialed non-2xx body can reflect the token, and the frozen
+      // failure row carries only a bounded code plus an optional 4xx/5xx
+      // status.
       try {
         await response.body?.cancel();
       } catch {
         /* discarded */
       }
-      settleJournal.recordRequestFailed(
-        start,
-        response.status,
-        sanitizeResponseHeaders(response.headers),
-        `facilitator_http_${response.status}`,
-      );
-      if (response.status >= 500) {
-        throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
+      if (response.status >= 400 && response.status <= 599) {
+        settleJournal.recordRequestFailed(
+          start,
+          response.status,
+          `facilitator_http_${response.status}`,
+        );
+        if (response.status >= 500) {
+          throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
+        }
+        throw new ServiceRefusal(
+          502,
+          `facilitator_http_${response.status}`,
+          "upstream_malformed",
+        );
       }
-      throw new ServiceRefusal(
-        502,
-        `facilitator_http_${response.status}`,
-        "upstream_malformed",
-      );
+      // A non-200 "success" status (201, 204, …) is not a settlement.
+      settleJournal.recordRequestFailed(start, null, "unexpected_success_status");
+      throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
     }
 
-    let text: string;
+    let raw: Buffer;
     try {
-      text = await readBoundedText(response, this.maxResponseBytes);
+      raw = await readBoundedBytes(response, this.maxResponseBytes);
     } catch {
-      settleJournal.recordRequestFailed(
-        start,
-        response.status,
-        sanitizeResponseHeaders(response.headers),
-        "response_too_large",
-      );
+      settleJournal.recordRequestFailed(start, null, "response_too_large");
       throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
     }
 
@@ -286,11 +285,11 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
       start,
       response.status,
       sanitizeResponseHeaders(response.headers),
-      text,
+      raw,
     );
 
     try {
-      return JSON.parse(text) as unknown;
+      return JSON.parse(raw.toString("utf8")) as unknown;
     } catch {
       throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
     }
