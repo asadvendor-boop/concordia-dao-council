@@ -1,0 +1,718 @@
+{
+  "schema": "concordia-finals-scope-control-v1",
+  "status": "active",
+  "source_documents": [
+    {
+      "name": "CONCORDIA_FINALS_UNIFIED_PLAN_v2.0.md",
+      "sha256": "cbb4983f9312347a1d45f9752b8aa33c7091cf322a0a9d19b503c055ff0747e6"
+    },
+    {
+      "name": "CONCORDIA_FINALS_PLAN_v2.0_APPROVAL_ADDENDUM.md",
+      "sha256": "f4149f9549f5be8bfe94374e1aaf30fb7884daa91f8cccb96fa44d7010d36a3e"
+    }
+  ],
+  "scope_policy": {
+    "committed_items_are_non_cuttable": true,
+    "rollback_is_availability_only": true,
+    "rollback_never_completes_a_gate": true,
+    "missing_authority_blocks_instead_of_reducing_scope": true,
+    "only_tail_items": [
+      "MIT_TO_AGPL_DECISION",
+      "EXTRA_TUTORIAL_SCREENCASTS"
+    ]
+  },
+  "fallback_gate": {
+    "id": "G0-R",
+    "status": "pass",
+    "evidence": [
+      "handoff/G0R_FALLBACK_EVIDENCE.json",
+      "handoff/G0R_RESTORE_RUNBOOK.md",
+      "ECS snapshot s-t4nip7i1zb1dradznxiq completed at 100 percent"
+    ],
+    "rule": "A restore protects availability but never completes a finals gate."
+  },
+  "gates": [
+    {
+      "id": "G0",
+      "name": "baseline access and funding",
+      "status": "blocked",
+      "depends_on": [],
+      "acceptance": [
+        "Every required account exists with pairwise-distinct role identities.",
+        "The installer-deployer holds 250 CSPR; proposer 25 CSPR; finalizer 40 CSPR; each of three signers 25 CSPR; fresh SafePay payer 20 CSPR; dedicated treasury is evidenced at exactly 625.000000000 CSPR with its 5-CSPR gas allowance budgeted and recorded separately; native recipient 0 CSPR; WCSPR payer starts with 60 CSPR for swap source plus gas and ends with at least 25 WCSPR plus enough native CSPR for fees; WCSPR payee 0 CSPR; and 100 CSPR remains as rerun reserve.",
+        "The dedicated treasury holds exactly 625.000000000 CSPR before its evidenced snapshot.",
+        "The official-x402 payer holds at least 25 WCSPR and has a supported EIP-712 signer.",
+        "The live WCSPR package, active contract hash, token name, version, decimals, transfer_with_authorization ABI, value U256 field, and casper:casper-test network are independently read back and frozen.",
+        "All four design references match their frozen absolute path, SHA-256, and dimensions.",
+        "The G0-R bundle, source archive, SQLite backup, 77 image digests, ECS snapshot, route crawl, anchor crawl, screenshots, and restore commands remain independently verified.",
+        "The historical contract and live-artifact SHA-256 inventories match the frozen G1 manifests.",
+        "A fresh baseline records Git identity, pytest, repository hygiene, canonical consistency, redaction, npm ci, Next production build, Playwright, and provider TLS without reusing stale build output.",
+        "All registrar, GitHub Pages, npm, VM, Caddy, YouTube, DoraHacks, and facilitator supported/verify/settle authorities are verified without exposing credentials."
+      ],
+      "evidence": [
+        "G0 read-only inventory completed 2026-07-22",
+        "Three existing Casper identities and the 1952-CSPR funding source were located",
+        "Several distinct role accounts and WCSPR remain unprovisioned"
+      ],
+      "next_action": "Complete every blocked or partial human prerequisite below and record public identifiers or yes-no evidence only."
+    },
+    {
+      "id": "G1",
+      "name": "interface freeze",
+      "status": "pass",
+      "depends_on": [],
+      "acceptance": [
+        "The approved header, action bodies, encoders, vectors, errors, and cross-lane schemas are frozen.",
+        "The annotated tag peels to the manifest commit and the manifest status is ready."
+      ],
+      "evidence": [
+        "annotated tag concordia-g1-freeze-v2.0-a",
+        "commit b24c0409023e6c4b56287d4fddc17bdb42d9b1ac",
+        "handoff/G1_FREEZE_MANIFEST.json"
+      ],
+      "next_action": "Keep the tag immutable; record later corrections only in the versioned post-freeze correction registry."
+    },
+    {
+      "id": "G2",
+      "name": "component verification",
+      "status": "in_progress",
+      "depends_on": [
+        "G1"
+      ],
+      "acceptance": [
+        "All Rust, Python, TypeScript, dashboard, encoder, concurrency, restart, tamper, and replay component tests pass from one integrated commit.",
+        "Every isolated work package has an independent review with no release-blocking finding."
+      ],
+      "evidence": [
+        "Core, verifier, Compose, and Caddy have isolated local evidence",
+        "Claude-owned WP2, WP3, WP5, WP7, WP9, and WP11 remain correction-gated"
+      ],
+      "next_action": "Integrate only independently approved commits, then run the complete fresh component matrix."
+    },
+    {
+      "id": "G3",
+      "name": "Wasm and live state readback",
+      "status": "pending",
+      "depends_on": [
+        "G2"
+      ],
+      "acceptance": [
+        "The locked v3 Wasm is byte-reproducible and historical v1-v2 sources remain byte-identical.",
+        "A supported Casper state-readback method proves every frozen v3 query from live chain state."
+      ],
+      "evidence": [],
+      "next_action": "Run the integrated reproducible build, install v3 on Testnet, and capture two-source live state readback."
+    },
+    {
+      "id": "G4",
+      "name": "integrated backend",
+      "status": "pending",
+      "depends_on": [
+        "G2"
+      ],
+      "acceptance": [
+        "Gateway, provider, official-x402 service, executor, proof registry, volumes, and migrations start from rendered production configuration.",
+        "Every API and proof schema exactly matches the frozen registry."
+      ],
+      "evidence": [],
+      "next_action": "Pass the full local integrated backend gate before stage-one deployment."
+    },
+    {
+      "id": "G5",
+      "name": "hosted security boundaries",
+      "status": "pending",
+      "depends_on": [
+        "G4"
+      ],
+      "acceptance": [
+        "Hosted approval direct-access, missing-auth, wrong-auth, CSRF, nonce-replay, and success cases pass.",
+        "Hosted demo abuse, reset, replay, cleanup-scope, and canonical-protection cases pass.",
+        "Hosted room impersonation, forged-human, metadata-spoof, role, membership, and cross-room cases pass."
+      ],
+      "evidence": [],
+      "next_action": "Deploy stage one with a fresh restore point and run every named hosted adversarial test."
+    },
+    {
+      "id": "G6",
+      "name": "SafePay Lite live proof",
+      "status": "pending",
+      "depends_on": [
+        "G4",
+        "G5"
+      ],
+      "acceptance": [
+        "Provider TLS is healthy and the provider is the only durable atomic consumption authority.",
+        "A fresh correlation-bound native-CSPR payment proves one consumption, idempotent same-resource retry, and terminal cross-resource reuse.",
+        "The supplemental v2 artifact is independently verified and never inserted into the historical canonical chain."
+      ],
+      "evidence": [],
+      "next_action": "Run the corrected live SafePay capture after WP2 and stage-one infrastructure pass."
+    },
+    {
+      "id": "G7a",
+      "name": "v3 authorization and native treasury execution live proof",
+      "status": "pending",
+      "depends_on": [
+        "G0",
+        "G3",
+        "G4",
+        "G5"
+      ],
+      "acceptance": [
+        "The complete thirteen-step live v3 choreography records each expected outcome, including QuorumNotMet error 8, EnvelopeHashMismatch error 10, exact acceptance, AlreadyFinalized error 12, and action_authorized true state readback.",
+        "A 625-CSPR evidenced treasury baseline authorizes and executes exactly 50 CSPR through the durable executor.",
+        "A duplicate executor invocation creates no second transfer and the durable journal remains FINALIZED after restart reconciliation.",
+        "Two independent Casper observations bind the final transfer to the exact authorized action and verify source account, recipient account, amount 50.000000000 CSPR, proposal-derived transfer ID, finality, and gas."
+      ],
+      "evidence": [],
+      "next_action": "Complete G0 funding, install v3, run the four-outcome sequence, then execute the native transfer once."
+    },
+    {
+      "id": "G7b",
+      "name": "official governed x402 settlement live proof",
+      "status": "blocked",
+      "depends_on": [
+        "G0",
+        "G3",
+        "G4",
+        "G5"
+      ],
+      "acceptance": [
+        "An authenticated /supported response and a real unauthenticated resource request returning HTTP 402 produce exact payment requirements.",
+        "A real supported EIP-712 WCSPR authorization is generated and /verify returns isValid true; HTTP 200 alone is insufficient.",
+        "The exact OfficialX402SettlementV1 action is finalized on v3 before settlement.",
+        "CSPR.cloud settlement returns success true and a finalized on-chain transfer_with_authorization is independently verified.",
+        "The report is released only after the finalized settlement and durable fulfillment record.",
+        "An identical retried request returns the stored fulfillment without a second debit, while a direct duplicate settlement attempt fails terminally.",
+        "Cross-resource reuse and a tampered authorization both fail terminally and never release a report."
+      ],
+      "evidence": [
+        "CSPR.cloud /supported authenticated probe passed",
+        "Live WCSPR v8 exposes value while public SDK helpers currently expose amount",
+        "No finalized compatibility canary exists yet"
+      ],
+      "next_action": "Correct WP5, provision at least 25 WCSPR, run a real finalized compatibility canary, and add the versioned live runner and verifier."
+    },
+    {
+      "id": "G8",
+      "name": "proof lineage",
+      "status": "pending",
+      "depends_on": [
+        "G6",
+        "G7a",
+        "G7b"
+      ],
+      "acceptance": [
+        "Historical byte equality, v1-v2 scope, new v3 artifacts, SafePay v2, treasury, and official-x402 evidence remain generation-specific.",
+        "Every public proof entry binds source commit, deployment commit, observation source, timestamps, and verifier result.",
+        "No new artifact rewrites the historical canonical chain."
+      ],
+      "evidence": [],
+      "next_action": "Assemble the registry only from generated live receipts after G6, G7a, and G7b."
+    },
+    {
+      "id": "G9",
+      "name": "frontend",
+      "status": "pending",
+      "depends_on": [
+        "G8"
+      ],
+      "acceptance": [
+        "A fresh production build and complete Playwright matrix pass across all preserved routes, states, viewports, accessibility, console, and degraded modes.",
+        "Every visible status is derived from the provenance registry and unknown or failed proof is never green.",
+        "The required presentational component map and all legacy behaviors are preserved."
+      ],
+      "evidence": [],
+      "next_action": "Correct WP7 against the frozen post-live proof fixtures, then run deterministic visual and behavioral QA."
+    },
+    {
+      "id": "G9n",
+      "name": "npm verifier publication",
+      "status": "pending",
+      "depends_on": [
+        "G8"
+      ],
+      "acceptance": [
+        "Lint, typecheck, unit tests, mutation tests, and shared Rust-Python-JavaScript golden vectors pass from the release commit.",
+        "npm pack dry-run and the actual tarball pass an explicit file allowlist, credential and secret scan, dependency audit, clean-room install, import, CLI, valid hosted-proof verification, tampered-proof refusal, and unavailable-proof refusal.",
+        "npm view returns the intended package identity and version, and a second independent registry download matches the published integrity digest.",
+        "The first public release has registry-visible provenance whose subject digest and source commit match the exact release tarball and commit, and npm audit signatures succeeds."
+      ],
+      "evidence": [],
+      "next_action": "Publish from a provenance-capable GitHub workflow using Asad-authorized npm credentials or trusted publishing; a provenance-free bootstrap is forbidden."
+    },
+    {
+      "id": "G9d",
+      "name": "MkDocs and Pages",
+      "status": "pending",
+      "depends_on": [
+        "G8"
+      ],
+      "acceptance": [
+        "The fully pinned and hash-checked strict MkDocs build contains all 15 committed information-architecture sections with proof-correct copy and no warnings.",
+        "Every internal and external link passes, the custom 404 is built and served correctly, and internal-only or credential-bearing documents are excluded from the public output.",
+        "The Pages workflow uses least-privilege permissions, pins dependencies and actions, publishes only the audited build artifact, and records the exact source commit.",
+        "GitHub Pages ownership is verified before the docs CNAME is published.",
+        "docs.concordiadao.xyz serves the exact built commit over enforced HTTPS and its deployed content hash matches the local release candidate."
+      ],
+      "evidence": [],
+      "next_action": "Correct WP9 to the 15-section contract, then follow the Pages-before-CNAME sequence."
+    },
+    {
+      "id": "G10",
+      "name": "hosted release candidate",
+      "status": "pending",
+      "depends_on": [
+        "G9",
+        "G9n",
+        "G9d"
+      ],
+      "acceptance": [
+        "The dynamic runtime inventory, rendered Compose, runtime images, full Caddy JSON, DNS, TLS, redirects, routes, APIs, console, and links match the release candidate.",
+        "Every submitted sslip alias remains healthy and YITING /mcp remains unchanged.",
+        "Apex, www, docs, and x402 hosts expose only the approved surfaces."
+      ],
+      "evidence": [],
+      "next_action": "Perform the serialized stage-two release through the sole Codex operator and re-run all hosted checks."
+    },
+    {
+      "id": "G11",
+      "name": "content and claim mapping",
+      "status": "pending",
+      "depends_on": [
+        "G10"
+      ],
+      "acceptance": [
+        "Every material README, jury note, policy, docs, BUIDL, screenshot, and video-script claim maps to a current verified artifact.",
+        "SafePay native CSPR, official x402 WCSPR, and native treasury execution are never conflated.",
+        "The A2-A5 truth contract below is satisfied everywhere."
+      ],
+      "evidence": [],
+      "next_action": "Replace every pending-proof marker only after live receipts exist, then run the claim-to-artifact audit."
+    },
+    {
+      "id": "G12",
+      "name": "code and proof freeze",
+      "status": "pending",
+      "depends_on": [
+        "G11"
+      ],
+      "acceptance": [
+        "Local Git, public GitHub, deployed source, runtime image digests, release manifest, proof receipts, and published package/docs commits all reconcile.",
+        "Repository hygiene, contamination, redaction, dependencies, scanners, links, and full fresh gates pass.",
+        "No untracked development artifact enters the release."
+      ],
+      "evidence": [],
+      "next_action": "Generate the post-artifact release manifest and freeze only after every prior gate is green."
+    },
+    {
+      "id": "G13",
+      "name": "media and submission",
+      "status": "pending",
+      "depends_on": [
+        "G12"
+      ],
+      "acceptance": [
+        "The new public video visibly proves all 11 required beats with readable receipts and no secrets.",
+        "The old video remains public, the new DoraHacks embed is correct, and YouTube, DoraHacks, every link, and every receipt pass incognito verification."
+      ],
+      "evidence": [],
+      "next_action": "Asad records and uploads only from the frozen verified build; Codex then runs the post-video submission sweep."
+    }
+  ],
+  "human_prerequisites": [
+    {
+      "id": "installer_funding",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "250 CSPR on the v3 installer-deployer",
+      "evidence": [
+        "Installer identity 02033c3b...54ce1 located",
+        "Read-only balance was 21.511245851 CSPR",
+        "Funding source with 1952 CSPR is available"
+      ],
+      "next_action": "Recompute the final gas budget, then Asad signs the exact funding transfer."
+    },
+    {
+      "id": "proposer_identity_and_funding",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "one proposer distinct from finalizer and all three signers with 25 CSPR",
+      "evidence": [
+        "No distinct proposer was designated in the G0 inventory"
+      ],
+      "next_action": "Create or designate the proposer, retain its key safely, and fund it after Codex supplies the exact public destination."
+    },
+    {
+      "id": "finalizer_identity_and_funding",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "one finalizer distinct from proposer and all three signers with 40 CSPR",
+      "evidence": [
+        "No distinct finalizer was designated in the G0 inventory"
+      ],
+      "next_action": "Create or designate the finalizer, retain its key safely, and fund it after Codex supplies the exact public destination."
+    },
+    {
+      "id": "three_signer_custody_and_funding",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "three pairwise-distinct signers with usable custody and 25 CSPR each",
+      "evidence": [
+        "02033c3b...54ce1 is held in Casper Wallet",
+        "019aeeb6...0151 is the unattended VM key",
+        "0203389c...7c18e is held in CSPR.click and has 1952 CSPR"
+      ],
+      "next_action": "Freeze which distinct accounts serve only as signers, verify balances, and schedule Asad-present signatures for browser-held keys."
+    },
+    {
+      "id": "safepay_payer_funding",
+      "owner": "Asad+Codex",
+      "status": "pending_verification",
+      "required": "20 CSPR on the fresh SafePay payer",
+      "evidence": [
+        "The historical SafePay proof used a server-held signer",
+        "No final fresh-payment payer assignment or current balance is frozen"
+      ],
+      "next_action": "Designate a payer that can sign unattended, verify its current balance, and fund only the computed shortfall."
+    },
+    {
+      "id": "dedicated_treasury_exact_balance",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "625.000000000 CSPR exactly before the evidenced snapshot",
+      "evidence": [
+        "No dedicated treasury account exists",
+        "An existing historical account must not be reused"
+      ],
+      "next_action": "Create a new treasury account, allocate the approved 625-CSPR baseline plus 5-CSPR gas planning allowance, adjust and independently verify the account at exactly 625.000000000 CSPR immediately before the snapshot, then record actual execution gas separately."
+    },
+    {
+      "id": "native_transfer_recipient",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "one distinct native-CSPR recipient account",
+      "evidence": [
+        "No dedicated native-transfer recipient exists"
+      ],
+      "next_action": "Create or designate the recipient and provide only its public key."
+    },
+    {
+      "id": "wcspr_payer_and_balance",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "60 CSPR as swap source plus gas, converted to at least 25 WCSPR while preserving enough native CSPR for fees",
+      "evidence": [
+        "No dedicated WCSPR payer exists",
+        "No qualifying WCSPR balance or prior swap was found"
+      ],
+      "next_action": "Create or designate an EIP-712-capable payer, fund gas, and swap at least 25 WCSPR at testnet.cspr.trade."
+    },
+    {
+      "id": "treasury_gas_and_rerun_reserve",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "5 CSPR treasury gas planning allowance and 100 CSPR rerun reserve remain allocated outside the evidenced 625-CSPR baseline until live execution",
+      "evidence": [
+        "The approved budget explicitly allocates 5 CSPR for treasury gas and 100 CSPR for reruns",
+        "The located 1952-CSPR funding source is sufficient, but no final allocation receipt exists"
+      ],
+      "next_action": "Codex computes exact shortfalls and destinations; Asad signs the allocation while preserving the 625.000000000-CSPR snapshot baseline."
+    },
+    {
+      "id": "wcspr_payee",
+      "owner": "Asad",
+      "status": "blocked",
+      "required": "one distinct official-x402 WCSPR payee",
+      "evidence": [
+        "No final WCSPR payee is frozen"
+      ],
+      "next_action": "Create or designate the payee and provide only its public account identity."
+    },
+    {
+      "id": "facilitator_access",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "CSPR.cloud access to supported, verify, and settle",
+      "evidence": [
+        "The existing token is file-held and active",
+        "A redacted authenticated supported probe returned HTTP 200",
+        "No finalized verify-settle canary exists"
+      ],
+      "next_action": "Use the file-held token with raw Authorization only; prove verify and settle without logging reflected error bodies."
+    },
+    {
+      "id": "namecheap_authority",
+      "owner": "Asad",
+      "status": "pass",
+      "required": "registrar authority for apex, www, docs, and x402",
+      "evidence": [
+        "Namecheap Advanced DNS access confirmed",
+        "Existing parking and redirect state inventoried"
+      ],
+      "next_action": "Publish records only in the approved Pages-before-CNAME and service-readiness order."
+    },
+    {
+      "id": "github_pages_authority",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "repository admin, Pages enablement, and custom-domain verification",
+      "evidence": [
+        "Repository admin access confirmed",
+        "Pages was not enabled and no Pages workflow existed at G0"
+      ],
+      "next_action": "Land the reviewed Pages workflow, then Asad authorizes Pages and configures docs.concordiadao.xyz before DNS publication."
+    },
+    {
+      "id": "npm_scope_login_2fa",
+      "owner": "Asad+Codex",
+      "status": "partial",
+      "required": "concordia-dao ownership, login, publishing 2FA, and first-release provenance",
+      "evidence": [
+        "npm user syed3000 and concordia-dao organization ownership confirmed",
+        "Publishing 2FA with a security key requires Asad present",
+        "The package is currently unpublished"
+      ],
+      "next_action": "Configure a provenance-capable first-publish workflow and have Asad authorize the exact release; do not bootstrap without provenance."
+    },
+    {
+      "id": "vm_caddy_authority",
+      "owner": "Asad+Codex",
+      "status": "pass",
+      "required": "read-write release authority with sole-operator discipline",
+      "evidence": [
+        "Alibaba Cloud Assistant access is available",
+        "Runtime inventory and Caddy 2.8 image were observed read-only",
+        "Codex is the sole release operator"
+      ],
+      "next_action": "Keep all live mutations serialized behind fresh restore points and semantic diffs."
+    },
+    {
+      "id": "youtube_authority",
+      "owner": "Asad",
+      "status": "pass",
+      "required": "upload and edit access while preserving the old public video",
+      "evidence": [
+        "YouTube access confirmed",
+        "Historical video GU01V83Jrko remains the continuity link"
+      ],
+      "next_action": "Upload a separate new video only after G12; never replace or remove the old video."
+    },
+    {
+      "id": "dorahacks_authority_and_backup",
+      "owner": "Asad",
+      "status": "pass",
+      "required": "edit access and a verbatim backup of BUIDL 46732",
+      "evidence": [
+        "DoraHacks edit access confirmed",
+        "The current BUIDL was backed up verbatim and all 13 existing links were checked"
+      ],
+      "next_action": "Apply final copy and the new video embed only after G11-G12, then verify incognito."
+    }
+  ],
+  "truth_contract": {
+    "A2": {
+      "name": "role and archive truth",
+      "deliberative_agents": [
+        "Rowan",
+        "Mercer",
+        "Verity",
+        "Alden"
+      ],
+      "locke_role": "authorization-bound execution signer",
+      "core_role": "deterministic evidence core",
+      "wells_role": "non-reasoning presentation and archival persona",
+      "future_archive_builder": "Core",
+      "future_archive_sealer": "Locke",
+      "historical_sealed_attribution_is_rewritten": false,
+      "forbidden_claims": [
+        "six reasoning agents deliberate",
+        "Wells independently reasons",
+        "Wells deterministically produces the archive"
+      ]
+    },
+    "A3": {
+      "name": "Odra and execution boundary truth",
+      "historical_v2_claim": "The historical v2 contract rejects receipt storage until proposal quorum is satisfied; Locke separately enforces exact-envelope authorization off-chain.",
+      "v3_claim": "Casper quorum and exact approved-envelope binding are both enforced on-chain by Concordia v3.",
+      "native_transfer_claim": "authorized by on-chain quorum, bound to the approved envelope hash, executed as a native transfer",
+      "contract_custodies_or_disburses_treasury": false,
+      "required_execution_boundary": "The trusted off-chain executor submits the exact transfer only after verifying finalized v3 authorization."
+    },
+    "A4": {
+      "name": "trust boundary",
+      "council_chamber_is_auth_boundary": false,
+      "human_approval_uses_separate_trusted_path": true,
+      "agent_identity_is_derived_from_authenticated_key": true,
+      "must_document": [
+        "public and internal endpoints",
+        "credential and key custody",
+        "Caddy and provider trust",
+        "proof lineage",
+        "human approval",
+        "operator capabilities and tokens"
+      ]
+    },
+    "A5": {
+      "name": "policy enforcement taxonomy",
+      "policy_categories": [
+        "Enforced",
+        "Evidenced",
+        "Presentation",
+        "Roadmap"
+      ],
+      "classification_source": "predicates and tests",
+      "marketing_interpretation_can_upgrade_category": false
+    }
+  },
+  "financial_claims": {
+    "safepay_lite": {
+      "asset": "native CSPR",
+      "public_semantic": "replay-safe and no double consumption; exact same-resource retries are idempotent",
+      "cross_resource_reuse": "terminal refusal",
+      "proof_class": "supplemental SafePay v2"
+    },
+    "official_x402": {
+      "asset": "WCSPR",
+      "network": "casper:casper-test",
+      "may_claim_governed_only_after": "a finalized v3 authorization followed by success:true settlement and finalized on-chain verification",
+      "may_be_called_native_cspr": false
+    },
+    "native_treasury": {
+      "asset": "native CSPR",
+      "baseline": "625.000000000 CSPR",
+      "amount": "50.000000000 CSPR",
+      "public_semantic": "authorized by on-chain quorum, bound to the approved envelope hash, executed as a native transfer",
+      "contract_custody_claim_allowed": false
+    }
+  },
+  "npm_release": {
+    "package": "@concordia-dao/verify",
+    "first_release_requires_registry_visible_provenance": true,
+    "provenance_free_bootstrap_allowed": false,
+    "required_postpublish_check": "npm audit signatures",
+    "required_binding": [
+      "registry gitHead",
+      "exact tarball SHA-512 and SHA-256",
+      "package releaseCommit",
+      "committed prepack digest",
+      "provenance subject digest",
+      "provenance source repository and commit"
+    ]
+  },
+  "known_scope_gaps": [
+    {
+      "id": "RELEASE_COLLECTOR_CORRECTION_GATE",
+      "status": "blocking",
+      "required": [
+        "Add and lock the real pypdf runtime dependency before PDF validation can be accepted.",
+        "Bind rendered Compose secret grants, runtime image identity, runtime configuration, exact Caddy JSON, YITING /mcp continuity, HTTP, TLS, DNS, Pages, npm registry provenance, two independent Casper RPC observations, and proof lineage to one release candidate.",
+        "Reject symlink outputs, unsanitized commands or environment details, marker-only evidence, self-attested proof booleans, unresolved OpenAPI schemas, unstable observation timestamps, and credential-bearing payloads.",
+        "Require byte-exact no-whitespace Caddy secret-file preflight without displaying values.",
+        "Verify deep route-specific response predicates rather than substring markers, and bind the exact Pages deployment status and deployed commit.",
+        "Run the verifier package offline self-test from the exact captured npm tarball before accepting registry publication.",
+        "Pass the second independent adversarial review before commit or integration."
+      ]
+    },
+    {
+      "id": "WP2_CORRECTION_GATE",
+      "status": "blocking",
+      "required": [
+        "Implement the provider as the only durable atomic consumption authority with exact quote, finality, payee, amount, correlation, report-hash, expiry, concurrency, and restart semantics.",
+        "Treat exact same-resource retry as stored idempotent fulfillment, cross-resource reuse as terminal 409, expired unconsumed quote as terminal 410, and never retry 409 as indexer lag.",
+        "Expose strict typed request and response schemas in OpenAPI rather than raw Request bodies.",
+        "Remove proof-runtime, dashboard, and artifact boolean fallbacks; regenerate only a fresh supplemental SafePay v2 artifact.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md and all SP-01 through SP-15 tests."
+      ]
+    },
+    {
+      "id": "WP3_CORRECTION_GATE",
+      "status": "blocking",
+      "required": [
+        "Complete approval _FILE loading, Caddy Basic Auth boundary, server-side proxy-secret overwrite, bcrypt, allowlist, CSRF, nonce replay, and direct-access tests.",
+        "Replace public operator-token activation with a short-lived scenario-scoped one-use or idempotent capability; expose no reset; add rate limits and exact demo_run_id ownership.",
+        "Derive room sender identity, role, and type from the authenticated key; agent keys cannot forge User or System; enforce membership and role-scoped operations without the production full-Gateway-secret fallback.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md and every AU, DM, and RM adversarial test."
+      ]
+    },
+    {
+      "id": "WP7_CORRECTION_GATE",
+      "status": "blocking",
+      "required": [
+        "Eliminate stale cross-proposal state, obsolete demo/reset calls, card-presence green fallbacks, rejected-as-authorized rendering, false SafePay narration, hardcoded proof summaries, and incorrect role taxonomy.",
+        "Preserve all routes, query states, five Proof tabs, at least 15 proof actions, wallet preview and optional signing, exports, evidence modes, recording controls, adversarial POST, degraded states, and basePath semantics.",
+        "Complete the approved presentational component map or record a reviewed functional-equivalence correction for every omitted exact path.",
+        "Pass deterministic viewports, accessibility, non-color status, focus, reduced-motion, console, loaded, error, empty, reviewer, and unavailable-state tests.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP7.md and FE-01 through FE-20."
+      ]
+    },
+    {
+      "id": "WP5_LIVE_TOOLING",
+      "status": "blocking",
+      "required": [
+        "scripts/run_x402_live_proof.py",
+        "scripts/verify_x402_settlement.py",
+        "services/x402-official/config/secrets.example.json",
+        "services/x402-official/test/facilitator.test.ts",
+        "services/x402-official/test/governance-interlock.test.ts",
+        "services/x402-official/test/wording.test.ts",
+        "Fail closed unless every required WCSPR authorization and settlement argument is present and exact; partial or fallback argument sets are forbidden.",
+        "Treat pending finality as pending, not terminal success or failure, and recover lost responses only by a previously persisted exact transaction hash.",
+        "Freeze credential-bearing facilitator origins and reject runtime origin overrides.",
+        "Terminal retries return the durable stored result without rerunning expired or live governance gates.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP5.md and XF-01 through XF-16."
+      ]
+    },
+    {
+      "id": "WP9_INFORMATION_ARCHITECTURE",
+      "status": "blocking",
+      "required": [
+        "Product overview",
+        "Judge quickstart",
+        "Architecture and trust boundaries",
+        "Agent and role taxonomy",
+        "v1 v2 v3 lineage",
+        "v3 envelope specification",
+        "SafePay Lite",
+        "Official x402",
+        "Treasury execution",
+        "Proof provenance",
+        "Verifier SDK and CLI",
+        "Policy matrix",
+        "Deployment and security",
+        "Public receipts",
+        "Launch roadmap"
+      ],
+      "corrections": [
+        "Every unmerged or unverified feature stays visibly pending rather than described as live.",
+        "Role copy says four deliberative agents, Locke as authorization-bound execution signer, Core builds the archive, Locke seals it, and Wells is non-reasoning presentation.",
+        "Historical verifier copy states artifact transcript consistency unless independent live RPC corroboration exists.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP9_WP11.md before publication."
+      ]
+    },
+    {
+      "id": "WP11_COPY_AND_VIDEO",
+      "status": "blocking",
+      "required": [
+        "Repo-tracked final BUIDL copy synchronized only after live proof.",
+        "An eleven-beat video script covering the 30-percent request, 8-percent envelope, QuorumNotMet, EnvelopeHashMismatch, exact acceptance, AlreadyFinalized, matching native transfer, SafePay no-double-consumption, official x402 settlement, @concordia-dao/verify hosted verification, and concordiadao.xyz plus docs.",
+        "Every material claim maps to a current artifact and remains marked pending until that artifact exists."
+      ],
+      "corrections": [
+        "Remove all overclaims about unmerged or unverified SafePay, official x402, security, v3, treasury, package, and domain behavior.",
+        "Use the exact A2 role and archive taxonomy and the historical-verifier scope.",
+        "Satisfy handoff/CODEX_REVIEW_CLAUDE_WP9_WP11.md before final claim markers are removed."
+      ]
+    },
+    {
+      "id": "EXACT_FILE_MAP_DISPOSITION",
+      "status": "blocking",
+      "required": "Implement every literal file and component path or record a reviewed functional-equivalence correction before G2"
+    },
+    {
+      "id": "REPOSITORY_HYGIENE",
+      "status": "blocking",
+      "required": "Keep .playwright-cli and every local browser, credential, cache, generated, and development-only artifact untracked and absent from the release tarball"
+    }
+  ]
+}

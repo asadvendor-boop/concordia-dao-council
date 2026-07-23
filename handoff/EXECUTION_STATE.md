@@ -17,7 +17,69 @@ every handoff or live mutation. Claims require the evidence listed here.
 - Never invoke the current public demo reset or activation during read-only QA.
 - Keep sslip submission links live; protect the other judged apps on the VM.
 
-## Gate ledger
+## Current operational checkpoint
+
+- `handoff/FINALS_SCOPE_CONTROL.json` is the machine-checked authority for the
+  approved plan hashes, every G0-G13 gate, every human prerequisite, and the
+  normative A2-A5 truth contract. A work-package summary below cannot override
+  or complete a formal gate in that file.
+- Core correction commit
+  `3d51406873ec89e73aabe22a6fc1bfa842422c30`, Compose secret-scope commit
+  `7a8b9e1`, and Caddy staging commit `8956f97` are independently reviewed and
+  accepted locally, but remain isolated until the release-collector worktree is
+  clean and Codex cherry-picks them.
+- The replacement release collector is intentionally uncommitted and red until
+  its second independent adversarial review clears it.
+- Claude-owned WP2/WP3/WP5/WP7/WP9/WP11 remain correction-gated; the required
+  official-x402 live runner/verifier, 15-section docs IA, exact frontend/file
+  map, final BUIDL copy, and 11-beat video script are not silently waived.
+- Production, Testnet, DNS, npm, GitHub Pages, Caddy, canonical artifacts, and
+  `main` remain unmodified since G1. The fallback checkout remains clean at
+  `b79b42c` and equals `origin/main`.
+
+## Formal release-gate index
+
+The detailed acceptance predicates, evidence, and next actions live in
+`handoff/FINALS_SCOPE_CONTROL.json`.
+
+| Gate | Current status | Blocking boundary |
+|---|---|---|
+| G0 | BLOCKED | distinct proposer/finalizer/treasury/recipient/WCSPR identities, exact funding, and remaining live authorities |
+| G1 | PASS | annotated freeze tag and ready manifest are immutable |
+| G2 | IN_PROGRESS | corrected Claude packages and one integrated fresh component matrix |
+| G3 | PENDING | locked Wasm plus supported live state readback |
+| G4 | PENDING | integrated backend and frozen schemas |
+| G5 | PENDING | hosted approval/demo/room adversarial security |
+| G6 | PENDING | fresh SafePay Lite native-CSPR proof |
+| G7a | PENDING | v3 four outcomes plus exact 625-to-50 CSPR transfer |
+| G7b | BLOCKED | corrected official-x402 service, at least 25 WCSPR, and finalized compatibility canary |
+| G8 | PENDING | generation-specific proof lineage and registry publication |
+| G9 | PENDING | full frontend build, behavior, viewports, accessibility, console, and degraded QA |
+| G9n | PENDING | first npm publish with registry-visible provenance |
+| G9d | PENDING | strict 15-section MkDocs build and Pages-before-CNAME deployment |
+| G10 | PENDING | hosted RC, runtime/Caddy/DNS/TLS identity, and sslip continuity |
+| G11 | PENDING | complete claim-to-artifact content mapping |
+| G12 | PENDING | local Git equals GitHub, deployed images/source, proof, docs, and package manifests |
+| G13 | PENDING | new 11-beat video and incognito DoraHacks/submission verification |
+
+## Human-prerequisite index
+
+The evidence-safe details and owner actions are recorded in
+`handoff/FINALS_SCOPE_CONTROL.json`; no secret value belongs in this ledger.
+
+| Area | Current status | Owner |
+|---|---|---|
+| Existing three signer identities and 1,952-CSPR funding source | PARTIAL_READY | Asad + Codex |
+| Distinct proposer and finalizer | BLOCKED | Asad |
+| Dedicated treasury at exactly 625.000000000 CSPR and native recipient | BLOCKED | Asad |
+| Treasury gas allowance and 100-CSPR rerun reserve | PARTIAL | Asad + Codex; funding source exists, allocation receipt pending |
+| WCSPR payer/payee, supported signer, and at least 25 WCSPR | BLOCKED | Asad |
+| Facilitator supported/verify/settle | PARTIAL | Asad + Codex; supported passed, finalized canary missing |
+| Namecheap, VM/Caddy, YouTube, DoraHacks | AUTHORITY_CONFIRMED | Asad + Codex |
+| GitHub Pages | PARTIAL | admin confirmed; Pages workflow/domain not live |
+| npm org/login/2FA/provenance | PARTIAL | org and 2FA confirmed; provenance-bearing first publish pending |
+
+## Work-package gate ledger
 
 | Gate | Status | Evidence / next action |
 |---|---|---|
@@ -31,13 +93,14 @@ every handoff or live mutation. Claims require the evidence listed here.
 | Official settlement compatibility | BLOCKED_FAIL_CLOSED | public JS/Go use runtime `amount`; live v8 requires `value`; only a real finalized canary can lift |
 | G1 interface freeze | PASS | annotated tag `concordia-g1-freeze-v2.0-a` peels to `b24c040`; manifest status is `ready` |
 | G0-R fallback verification | PASS | `handoff/G0R_FALLBACK_EVIDENCE.json`: bundle/history, clean tree, archive, SQLite, 77/77 images, completed ECS snapshot, 16/16 routes, 32/32 anchors, four screenshots; restore runbook written |
-| WP1 v3 | PASS_LOCAL | exact-envelope contract/tooling plus canonical-block corrections committed through `83972a8`; the strict independent audit found no contract defect, and Python now matches the frozen Rust `InvalidActionField` precedence with both action ABIs regression-checked. Fresh gates: 688 Python and 29 Rust tests; live deployment remains WP10 |
+| WP1 v3 | PASS_LOCAL_PENDING_INTEGRATION | final correction commit `3d51406873ec89e73aabe22a6fc1bfa842422c30`; independent review found P0/P1/P2=0. Fresh post-commit gates: 897 Python, 149 verifier, TypeScript lint, Ruff, diff checks, and clean-archive verification; live deployment remains G3/G7a |
 | WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, bounded exact card-chain export, and offline historical receipt verification are committed. Independent C10 review passed the 64 MiB/RSS and nested credential-bypass probes. Only v1 currently has a matching canonical card chain; no root or combined artifact is fabricated locally, and live capture/registry publication remain WP10 |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
 | WP8 verifier | PASS_LOCAL_PENDING_PRODUCERS | `8f5ac4a` + truth correction `7aadeca`; independent audit found no P0/P1/P2. Serialized npm gate passes 142/142, lint, audit 0, 132-file pack, temp install/import/bin. Historical v1, exact-v3, native treasury and two-node live corroboration fail closed; WP2/WP3/WP5 adapters await corrected producer schemas. No npm publication yet |
-| WP10 live/release | PASS_LOCAL_PENDING_FINAL_BATCH_REVIEW | no live mutation. The correction tree now has secure create-once readback output, file-only signer custody, exact install success, explicit journal resume modes, two-node treasury-snapshot lineage, exhaustive CLI mode rejection, and source-to-deployment ancestry. After additional cross-runtime URL/DNS parity fixes, fresh gates are 895 Python and 149 verifier tests plus lint/Ruff/diff checks. The corrected snapshot-specific independent review is GO with zero P0/P1/P2; the whole-batch independent review remains the commit gate |
+| WP10 live/release | PASS_LOCAL_PENDING_INTEGRATION_AND_COLLECTOR | core release tooling is included in `3d51406873ec89e73aabe22a6fc1bfa842422c30` and independently cleared with P0/P1/P2=0. No live mutation. The separate three-file release collector remains intentionally uncommitted until its second adversarial review |
 | Release manifest | BLOCKED_ON_FINAL_COLLECTOR_REVIEW | first assembler `7507684` remains superseded and NO-GO. Its three-file replacement now derives Compose/runtime/Caddy/HTTP/TLS/Pages/npm/two-RPC observations, reloads and reruns producer-verifier receipts, binds registry metadata and lineage, scans known secret canaries, requires stable observations, and removes arbitrary ready-payload writing. The new 22-test suite is green, but DNS projection, deep route predicates, Pages deployment status, npm offline self-test, and an independent adversarial review still gate commit |
-| Compose secret scope | PASS_LOCAL_PENDING_REREVIEW | isolated branch `codex/finals-compose-secrets`; CSPR.cloud is file-only in production and mounted only into Mercer, Casper signing is limited to Gateway/Locke, legacy x402 credentials are absent, and SafePay config is limited to Gateway/provider. Raw CSPR.cloud authorization is chain-bound to exact API and Node `/rpc` origins; Association/lookalike hosts receive no token; redirects and environment proxies are disabled. Fresh gate: 883 Python tests, Ruff, rendered Compose, and diff check pass; independent re-review of the final P1/P2 corrections is pending |
+| Compose secret scope | PASS_LOCAL_PENDING_INTEGRATION | commit `7a8b9e1`; CSPR.cloud is file-only in production and mounted only into Mercer, Casper signing is limited to Gateway/Locke, legacy x402 credentials are absent, and SafePay config is limited to Gateway/provider. Raw authorization is chain-bound and invalid config is redacted. Independent review P0/P1/P2=0; fresh gate: 895 Python tests, Ruff, rendered Compose, and diff check |
+| Caddy staging | PASS_LOCAL_PENDING_INTEGRATION | commit `8956f97`; caddy:2.8-alpine validation and runtime probe prove Basic Auth before proxy, spoofed proxy-secret overwrite, exact x402 method/path allowlist, real 308 root redirect, apex/www mapping, and direct demo-route removal. Independent review found no P0/P1; release requires byte-exact no-newline secret files and runtime-image/full-config binding |
 | Integration branch | PASS_LOCAL_PENDING_CORRECTIONS | core history through `77bedb9` is integrated. Fresh integration evidence: 831 Python tests excluding the separately run manifest suite, 25/25 manifest tests, 29 Rust v3 tests, 147 npm verifier tests, TypeScript lint, and Python Ruff all pass. These passing tests do not override the two independent NO-GO code reviews above |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
@@ -55,7 +118,11 @@ every handoff or live mutation. Claims require the evidence listed here.
   `value`; automatic fallback between runtime names is forbidden.
 - CAIP/EIP-712 domain is `casper:casper-test`, not `casper-test`.
 
-## Latest checkpoint
+## Historical checkpoint narrative (non-operative)
+
+The text below is preserved as an append-only audit trail. It contains older
+snapshots and must not be used to decide the next action; the operational
+tables and `handoff/FINALS_SCOPE_CONTROL.json` above always win.
 
 The latest active local gate has not mutated production, Testnet, DNS, npm,
 GitHub Pages, Caddy, canonical evidence, or `main`. The WP10 correction tree
@@ -96,9 +163,9 @@ historical-v1, exact-v3, card-chain and native-treasury evidence, upgrades live
 scope only through two explicit corroborating Casper RPC endpoints, and keeps
 unsupported producer proof types unavailable. A fresh serialized run passed
 142 tests, lint and npm audit; the 132-file public tarball installed and ran in
-a clean consumer. The first release deliberately makes no provenance claim and
-remains an interactive public publish by the npm owner; future releases may use
-trusted publishing after the package exists.
+a clean consumer. The first public release remains blocked until the registry
+shows provenance whose subject digest and source commit bind the exact tarball;
+a provenance-free bootstrap does not satisfy G9n.
 
 The full Python suite now passes 688 tests after the final WP1 parity fix, and
 the v3 crate passes 29 Rust tests. The integration worktree has been created
