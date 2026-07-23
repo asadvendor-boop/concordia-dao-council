@@ -7,7 +7,7 @@
 //   when their live payload is absent.
 // - The provenance registry, v3 sequence, and the two DISTINCT payment panels
 //   render exclusively from registry/payload data.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_CASPER_CONTRACT_HASH,
   DEFAULT_CASPER_DEPLOY_HASH,
@@ -286,6 +286,33 @@ export function ProofCenterPage({ data }) {
     { id: "data", label: "Data" },
     { id: "exports", label: "Exports" },
   ];
+  const tabRefs = useRef({});
+  // Selecting a tab keeps the ?tab= deep-link in sync (via history.replaceState
+  // so no re-navigation occurs), preserving every other query param and the
+  // hash so the tab survives a proposal switch and a page refresh.
+  const selectTab = useCallback((tabId) => {
+    setActiveProofTab(tabId);
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", tabId);
+        window.history.replaceState(window.history.state, "", url);
+      } catch { /* ignore */ }
+    }
+  }, []);
+  const onTabKeyDown = useCallback((event, index) => {
+    const order = proofTabs.map((tab) => tab.id);
+    let nextIndex = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % order.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + order.length) % order.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = order.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextId = order[nextIndex];
+    selectTab(nextId);
+    tabRefs.current[nextId]?.focus();
+  }, [proofTabs, selectTab]);
   const runSandboxPreview = () => {
     const requested = Math.max(0, Number(sandboxBps || 0));
     const approved = Math.min(requested, 800);
@@ -311,14 +338,14 @@ export function ProofCenterPage({ data }) {
     />
     {proofError && <div className="inline-notice warning"><Icon name="signal" size={17} />{proofError}</div>}
     {evidenceOnly && <div className="inline-notice warning"><Icon name="info" size={17} />Evidence-only proposal. This is not the canonical signed proof. Select <strong className="mono">{DEFAULT_REVIEW_PROPOSAL_ID}</strong> to review verified Casper receipts.</div>}
-    <div className="section-tabs" role="tablist" aria-label="Proof Center sections">{proofTabs.map((tab) => <button key={tab.id} type="button" className={cx(activeProofTab === tab.id && "active")} onClick={() => setActiveProofTab(tab.id)}>{tab.label}</button>)}</div>
+    <div className="section-tabs" role="tablist" aria-label="Proof Center sections">{proofTabs.map((tab, index) => <button key={tab.id} type="button" role="tab" id={`proof-tab-${tab.id}`} aria-selected={activeProofTab === tab.id} aria-controls={`proof-tabpanel-${tab.id}`} tabIndex={activeProofTab === tab.id ? 0 : -1} ref={(element) => { tabRefs.current[tab.id] = element; }} className={cx(activeProofTab === tab.id && "active")} onClick={() => selectTab(tab.id)} onKeyDown={(event) => onTabKeyDown(event, index)}>{tab.label}</button>)}</div>
 
-    {activeProofTab === "summary" && <>
+    {activeProofTab === "summary" && <div role="tabpanel" id="proof-tabpanel-summary" aria-labelledby="proof-tab-summary" tabIndex={0}>
       <EnforcementClimaxPanel />
       <div className="proof-hero-grid">
         <Panel title="Canonical proof table" eyebrow="Judge checklist"><div className="proof-table">{compactRows.map((row) => { const rowStatus = String(row.status || "").toLowerCase(); const rowTone = rowStatus === "verified" ? "success" : rowStatus === "recorded" ? "info" : statusTone(row.status, "warning"); return <div key={row.claim}><span><Icon name={rowTone === "success" ? "check" : rowTone === "info" ? "evidence" : "clock"} size={16} /></span><div><strong>{row.claim}</strong><small>{row.evidence || "Inspect evidence chain"}</small></div><StatusPill tone={rowTone} compact>{row.status}</StatusPill></div>; })}</div>{!proof?.compact_proof_table?.length && <p className="proof-table-note">Live verification statuses load from the gateway; until then the rows above link to the recorded evidence without asserting live verification.</p>}</Panel>
         <Panel title="Policy leash meter" eyebrow={policyIsLive ? "LLM cannot inject numbers" : "Recorded canonical run · LLM cannot inject numbers"}>
-          <LeashMeter requestedBps={policy.requested_bps} approvedBps={policy.approved_bps} requestedLabel={policy.requested_label} approvedLabel={policy.approved_label} />
+          <LeashMeter requestedBps={policy.requested_bps} approvedBps={policy.approved_bps} requestedLabel={policy.requested_label} approvedLabel={policy.approved_label} lead="An AI requested 30%. Concordia authorized at most 8%." />
         </Panel>
         <Panel title="Verified receipts" eyebrow="Completed proof, not pending actions"><div className="verified-receipts"><HashChip label="Canonical receipt" value={receipt.deploy_hash || DEFAULT_CASPER_DEPLOY_HASH} href={receipt.explorer_url || DEFAULT_CASPER_EXPLORER_URL} tone="success" /><HashChip label="Wallet receipt" value={DEFAULT_WALLET_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} /><HashChip label="Quorum approval" value={DEFAULT_QUORUM_APPROVAL_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_APPROVAL_HASH}`} /><HashChip label="Final quorum receipt" value={DEFAULT_QUORUM_FINAL_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_FINAL_RECEIPT_HASH}`} /><HashChip label="SafePay Lite payment (historical)" value={HISTORICAL_SAFEPAY_PAYMENT_HASH} /></div><p className="technical-note-lede">Primary reviewer actions stay in the header. This card only lists completed receipts so a judge never confuses recorded proof with a pending transaction.</p></Panel>
       </div>
@@ -327,9 +354,9 @@ export function ProofCenterPage({ data }) {
         <SafePayPanel item={safepayItem} legacy={proof?.safepay_lite || null} />
         <OfficialX402Panel item={x402Item} />
       </div>
-    </>}
+    </div>}
 
-    {activeProofTab === "safety" && <div className="proof-two-column">
+    {activeProofTab === "safety" && <div className="proof-two-column" role="tabpanel" id="proof-tabpanel-safety" aria-labelledby="proof-tab-safety" tabIndex={0}>
       <Panel title="Locke Execution Firewall" eyebrow="Chain action gateway">
         {firewall ? <div className="firewall-grid">{FIREWALL_CHECK_LABELS.map(([key, label]) => { const ok = firewall[key] === true; return <div key={key} className={ok ? "pass" : "pending"}><Icon name={ok ? "check" : "clock"} size={15} /><span>{label}</span></div>; })}<div className="firewall-warning"><Icon name="lock" size={17} /><span>AI can suggest, but cannot force unauthorized execution.</span></div></div>
           : <div data-testid="firewall-unavailable"><PendingNote>Firewall check results load from the live proof payload. No checks are asserted while it is unavailable.</PendingNote><div className="firewall-grid firewall-grid-pending">{FIREWALL_CHECK_LABELS.map(([key, label]) => <div key={key} className="pending"><Icon name="clock" size={15} /><span>{label}</span></div>)}</div></div>}
@@ -341,13 +368,13 @@ export function ProofCenterPage({ data }) {
       <Panel title="Outcome Gallery" eyebrow="Governance states">{outcomeRows.length ? <div className="outcome-gallery">{outcomeRows.map((item) => <article key={item.outcome} className={`outcome-${item.tone || "info"}`}><StatusPill tone={item.tone || "info"} compact>{item.outcome}</StatusPill><p>{item.description}</p></article>)}</div> : <EmptyState title="Outcome gallery unavailable" icon="evidence" />}</Panel>
     </div>}
 
-    {activeProofTab === "onchain" && <div className="proof-two-column">
+    {activeProofTab === "onchain" && <div className="proof-two-column" role="tabpanel" id="proof-tabpanel-onchain" aria-labelledby="proof-tab-onchain" tabIndex={0}>
       <Panel title="Typed Casper payload" eyebrow="ByteArray(32) + U32"><div className="intent-grid"><div><span>Contract</span><HashChip value={receipt.contract_hash || DEFAULT_CASPER_CONTRACT_HASH} /></div><div><span>Entry point</span><strong>{receipt.entry_point || "store_governance_receipt"}</strong></div><div><span>Typed args</span><strong>{typedArgsCount || "—"}</strong></div><div><span>Argument source</span><strong>{walletArgumentSourceLabel}</strong>{walletArgumentSource && <code>{walletArgumentSource}</code>}</div></div><CodePreview summary="Show typed runtime args" value={unsignedIntent?.typed_runtime_args || receipt.typed_args || CANONICAL_RECEIPT_FACTS.typed_args} /></Panel>
       <Panel title="Judge Sandbox" eyebrow="Safe testnet intent preview"><div className="judge-sandbox"><StatusPill tone="info" icon="shield">Preview only</StatusPill><p>No wallet is required. This sandbox never mutates {DEFAULT_REVIEW_PROPOSAL_ID}; it only previews how invariants cap requested allocation before a typed Casper intent is built.</p><label><span>Requested allocation bps</span><input value={sandboxBps} onChange={(event) => setSandboxBps(event.target.value)} inputMode="numeric" /></label><PrimaryButton icon="shield" onClick={runSandboxPreview}>Run invariant preview</PrimaryButton>{sandboxResult && <div className="safety-demo-grid"><div><span>Requested</span><strong>{pctFromBps(sandboxResult.requested)}</strong></div><div><span>Approved</span><strong>{pctFromBps(sandboxResult.approved)}</strong></div><div><span>Invariant</span><strong>{sandboxResult.blocked ? "capped by DAO Constitution" : "within cap"}</strong></div><div><span>Mode</span><strong>preview only</strong></div><div className="wide"><span>Typed args preview</span><CodePreview summary="Show preview args" value={sandboxResult.typedArgs} /></div></div>}</div></Panel>
       <Panel title="Advanced signing demo" eyebrow="Optional testnet actions"><details className="advanced-actions" open={showAdvancedSigning} onToggle={(event) => setShowAdvancedSigning(event.currentTarget.open)}><summary>Advanced: re-run signing demo</summary><div className="inline-notice warning"><Icon name="signal" size={16} />Advanced testnet action — not required for reviewing canonical proof.</div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signWithWallet} disabled={!walletSigningAvailable}>Request Casper Wallet Signature</PrimaryButton><StatusPill tone={walletStatusTone(walletStatus)} compact>{walletStatus}</StatusPill></div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signQuorumApprovalWithWallet} disabled={!quorumSigningAvailable}>Request Quorum Approval</PrimaryButton><StatusPill tone={walletStatusTone(quorumWalletStatus)} compact>{quorumWalletStatus}</StatusPill></div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signFinalQuorumReceiptWithWallet} disabled={!quorumSigningAvailable}>Request Final Quorum Receipt</PrimaryButton><StatusPill tone={walletStatusTone(quorumFinalStatus)} compact>{quorumFinalStatus}</StatusPill></div><div id="csprclick-ui" className="csprclick-ui-host" /></details></Panel>
     </div>}
 
-    {activeProofTab === "data" && <>
+    {activeProofTab === "data" && <div role="tabpanel" id="proof-tabpanel-data" aria-labelledby="proof-tab-data" tabIndex={0}>
       <Panel title="Provenance registry" eyebrow="Section-13 proof items · green only when verified" className="registry-panel">
         <ProofRegistryPanel registry={registry} registryError={registryError} />
       </Panel>
@@ -358,9 +385,9 @@ export function ProofCenterPage({ data }) {
         <Panel title="IPFS evidence CID" eyebrow="Governance archive pin">{ipfsEvidence?.cid ? <div className="source-status-card"><StatusPill tone="success" icon="check">Pinned</StatusPill><div><span>Provider</span><strong>{ipfsEvidence.provider || "kubo"}</strong></div><HashChip label="CID" value={ipfsEvidence.cid} href={ipfsEvidence.gateway_url || DEFAULT_IPFS_GATEWAY_URL} /></div> : <div className="source-status-card"><StatusPill tone="info" icon="link">Recorded CID</StatusPill><div><span>Live pin status</span><strong>loads from the gateway</strong></div><HashChip label="CID" value={DEFAULT_IPFS_CID} href={DEFAULT_IPFS_GATEWAY_URL} /><small>The recorded archive CID is shown; live pin verification is not asserted while the payload is unavailable.</small></div>}</Panel>
         <Panel title="Integration status" eyebrow="Implemented now vs roadmap">{integrationStatus ? <><div className="integration-list">{Object.entries(integrationStatus).filter(([key]) => key !== "roadmap_only").map(([key, value]) => <div key={key}><span>{titleCaseAction(key)}</span><strong>{typeof value === "object" && value !== null ? (value.status || value.mode || value.provider || "configured") : String(value)}</strong><small>{typeof value === "object" && value !== null ? (value.note || value.message || "") : ""}</small></div>)}</div>{integrationStatus?.roadmap_only?.length ? <div className="roadmap-note"><Icon name="info" size={16} /><span>Roadmap only: {integrationStatus.roadmap_only.join(" · ")}</span></div> : null}</> : <PendingNote>Integration status loads from the gateway. No integration is claimed live while the payload is unavailable.</PendingNote>}</Panel>
       </div>
-    </>}
+    </div>}
 
-    {activeProofTab === "exports" && <div className="proof-two-column">
+    {activeProofTab === "exports" && <div className="proof-two-column" role="tabpanel" id="proof-tabpanel-exports" aria-labelledby="proof-tab-exports" tabIndex={0}>
       <Panel title="Reviewer shortcuts" eyebrow="Single action registry"><ProofActionBar proposalId={proposalId} actionIds={["evidence_chain", "canonical_receipt", "quorum_failure", "quorum_success", "wallet_receipt", "supplemental_dynamic_receipt", "ipfs_archive", "proof_pack_json", "technical_jury_note"]} /></Panel>
       <Panel title="Downloads" eyebrow="Audit exports"><div className="proof-action-bar vertical"><PrimaryButton href={`${downloadHref}`} icon="download" dataTestId="proof-action-audit-packet">Download Governance Archive</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/cards.csv`} icon="download" dataTestId="proof-action-cards-csv">cards.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/outcomes.csv`} icon="download" dataTestId="proof-action-outcomes-csv">outcomes.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/proof_table.csv`} icon="download" dataTestId="proof-action-proof-table-csv">proof_table.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/reputation.csv`} icon="download" dataTestId="proof-action-reputation-csv">reputation.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/casper_receipts.csv`} icon="download" dataTestId="proof-action-casper-receipts-csv">casper_receipts.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/x402_settlements.csv`} icon="download" dataTestId="proof-action-x402-csv">x402_settlements.csv</PrimaryButton></div></Panel>
     </div>}

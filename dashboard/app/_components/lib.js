@@ -59,7 +59,7 @@ export const PROFILES = {
   alden: { key: "alden", name: "Alden", role: "Protocol Strategy Agent", framework: "Council Runtime + LLM", model: "Deep planning model", color: "#6f8cff", avatar: `${ASSET_BASE}/agents/alden.png`, description: "Drafts exact governance execution envelopes" },
   locke: { key: "locke", name: "Locke", role: "Casper Execution Agent", framework: "Casper SDK adapter", model: "Deterministic signer", color: "#22d3ee", avatar: `${ASSET_BASE}/agents/locke.png`, description: "Validates approval and anchors the final receipt on Casper Testnet" },
   core: { key: "core", name: "Concordia Core", role: "Deterministic Evidence Core", framework: "Gateway", model: "Policy engine", color: "#94a3b8", avatar: `${ASSET_BASE}/agents/core.png`, description: "Seals cards, nonces, and evidence-chain integrity" },
-  wells: { key: "wells", name: "Wells", role: "Governance Archivist", framework: "Council Runtime + LLM", model: "Optional enrichment", color: "#c084fc", avatar: `${ASSET_BASE}/agents/wells.png`, description: "Produces the final governance archive", platform: true },
+  wells: { key: "wells", name: "Wells", role: "Governance Archive Persona", framework: "Presentation persona", model: "Non-reasoning archive view", color: "#c084fc", avatar: `${ASSET_BASE}/agents/wells.png`, description: "Presentation-only archive persona. Concordia Core and Locke produce the deterministic governance archive; Wells does not reason, generate proof, or author historical archives.", platform: true },
   human: { key: "human", name: "Multisig Holder", role: "Authorized DAO Approver", framework: "Human", model: "Exact action approval", color: "#f5b942", avatar: null, description: "Approves or rejects the exact typed action" },
   system: { key: "system", name: "Concordia Core", role: "Deterministic Control Plane", framework: "Gateway", model: "Policy engine", color: "#64748b", avatar: null, description: "Enforces state, authorization and integrity" },
 };
@@ -92,8 +92,16 @@ export const ACTIVE_STATES = new Set(["DETECTED", "TRIAGED", "ASSESSED", "REVIEW
 export const TERMINAL_STATES = new Set(["EXECUTED", "RESOLVED", "CLOSED", "CLOSED_FALSE_ALARM", "SUPPRESSED"]);
 
 export async function api(path, options = {}) {
-  const { timeoutMs = 12000, ...fetchOptions } = options;
+  const { timeoutMs = 12000, signal: externalSignal, ...fetchOptions } = options;
   const controller = new AbortController();
+  // Link an optional caller-provided signal (used by the proposal-switch
+  // generation guard) so switching proposals aborts prior in-flight requests
+  // and stale responses can never pair a new proposal with old evidence.
+  const onExternalAbort = () => controller.abort(externalSignal?.reason || new Error(`${path} aborted`));
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort(externalSignal.reason || new Error(`${path} aborted`));
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
   const timer = timeoutMs > 0
     ? setTimeout(() => controller.abort(new Error(`${path} timed out after ${timeoutMs}ms`)), timeoutMs)
     : null;
@@ -108,6 +116,7 @@ export async function api(path, options = {}) {
     return await response.json();
   } finally {
     if (timer) clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -416,6 +425,35 @@ export function agentStatusInfo(agents = [], loading = false) {
   return { known: false, online: 0, total: 0, text: loading ? "Checking agent status…" : "Agent status unavailable" };
 }
 
+// Truth helpers: an approval/receipt is only "successful" from an affirmative
+// decision or a positively-verified receipt. Card PRESENCE proves nothing —
+// missing/unknown/denied never renders as a success cue.
+const AFFIRMATIVE_DECISIONS = new Set(["APPROVE", "APPROVED", "AUTHORIZE", "AUTHORIZED", "CONFIRM", "CONFIRMED", "ACCEPT", "ACCEPTED"]);
+const DENIED_DECISIONS = new Set(["REJECT", "REJECTED", "DENY", "DENIED", "REFUSE", "REFUSED", "BLOCK", "BLOCKED", "ABSTAIN", "ABSTAINED"]);
+export function approvalDecision(card) {
+  return String(getCardData(card).decision || "").trim().toUpperCase();
+}
+export function isAffirmativeApproval(card) {
+  if (!card) return false;
+  const data = getCardData(card);
+  const decision = String(data.decision || "").trim().toUpperCase();
+  if (card.card_type === "PolicyAuthorization") return data.denied !== true && !DENIED_DECISIONS.has(decision);
+  return AFFIRMATIVE_DECISIONS.has(decision);
+}
+export function isDeniedApproval(card) {
+  if (!card) return false;
+  const data = getCardData(card);
+  return data.denied === true || DENIED_DECISIONS.has(String(data.decision || "").trim().toUpperCase());
+}
+export function isReceiptVerified(card) {
+  if (!card || card.card_type !== "CasperExecutionReceipt") return false;
+  const data = getCardData(card);
+  if (data.receipt_verified === true) return true;
+  const events = (data.timeline || []).filter((event) => /receipt_verification|casper_transaction/i.test(String(event.event || "")));
+  const last = events[events.length - 1];
+  return last?.recovered === true;
+}
+
 export function cardSummary(card) {
   if (!card) return "No event selected.";
   const data = getCardData(card);
@@ -429,10 +467,16 @@ export function cardSummary(card) {
       if (!envelopes.length) return "Protocol Strategy Agent prepared a typed response plan.";
       return `Protocol Strategy Agent prepared ${envelopes.length} exact action${envelopes.length === 1 ? "" : "s"}: ${envelopes.map((envelope) => `${titleCaseAction(envelope.action_id)} on ${envelope.target}`).join("; ")}.`;
     }
-    case "StructuredApproval": return `Multisig decision: ${data.decision || "recorded"}. The authorization is bound to the plan and action hashes.`;
-    case "PolicyAuthorization": return "The deterministic policy engine issued a bounded low-risk authorization.";
-    case "CasperExecutionReceipt": return firstDefined(data.resolution_summary, "Casper Execution Agent executed every approved action exactly once and Casper transaction verification passed.");
-    case "GovernanceSummary": return firstDefined(data.timeline_summary, data.root_cause, "Wells produced optional governance summary enrichment.");
+    case "StructuredApproval": return isAffirmativeApproval(card)
+      ? `Multisig decision: ${data.decision || "APPROVED"}. The authorization is bound to the exact plan and action hashes and can be consumed only once.`
+      : `Multisig decision: ${data.decision || "recorded"}. No execution authorization is granted for a non-approval decision.`;
+    case "PolicyAuthorization": return isDeniedApproval(card)
+      ? "The deterministic policy engine refused authorization."
+      : "The deterministic policy engine issued a bounded low-risk authorization.";
+    case "CasperExecutionReceipt": return firstDefined(data.resolution_summary, isReceiptVerified(card)
+      ? "Casper Execution Agent executed every approved action exactly once and Casper transaction verification passed."
+      : "Casper execution receipt recorded. Transaction verification is asserted only from a positively verified receipt.");
+    case "GovernanceSummary": return firstDefined(data.timeline_summary, data.root_cause, "Governance archive view. Concordia Core and Locke produced the deterministic archive artifact; Wells presents it without reasoning over it.");
     default: return CARD_LABELS[card.card_type] || "Sealed workflow event.";
   }
 }
@@ -440,7 +484,11 @@ export function cardTone(card) {
   const data = getCardData(card);
   if (card?.card_type === "Verdict" && data.decision === "CHALLENGE") return "warning";
   if (card?.card_type === "Verdict" && data.decision === "FALSE_ALARM") return "muted";
-  if (["StructuredApproval", "PolicyAuthorization", "CasperExecutionReceipt"].includes(card?.card_type)) return "success";
+  // No fail-open success: approval/receipt cards are only green on an
+  // affirmative decision or a positively-verified receipt.
+  if (card?.card_type === "StructuredApproval") return isAffirmativeApproval(card) ? "success" : isDeniedApproval(card) ? "danger" : "info";
+  if (card?.card_type === "PolicyAuthorization") return isDeniedApproval(card) ? "danger" : isAffirmativeApproval(card) ? "success" : "info";
+  if (card?.card_type === "CasperExecutionReceipt") return isReceiptVerified(card) ? "success" : "info";
   if (card?.card_type === "ProposalCard") return "danger";
   return "info";
 }
@@ -607,15 +655,18 @@ export function humanizeCardData(card) {
       push("Policy", data.policy_id);
       push("Scope", data.scope, { wide: true });
       break;
-    case "CasperExecutionReceipt":
-      push("Outcome", "Executed and receipt verified");
+    case "CasperExecutionReceipt": {
+      const verified = isReceiptVerified(card);
+      push("Outcome", verified ? "Executed and receipt verified" : "Executed; receipt verification not positively confirmed");
       push("Actions completed", (data.actions_taken || []).length);
       push("Casper transaction", data.actions_taken?.[0]?.transaction_hash, { mono: true });
       push("Policy hash", data.actions_taken?.[0]?.receipt_payload?.policy_hash, { mono: true });
       push("Dissent hash", data.actions_taken?.[0]?.receipt_payload?.dissent_hash, { mono: true });
       push("Resolution summary", data.resolution_summary, { wide: true });
-      push("Execution verified", data.receipt_verified === false ? "No" : "Yes");
+      // Missing/unknown receipt verification is Unavailable, never a fail-open "Yes".
+      push("Execution verified", verified ? "Yes" : data.receipt_verified === false ? "No" : "Unavailable");
       break;
+    }
     case "GovernanceSummary":
       push("Root cause", data.root_cause, { wide: true });
       push("Timeline summary", data.timeline_summary, { wide: true });
@@ -664,7 +715,7 @@ export function replayEventTitle(card) {
   if (card.card_type === "ResponsePlan") return "Alden prepares the exact action envelope";
   if (["StructuredApproval", "PolicyAuthorization"].includes(card.card_type)) return "The exact action is authorized";
   if (card.card_type === "CasperExecutionReceipt") return "Locke anchors the approved receipt on Casper";
-  if (card.card_type === "GovernanceSummary") return "Wells adds optional governance summary enrichment";
+  if (card.card_type === "GovernanceSummary") return "Governance archive view is presented (deterministic archive produced by Concordia Core and Locke)";
   return CARD_LABELS[card.card_type] || "Verified workflow event";
 }
 

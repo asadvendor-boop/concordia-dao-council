@@ -2,7 +2,7 @@
 // above the fold; the persona gallery is demoted below it. Every stat tile is
 // wired to real payload data, a recorded canonical constant (labeled), or an
 // honest "unavailable" placeholder — never an invented number.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ASSET_BASE,
@@ -40,6 +40,33 @@ import {
 
 function DemoModal({ open, onClose, data }) {
   const [firing, setFiring] = useState(null);
+  const dialogRef = useRef(null);
+  const previouslyFocusedRef = useRef(null);
+  // Accessible modal: trap focus inside the dialog, close on Escape, and return
+  // focus to the control that opened it.
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    previouslyFocusedRef.current = document.activeElement;
+    const focusable = () => Array.from(
+      dialogRef.current?.querySelectorAll('a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])') || [],
+    ).filter((element) => element.offsetParent !== null || element === document.activeElement);
+    focusable()[0]?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (previouslyFocusedRef.current && typeof previouslyFocusedRef.current.focus === "function") previouslyFocusedRef.current.focus();
+    };
+  }, [open, onClose]);
   if (!open) return null;
   const scenarios = [
     { id: "defi-treasury", name: "Risky Treasury Move", description: "Golden path · 30% proposal, Verity dissent, Alden 8% cap, Casper receipt", icon: "proposal", primary: true },
@@ -50,18 +77,38 @@ function DemoModal({ open, onClose, data }) {
     { id: "policy", name: "Protocol Drift", description: "Full pipeline · strategy deviates from DAO policy", icon: "activity" },
     { id: "credential", name: "RWA Credential Expiry", description: "Full pipeline · RWA attestation credential nearing expiry", icon: "shield" },
   ];
-  const fire = async (scenarioType) => {
+  // Frozen demo-capability protocol (demo capability v1): the browser NEVER
+  // posts {scenario_type} and never holds an operator token. It (1) requests a
+  // short-lived capability bound to this scenario + client cookie, then (2)
+  // activates that exact capability. There is no public reset path. Replay of a
+  // consumed capability is idempotent (the Gateway returns the stored run), a
+  // 202 means the scenario is accepted and building, and every failure surfaces
+  // an honest error — nothing is asserted as started unless the Gateway said so.
+  const fire = async (scenarioId) => {
     if (CONCORDIA_MODE === "reviewer") {
       data.setToast({ type: "info", message: "Live mutations are disabled in Public Review Mode. Open Runs & Replay instead." });
       onClose();
       return;
     }
-    setFiring(scenarioType);
+    setFiring(scenarioId);
     try {
-      const response = await fetch(`${ASSET_BASE}/api/demo/activate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario_type: scenarioType }) });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || result.error) throw new Error(result.error || `Trigger returned ${response.status}`);
-      data.setToast({ type: "success", message: scenarioType === "reset" ? `Demo reset complete · ${result.cleaned_proposals ?? 0} proposal${result.cleaned_proposals === 1 ? "" : "s"} cleaned.` : `${result.proposal_id || "Proposal"} started · ${result.target || scenarioType} is entering the full proposal pipeline.` });
+      const capabilityResponse = await fetch(`${ASSET_BASE}/api/demo/capability`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario_id: scenarioId }) });
+      const capability = await capabilityResponse.json().catch(() => ({}));
+      if (!capabilityResponse.ok || capability.error || !capability.capability) {
+        throw new Error(capability.error || `Capability request returned ${capabilityResponse.status}`);
+      }
+      const activateResponse = await fetch(`${ASSET_BASE}/api/demo/activate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ capability: capability.capability, scenario_id: scenarioId }) });
+      const result = await activateResponse.json().catch(() => ({}));
+      if (activateResponse.status === 202) {
+        data.setToast({ type: "info", message: `Scenario accepted and is starting${result.proposal_id ? ` · ${result.proposal_id}` : ""}. It will appear once the council chain is created.` });
+        await data.refreshBase(true);
+        if (result.proposal_id) data.selectProposal(result.proposal_id);
+        onClose();
+        return;
+      }
+      if (!activateResponse.ok || result.error) throw new Error(result.error || `Activation returned ${activateResponse.status}`);
+      const idempotent = result.status === "already_activated" || result.idempotent === true || result.replayed === true;
+      data.setToast({ type: "success", message: `${result.proposal_id || "Proposal"} ${idempotent ? "already active — showing the existing run" : "started"} · ${result.target || scenarioId} is entering the full proposal pipeline.` });
       await data.refreshBase(true);
       if (result.proposal_id) data.selectProposal(result.proposal_id);
       onClose();
@@ -70,12 +117,12 @@ function DemoModal({ open, onClose, data }) {
     } finally { setFiring(null); }
   };
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="modal demo-modal" role="dialog" aria-modal="true" aria-labelledby="demo-title">
+    <div className="modal demo-modal" role="dialog" aria-modal="true" aria-labelledby="demo-title" ref={dialogRef}>
       <header className="modal-header"><div><div className="eyebrow">Controlled full-pipeline scenarios</div><h2 id="demo-title">Trigger a real proposal workflow</h2><p>Every scenario creates a unique Council Chamber and the complete agent chain.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></header>
       <button className="golden-scenario" type="button" onClick={() => fire("defi-treasury")} disabled={Boolean(firing)}><span className="golden-scenario-icon"><Icon name="proposal" size={28} /></span><span><strong>DAO Constitution Firewall Scenario</strong><small>30% treasury request → Verity dissent → Alden 8% cap → multisig approval → Casper receipt</small></span><span className="golden-scenario-action">{firing === "defi-treasury" ? "Starting…" : CONCORDIA_MODE === "reviewer" ? "View replay" : "Start full pipeline"}<Icon name="arrowRight" size={17} /></span></button>
       <div className="modal-section-heading"><span>Additional proposal types</span><small>Each one activates distinct telemetry and starts the same evidence-bound agent workflow.</small></div>
       <div className="scenario-grid">{scenarios.filter((scenario) => !scenario.primary).map((scenario) => <button key={scenario.id} type="button" className="scenario-card" onClick={() => fire(scenario.id)} disabled={Boolean(firing)}><span><Icon name={scenario.icon} size={20} /></span><strong>{scenario.name}</strong><small>{scenario.description}</small></button>)}</div>
-      <footer className="modal-footer"><button type="button" className="button button-ghost" onClick={() => fire("reset")} disabled={Boolean(firing)}><Icon name="refresh" size={17} />Reset demo environment</button><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button></footer>
+      <footer className="modal-footer"><p className="modal-footer-note"><Icon name="shield" size={15} />Each scenario runs under a short-lived, single-use capability bound to this browser. There is no reset control.</p><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button></footer>
     </div>
   </div>;
 }
@@ -105,6 +152,7 @@ export function OverviewPage({ data }) {
       <div className="control-room-actions">
         <PrimaryButton icon="challenge" href={navHref("/judge", DEFAULT_REVIEW_PROPOSAL_ID)} dataTestId="overview-primary-judge">Try to Break the Council</PrimaryButton>
         <PrimaryButton tone="ghost" icon="shield" href={navHref("/proof", DEFAULT_REVIEW_PROPOSAL_ID)} dataTestId="overview-primary-proof">Open Proof Center</PrimaryButton>
+        <PrimaryButton tone="secondary" icon="play" onClick={() => setDemoOpen(true)} dataTestId="overview-demo-trigger">Run a live scenario</PrimaryButton>
       </div>
     </section>
     {showBaseIssue && <div className="inline-notice neutral"><Icon name="refresh" size={17} />Reconnecting to the Gateway. The interface will keep retrying automatically.</div>}
@@ -154,7 +202,7 @@ export function OverviewPage({ data }) {
       </> : <VerifiedRunStaticFallback />}</Panel>
       <div className="overview-rail">
         <Panel title="Policy leash" eyebrow="No model output can widen it">
-          <LeashMeter requestedBps={facts.requestedAllocationBps} approvedBps={facts.approvedAllocationBps} />
+          <LeashMeter requestedBps={facts.requestedAllocationBps} approvedBps={facts.approvedAllocationBps} lead="An AI requested 30%. Concordia authorized at most 8%." />
         </Panel>
         <Panel title="Council activity" eyebrow="Current roles"><div className="agent-mini-list">{councilRoles.slice(1, 5).map((role) => {
           const verdict = getCard(cards, "Verdict", true);
@@ -187,7 +235,7 @@ export function OverviewPage({ data }) {
           ["CASPER TESTNET LIVE", "green"],
         ].map(([label, tone]) => <span key={label} className={cx("chip-outline", `chip-outline-${tone}`)}>{label}</span>)}
       </div>
-      <p className="overview-fine-print">All council identities are AI agents. Every execution requires deterministic invariants, quorum approval, and an on-chain receipt.</p>
+      <p className="overview-fine-print">Four deliberative agents (Rowan, Mercer, Verity, Alden) plus authorization-bound Locke act under model guidance; Concordia Core is deterministic infrastructure and Wells is a non-reasoning archive persona. Every execution still requires deterministic invariants, quorum approval, and an on-chain receipt.</p>
     </section>
     <DemoModal open={demoOpen} onClose={() => setDemoOpen(false)} data={data} />
   </>;

@@ -77,14 +77,17 @@ export function JudgeWalkthroughPage({ data }) {
     title: "Verify Concordia in 90 seconds",
     positioning: "Concordia DAO Council is the Casper governance firewall for AI-run DAOs: Dissent Receipts preserve Verity's objection, Locke is bound to the exact approved hash, and browser-wallet quorum is proven on-chain when execution is reverted before quorum and accepted after quorum.",
     demo_hook: "A malicious AI tries to push an unsafe 30% treasury allocation. Concordia catches the violation, Verity challenges it with Dissent Receipts, the DAO Mandate caps it to 8%, Locke can execute only the exact approved hash, and browser-wallet quorum proves the same action is reverted before quorum and accepted after quorum.",
+    // Narrative-only fallback: describes the mechanism. NO step asserts a proof
+    // outcome (no "verified paid report", no "duplicate caught"); live check
+    // results render only from the gateway/registry payloads below.
     steps: [
       { step: 1, title: "Risky proposal", summary: "A treasury proposal requests 30% allocation." },
       { step: 2, title: "DAO Constitution", summary: "The policy cap allows only 8%." },
-      { step: 3, title: "SafePay Lite", summary: "Concordia verifies a paid specialist report before including it in the proof." },
-      { step: 4, title: "Invariant runner", summary: "Machine checks catch cap, quorum, tamper, replay, duplicate proof, and policy mismatch failures." },
+      { step: 3, title: "SafePay Lite", summary: "Concordia can require a paid specialist report to be settled in native CSPR before it is included. This is shown as proof only when the SafePay ledger records it — the registry reports SafePay v2 as unavailable until then." },
+      { step: 4, title: "Invariant runner", summary: "Machine checks are run for cap, quorum, tamper, replay, duplicate-proof, and policy-mismatch conditions; their pass/fail results render only from the live invariant payload." },
       { step: 5, title: "Verity dissent", summary: "The challenge and dissent hash are preserved." },
       { step: 6, title: "DAO Mandate", summary: "Locke executes only the approved DAO Mandate, never free-form LLM output." },
-      { step: 7, title: "Quorum approval", summary: "Supplemental quorum proof confirms the safe envelope path." },
+      { step: 7, title: "Quorum approval", summary: "Supplemental quorum proof shows the safe envelope path when the recorded quorum receipts are present." },
       { step: 8, title: "Locke execution", summary: "Only the approved mandate is anchored to Casper." },
       { step: 9, title: "Public proof", summary: "CSPR.live, IPFS, proof pack, certificate, and verifier close the loop." },
     ],
@@ -202,7 +205,7 @@ export function JudgeWalkthroughPage({ data }) {
     <div className="proof-two-column judge-proof-layout">
       <Panel title="Ordered proof path" eyebrow="One coherent story">
         <div className="judge-step-list">
-          {(story.steps || []).map((step) => <article key={step.step} className="judge-step-card"><span>{step.step}</span><div><strong>{step.title}</strong><p>{step.summary}</p></div><StatusPill tone={statusTone(step.status, "info")} compact>{step.status || "proof"}</StatusPill></article>)}
+          {(story.steps || []).map((step) => <article key={step.step} className="judge-step-card"><span>{step.step}</span><div><strong>{step.title}</strong><p>{step.summary}</p></div><StatusPill tone={statusTone(step.status, "info")} compact>{step.status || "step"}</StatusPill></article>)}
         </div>
       </Panel>
       <Panel className="proof-shortcuts-rail" title="Proof shortcuts" eyebrow="Reviewer links">

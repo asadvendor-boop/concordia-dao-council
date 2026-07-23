@@ -24,6 +24,7 @@
       "network": "casper:casper-test",
       "package_hash": "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
       "contract_hash": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+      "deployment_domain": null,
       "schema_version": "test-fixture-v1",
       "captured_at": "2026-07-23T00:00:00Z",
       "payment_requirements_hash": null,

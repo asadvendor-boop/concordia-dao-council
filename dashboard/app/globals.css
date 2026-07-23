@@ -88,6 +88,7 @@ pre, code, .break-hash, .hash-chip, .page-grid > *, .proof-hero-grid > *, .proof
 .environment-switcher { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 11px; color: var(--text-soft); border: 1px solid var(--border); border-radius: 9px; background: rgba(13, 27, 44, .72); font-size: 12px; font-weight: 610; }
 .room-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .room-status.connected { color: #b6c5d8; }
+.room-status.partial { color: var(--amber); }
 .room-status.disconnected { color: var(--amber); }
 .utc-clock { padding-left: 18px; border-left: 1px solid var(--border); color: var(--muted); font-family: var(--mono); font-size: 11px; }
 .topbar-user { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #3a4f67; border-radius: 50%; color: #dbe8fa; background: linear-gradient(135deg, #263c56, #13253a); font-size: 11px; font-weight: 750; }
@@ -95,6 +96,7 @@ pre, code, .break-hash, .hash-chip, .page-grid > *, .proof-hero-grid > *, .proof
 .status-dot.online { background: var(--green); box-shadow: 0 0 0 4px rgba(45,212,164,.08); }
 .status-dot.offline { background: var(--red); }
 .status-dot.reconnecting { background: var(--muted); box-shadow: 0 0 0 4px rgba(143,160,184,.07); }
+.status-dot.partial { background: var(--amber); box-shadow: 0 0 0 4px rgba(245,185,66,.10); }
 
 .page-content { width: 100%; max-width: 1680px; margin: 0 auto; padding: 28px 30px 44px; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; min-height: 66px; margin-bottom: 22px; }
@@ -772,3 +774,13 @@ a.stat-tile:hover { transform:translateY(-2px); border-color:color-mix(in srgb,v
   .technical-boundary-list > div { grid-template-columns: 1fr; }
   .technical-boundary-list .status-pill { justify-self: start; }
 }
+
+/* WP7 truth/accessibility corrections: honest non-color cues, rejected states,
+   and a visible keyboard focus ring. */
+.decision-icon.rejected { color: var(--red); background: rgba(255,93,104,.10); border-color: rgba(255,93,104,.30); }
+.chain-verified.chain-unverified { color: var(--muted); }
+.verification-list em.verification-unavailable { margin-left: auto; color: var(--muted); font-style: normal; font-size: 8px; text-transform: uppercase; letter-spacing: .04em; }
+.modal-footer-note { display: flex; align-items: center; gap: 7px; margin: 0; margin-right: auto; color: var(--muted); font-size: 9px; line-height: 1.4; text-align: left; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+.section-tabs button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.leash-lead { margin: 0 0 10px; color: #eaf3ff; font-size: 14px; font-weight: 720; line-height: 1.35; }

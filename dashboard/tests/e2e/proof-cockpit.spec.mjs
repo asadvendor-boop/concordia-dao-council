@@ -155,7 +155,10 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     await expect(page.getByRole("heading", { name: "Live wallet / testnet sandbox" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open Wallet Sandbox" })).toBeVisible();
     await gotoDashboardRoute(page, "/dashboard/proof?tab=onchain");
-    await expect(page.getByRole("button", { name: "On-chain" })).toHaveClass(/active/);
+    // Proof-Center sections are now ARIA tabs (role=tab, aria-selected).
+    const onchainTab = page.getByRole("tab", { name: "On-chain" });
+    await expect(onchainTab).toHaveClass(/active/);
+    await expect(onchainTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "Judge Sandbox" })).toBeVisible();
     await expect(page.getByText("Advanced: re-run signing demo")).toBeVisible();
     await assertNoHorizontalOverflow(page);
@@ -275,7 +278,7 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
       const bg = bgRaw ? compositeOver(bgRaw) : null;
       expect(fg, JSON.stringify(sample)).toBeTruthy();
       expect(bg, JSON.stringify(sample)).toBeTruthy();
-      expect(contrastRatio(fg, bg), JSON.stringify(sample)).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(fg, bg), JSON.stringify(sample)).toBeGreaterThanOrEqual(4.5);
     }
   });
 });
