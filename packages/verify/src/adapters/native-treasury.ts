@@ -45,6 +45,25 @@ const BALANCE_FIELDS = Object.freeze([
   "balance_response",
 ]);
 
+const SNAPSHOT_FIELDS = Object.freeze([
+  "schema_id",
+  "network",
+  "source_account_hash",
+  "expected_balance_motes",
+  "observations",
+]);
+
+const SNAPSHOT_OBSERVATION_FIELDS = Object.freeze([
+  "node_url",
+  "captured_at",
+  "status_request",
+  "status_response",
+  "block_request",
+  "block_response",
+  "balance_request",
+  "balance_response",
+]);
+
 export type NativeTreasuryExecutionFacts = Readonly<{
   schemaVersion: "concordia.native_treasury_execution.v1";
   capturedAt: string;
@@ -78,6 +97,7 @@ export type NativeTreasuryExecutionFacts = Readonly<{
   authorizationBlockHash: string;
   observedThroughBlockHeight: number;
   observedThroughBlockHash: string;
+  snapshotObservationCount: 2;
   nodeObservationCount: number;
   verificationScope: typeof VERIFICATION_SCOPE;
   executionProofSha256: string;
@@ -177,6 +197,148 @@ function exactBalanceBundle(value: unknown, label: string): Record<string, unkno
   const bundle = record(value, label);
   exactOwnKeys(bundle, BALANCE_FIELDS, label);
   return bundle;
+}
+
+function publicSnapshotNodeUrl(value: unknown): Readonly<{ url: string; origin: string }> {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("treasury snapshot node URL must be canonical public DNS HTTPS /rpc");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("treasury snapshot node URL must be canonical public DNS HTTPS /rpc");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const labels = hostname.split(".");
+  const canonicalDnsName =
+    hostname.length <= 253 &&
+    labels.length >= 2 &&
+    labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) &&
+    /[a-z]/.test(labels.at(-1) ?? "");
+  const literalAddress =
+    /^\[[0-9a-f:.]+\]$/.test(hostname) || /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname);
+  const localName =
+    hostname === "localhost" ||
+    hostname === "localhost.localdomain" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local");
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== "/rpc" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.port !== "" ||
+    hostname.length === 0 ||
+    !hostname.includes(".") ||
+    hostname.endsWith(".") ||
+    !canonicalDnsName ||
+    literalAddress ||
+    localName ||
+    parsed.href !== value
+  ) {
+    throw new Error("treasury snapshot node URL must be canonical public DNS HTTPS /rpc");
+  }
+  return Object.freeze({ url: value, origin: parsed.origin });
+}
+
+function snapshotObservationBundle(
+  value: unknown,
+  index: number,
+): Readonly<{ bundle: Record<string, unknown>; origin: string }> {
+  const label = `treasury snapshot observation ${index + 1}`;
+  const observation = record(value, label);
+  exactOwnKeys(observation, SNAPSHOT_OBSERVATION_FIELDS, label);
+  const node = publicSnapshotNodeUrl(own(observation, "node_url"));
+  canonicalUtc(own(observation, "captured_at"), `${label} captured_at`);
+  return Object.freeze({
+    origin: node.origin,
+    bundle: {
+      status_request: own(observation, "status_request"),
+      status: own(observation, "status_response"),
+      block_request: own(observation, "block_request"),
+      block: own(observation, "block_response"),
+      balance_request: own(observation, "balance_request"),
+      balance_response: own(observation, "balance_response"),
+    },
+  });
+}
+
+function verifyTreasurySnapshot(
+  value: unknown,
+  expectedSha256: unknown,
+  expectation: Readonly<{
+    accountHash: string;
+    blockHash: string;
+    blockHeight: number;
+    balanceMotes: string;
+  }>,
+): Readonly<{
+  primaryBundle: Record<string, unknown>;
+  stateRootHash: string;
+  observationCount: 2;
+}> {
+  const snapshot = record(value, "treasury snapshot");
+  exactOwnKeys(snapshot, SNAPSHOT_FIELDS, "treasury snapshot");
+  if (own(snapshot, "schema_id") !== "concordia.native-treasury-snapshot.v1") {
+    throw new Error("treasury snapshot schema is unsupported");
+  }
+  if (
+    own(snapshot, "network") !== "casper-test" ||
+    own(snapshot, "source_account_hash") !== expectation.accountHash ||
+    typeof own(snapshot, "expected_balance_motes") !== "string" ||
+    own(snapshot, "expected_balance_motes") !== expectation.balanceMotes
+  ) {
+    throw new Error("treasury snapshot identity differs from the typed action");
+  }
+  const observations = own(snapshot, "observations");
+  if (!Array.isArray(observations) || observations.length !== 2) {
+    throw new Error("treasury snapshot requires exactly two node observations");
+  }
+  const parsed = observations.map((observation, index) =>
+    snapshotObservationBundle(observation, index),
+  );
+  const first = parsed[0];
+  const second = parsed[1];
+  if (first === undefined || second === undefined) {
+    throw new Error("treasury snapshot requires exactly two node observations");
+  }
+  if (first.origin === second.origin) {
+    throw new Error("treasury snapshot nodes must be distinct");
+  }
+  const firstRoot = stateRootFromBalanceRequest(first.bundle, "treasury snapshot observation 1");
+  const secondRoot = stateRootFromBalanceRequest(second.bundle, "treasury snapshot observation 2");
+  const firstFacts = verifyAccountBalanceAtBlock(
+    balanceInput(first.bundle, {
+      ...expectation,
+      stateRootHash: firstRoot,
+    }),
+  );
+  const secondFacts = verifyAccountBalanceAtBlock(
+    balanceInput(second.bundle, {
+      ...expectation,
+      stateRootHash: secondRoot,
+    }),
+  );
+  const agreed =
+    firstFacts.network === secondFacts.network &&
+    firstFacts.accountHash === secondFacts.accountHash &&
+    firstFacts.blockHash === secondFacts.blockHash &&
+    firstFacts.blockHeight === secondFacts.blockHeight &&
+    firstFacts.stateRootHash === secondFacts.stateRootHash &&
+    firstFacts.balanceMotes === secondFacts.balanceMotes;
+  if (!agreed) throw new Error("treasury snapshot node observations do not agree");
+  const snapshotSha256 = hash32(expectedSha256, "treasury snapshot SHA-256", true);
+  if (sha256Text(canonicalTranscriptJson(snapshot, "treasury snapshot")) !== snapshotSha256) {
+    throw new Error("treasury snapshot SHA-256 does not match both observations");
+  }
+  return Object.freeze({
+    primaryBundle: first.bundle,
+    stateRootHash: firstFacts.stateRootHash,
+    observationCount: 2,
+  });
 }
 
 function stateRootFromBalanceRequest(bundle: Record<string, unknown>, label: string): string {
@@ -312,8 +474,10 @@ export function verifyNativeTreasuryExecutionArtifact(
       "header_bytes_hex",
       "body_bytes_hex",
       "action_core_bytes_hex",
+      "exact_v3_proof",
       "v3_readback",
       "snapshot",
+      "snapshot_sha256",
     ],
     "authorization",
   );
@@ -351,17 +515,18 @@ export function verifyNativeTreasuryExecutionArtifact(
   }
   const snapshotBlockHeight = Number(snapshotBlockHeightBig);
 
-  const snapshot = exactBalanceBundle(own(authorization, "snapshot"), "authorization snapshot");
-  const snapshotStateRootHash = stateRootFromBalanceRequest(snapshot, "authorization snapshot");
-  const snapshotFacts = verifyAccountBalanceAtBlock(
-    balanceInput(snapshot, {
+  record(own(authorization, "exact_v3_proof"), "exact v3 proof");
+  const snapshot = verifyTreasurySnapshot(
+    own(authorization, "snapshot"),
+    own(authorization, "snapshot_sha256"),
+    {
       accountHash: sourceAccountHash,
       blockHash: snapshotBlockHash,
       blockHeight: snapshotBlockHeight,
-      stateRootHash: snapshotStateRootHash,
       balanceMotes: treasurySnapshotBalanceMotes,
-    }),
+    },
   );
+  const snapshotStateRootHash = snapshot.stateRootHash;
 
   const journal = record(own(artifact, "executor_journal"), "executor journal");
   exactOwnKeys(
@@ -431,7 +596,7 @@ export function verifyNativeTreasuryExecutionArtifact(
   const preSource = exactBalanceBundle(own(balanceEvidence, "pre_source"), "pre-source evidence");
   if (
     canonicalTranscriptJson(preSource, "pre-source evidence") !==
-    canonicalTranscriptJson(snapshot, "authorization snapshot")
+    canonicalTranscriptJson(snapshot.primaryBundle, "authorization snapshot primary observation")
   ) {
     throw new Error("pre-source evidence does not equal the authorization snapshot");
   }
@@ -484,6 +649,7 @@ export function verifyNativeTreasuryExecutionArtifact(
     bounded,
     [
       "authorization_block_height",
+      "authorization_block_hash",
       "observed_through_block_height",
       "observed_through_block_hash",
       "scanned_block_count",
@@ -515,6 +681,7 @@ export function verifyNativeTreasuryExecutionArtifact(
     finality: finalityInput,
   });
   const scanExpected: Record<string, unknown> = {
+    authorization_block_hash: scan.authorizationBlockHash,
     observed_through_block_height: scan.observedThroughBlockHeight,
     observed_through_block_hash: scan.observedThroughBlockHash,
     scanned_block_count: scan.scannedBlockCount,
@@ -546,7 +713,7 @@ export function verifyNativeTreasuryExecutionArtifact(
   // Treasury verification never treats it as a truth shortcut.
   const v3Readback = own(authorization, "v3_readback");
   record(v3Readback, "v3 readback");
-  if (snapshotFacts.blockHeight >= finality.blockHeight) {
+  if (snapshotBlockHeight >= finality.blockHeight) {
     throw new Error("treasury snapshot must precede native execution");
   }
   return Object.freeze({
@@ -582,6 +749,7 @@ export function verifyNativeTreasuryExecutionArtifact(
     authorizationBlockHash: scan.authorizationBlockHash,
     observedThroughBlockHeight: scan.observedThroughBlockHeight,
     observedThroughBlockHash: scan.observedThroughBlockHash,
+    snapshotObservationCount: snapshot.observationCount,
     nodeObservationCount: finality.nodeObservationCount,
     verificationScope: VERIFICATION_SCOPE,
     executionProofSha256,

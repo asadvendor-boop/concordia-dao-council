@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import ssl
 from pathlib import Path
@@ -422,6 +423,50 @@ def test_every_allowed_method_projects_away_unrecognized_result_fields(
         "id": method,
         "result": {"api_version": "2.0.0"},
     }
+
+
+def test_deploy_transport_preserves_explicit_pending_but_rejects_extra_execution_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = {
+        "jsonrpc": "2.0",
+        "id": "pending",
+        "result": {
+            "api_version": "2.0.0",
+            "deploy": {"hash": "ab" * 32},
+            "execution_info": None,
+        },
+    }
+    client = _client(
+        monkeypatch,
+        _Response(json.dumps(pending).encode("ascii")),
+    )
+    assert (
+        client.call(NODE_A, "info_get_deploy", {"deploy_hash": "ab" * 32}, "pending")[
+            "result"
+        ]["execution_info"]
+        is None
+    )
+
+    ambiguous = copy.deepcopy(pending)
+    ambiguous["id"] = "ambiguous"
+    ambiguous["result"]["execution_info"] = {
+        "block_hash": "cd" * 32,
+        "block_height": 7,
+        "execution_result": {"Version2": {}},
+        "extra_marker": True,
+    }
+    client = _client(
+        monkeypatch,
+        _Response(json.dumps(ambiguous).encode("ascii")),
+    )
+    with pytest.raises(RpcTransportError, match="execution schema"):
+        client.call(
+            NODE_A,
+            "info_get_deploy",
+            {"deploy_hash": "ab" * 32},
+            "ambiguous",
+        )
 
 
 def test_named_result_wrapper_is_projected_without_changing_rpc_dialect(

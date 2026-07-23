@@ -10,11 +10,12 @@ import json
 from typing import Any
 
 from shared.actions_v3 import derive_native_material
-from shared.casper_state_proof import (
-    CasperStateProofError,
-    VerifiedAccountBalance,
-    require_verified_account_balance,
-    verify_account_balance_at_block,
+from shared.casper_state_proof import CasperStateProofError
+from shared.treasury_snapshot import (
+    TreasurySnapshotError,
+    VerifiedTreasurySnapshot,
+    require_verified_treasury_snapshot,
+    verify_treasury_snapshot_artifact,
 )
 from shared.envelope_v3 import bytes32, canonical_value, length_prefix, uint_value
 from scripts.read_v3_state import (
@@ -49,7 +50,7 @@ V3ChainReadback = VerifiedV3Readback
 
 
 # Backward-compatible import name; construction remains parser-only.
-CanonicalTreasurySnapshot = VerifiedAccountBalance
+CanonicalTreasurySnapshot = VerifiedTreasurySnapshot
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,8 @@ class VerifiedNativeAuthorization:
     snapshot_block_sha256: str
     snapshot_balance_request_sha256: str
     snapshot_balance_response_sha256: str
+    treasury_snapshot_artifact_json: str
+    treasury_snapshot_artifact_sha256: str
     finalization_block_hash: bytes
     finalization_block_height: int
     finalization_state_root_hash: bytes
@@ -163,6 +166,10 @@ def _authorization_seal(value: VerifiedNativeAuthorization) -> bytes:
         value.snapshot_balance_response_json,
     ):
         preimage += hashlib.sha256(transcript.encode("ascii")).digest()
+    preimage += hashlib.sha256(
+        value.treasury_snapshot_artifact_json.encode("ascii")
+    ).digest()
+    preimage += bytes.fromhex(value.treasury_snapshot_artifact_sha256)
     preimage += value.finalization_block_hash
     preimage += canonical_value(
         "u64", value.finalization_block_height, "finalization_block_height"
@@ -330,19 +337,14 @@ def validate_verified_authorization(value: object) -> VerifiedNativeAuthorizatio
         if _canonical_input_json(body, "typed body") != value.typed_body_json:
             raise ValueError("typed body is not canonical")
         material = derive_native_material(header, body)
-        snapshot = verify_account_balance_at_block(
-            chain_status_request=json.loads(value.snapshot_status_request_json),
-            chain_status_payload=json.loads(value.snapshot_status_json),
-            canonical_block_request=json.loads(value.snapshot_block_request_json),
-            canonical_block_payload=json.loads(value.snapshot_block_json),
-            balance_request=json.loads(value.snapshot_balance_request_json),
-            balance_response=json.loads(value.snapshot_balance_response_json),
+        snapshot_evidence = verify_treasury_snapshot_artifact(
+            json.loads(value.treasury_snapshot_artifact_json),
             expected_account_hash=value.source_account,
             expected_block_hash=value.snapshot_block_hash,
             expected_block_height=value.snapshot_block_height,
-            expected_state_root_hash=value.snapshot_state_root_hash,
             expected_balance_motes=value.treasury_snapshot_balance_motes,
         )
+        snapshot = snapshot_evidence.primary
         readback_artifact = json.loads(value.readback_artifact_json)
         if _canonical_artifact_json(readback_artifact) != value.readback_artifact_json:
             raise ValueError("readback artifact is not canonical")
@@ -360,6 +362,7 @@ def validate_verified_authorization(value: object) -> VerifiedNativeAuthorizatio
         KeyError,
         json.JSONDecodeError,
         CasperStateProofError,
+        TreasurySnapshotError,
         ReadbackValidationError,
         V3AuthorizationError,
     ) as exc:
@@ -384,6 +387,36 @@ def validate_verified_authorization(value: object) -> VerifiedNativeAuthorizatio
     )
     if expected_snapshot_hashes != observed_snapshot_hashes:
         raise V3AuthorizationError("snapshot transcript hash mismatch")
+    if (
+        snapshot_evidence.artifact_json != value.treasury_snapshot_artifact_json
+        or len(value.treasury_snapshot_artifact_sha256) != 64
+        or not hmac.compare_digest(
+            snapshot_evidence.artifact_sha256,
+            value.treasury_snapshot_artifact_sha256,
+        )
+    ):
+        raise V3AuthorizationError("two-observer snapshot artifact hash mismatch")
+    primary_transcripts = (
+        snapshot.status_request_json,
+        snapshot.status_json,
+        snapshot.block_request_json,
+        snapshot.block_json,
+        snapshot.balance_request_json,
+        snapshot.balance_response_json,
+    )
+    persisted_primary_transcripts = (
+        value.snapshot_status_request_json,
+        value.snapshot_status_json,
+        value.snapshot_block_request_json,
+        value.snapshot_block_json,
+        value.snapshot_balance_request_json,
+        value.snapshot_balance_response_json,
+    )
+    if primary_transcripts != persisted_primary_transcripts:
+        raise V3AuthorizationError(
+            "authorization transcript primary snapshot differs from "
+            "two-observer artifact"
+        )
     artifact_sha256 = hashlib.sha256(
         value.readback_artifact_json.encode("ascii")
     ).hexdigest()
@@ -540,15 +573,15 @@ def verify_native_authorization(
     body: Mapping[str, Any],
     deployment: V3DeploymentIdentity,
     readback: VerifiedV3Readback,
-    snapshot: VerifiedAccountBalance,
+    snapshot: VerifiedTreasurySnapshot,
     finalization: VerifiedV3Finalization,
 ) -> VerifiedNativeAuthorization:
     """Recompute the 19+11-field envelope and bind it to pinned chain state."""
 
     _validate_deployment(deployment)
     try:
-        require_verified_account_balance(snapshot)
-    except CasperStateProofError as exc:
+        snapshot = require_verified_treasury_snapshot(snapshot)
+    except TreasurySnapshotError as exc:
         raise V3AuthorizationError("snapshot is not parser-verified") from exc
     try:
         readback = validate_verified_readback(readback)
@@ -692,18 +725,20 @@ def verify_native_authorization(
         snapshot_block_hash=body_snapshot_hash,
         snapshot_block_height=snapshot_height,
         snapshot_state_root_hash=snapshot_state_root,
-        snapshot_status_request_json=snapshot.status_request_json,
-        snapshot_status_json=snapshot.status_json,
-        snapshot_block_request_json=snapshot.block_request_json,
-        snapshot_block_json=snapshot.block_json,
-        snapshot_balance_request_json=snapshot.balance_request_json,
-        snapshot_balance_response_json=snapshot.balance_response_json,
-        snapshot_status_request_sha256=snapshot.status_request_sha256,
-        snapshot_status_sha256=snapshot.status_sha256,
-        snapshot_block_request_sha256=snapshot.block_request_sha256,
-        snapshot_block_sha256=snapshot.block_sha256,
-        snapshot_balance_request_sha256=snapshot.balance_request_sha256,
-        snapshot_balance_response_sha256=snapshot.balance_response_sha256,
+        snapshot_status_request_json=snapshot.primary.status_request_json,
+        snapshot_status_json=snapshot.primary.status_json,
+        snapshot_block_request_json=snapshot.primary.block_request_json,
+        snapshot_block_json=snapshot.primary.block_json,
+        snapshot_balance_request_json=snapshot.primary.balance_request_json,
+        snapshot_balance_response_json=snapshot.primary.balance_response_json,
+        snapshot_status_request_sha256=snapshot.primary.status_request_sha256,
+        snapshot_status_sha256=snapshot.primary.status_sha256,
+        snapshot_block_request_sha256=snapshot.primary.block_request_sha256,
+        snapshot_block_sha256=snapshot.primary.block_sha256,
+        snapshot_balance_request_sha256=snapshot.primary.balance_request_sha256,
+        snapshot_balance_response_sha256=snapshot.primary.balance_response_sha256,
+        treasury_snapshot_artifact_json=snapshot.artifact_json,
+        treasury_snapshot_artifact_sha256=snapshot.artifact_sha256,
         finalization_block_hash=_require_bytes(
             "exact finalization block_hash", finalization.block_hash
         ),

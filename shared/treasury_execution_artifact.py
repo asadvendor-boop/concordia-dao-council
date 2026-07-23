@@ -207,6 +207,31 @@ def _reparse_emitted_evidence(
         "post_recipient",
     }:
         raise TreasuryExecutionArtifactError("balance evidence fields are not exact")
+    snapshot_artifact = _parse_canonical_json(
+        authorization.treasury_snapshot_artifact_json,
+        "two-observer treasury snapshot",
+    )
+    try:
+        observations = snapshot_artifact["observations"]
+        primary = observations[0]
+        primary_bundle = {
+            "status_request": primary["status_request"],
+            "status": primary["status_response"],
+            "block_request": primary["block_request"],
+            "block": primary["block_response"],
+            "balance_request": primary["balance_request"],
+            "balance_response": primary["balance_response"],
+        }
+    except (KeyError, IndexError, TypeError) as exc:
+        raise TreasuryExecutionArtifactError(
+            "two-observer treasury snapshot primary observation is malformed"
+        ) from exc
+    if _canonical_json(
+        balance_bundle["pre_source"], "pre-source balance evidence"
+    ) != _canonical_json(primary_bundle, "treasury snapshot primary observation"):
+        raise TreasuryExecutionArtifactError(
+            "pre-source evidence does not equal treasury snapshot observer one"
+        )
     try:
         pre_source = _reparse_balance_bundle(
             balance_bundle["pre_source"],
@@ -412,26 +437,19 @@ def build_native_treasury_execution_artifact(
         raise TreasuryExecutionArtifactError(
             "journal deployment commit differs from exact v3 proof"
         )
-    snapshot = {
-        "status_request": _parse_canonical_json(
-            authorization.snapshot_status_request_json, "snapshot status request"
-        ),
-        "status": _parse_canonical_json(
-            authorization.snapshot_status_json, "snapshot status"
-        ),
-        "block_request": _parse_canonical_json(
-            authorization.snapshot_block_request_json, "snapshot block request"
-        ),
-        "block": _parse_canonical_json(
-            authorization.snapshot_block_json, "snapshot block"
-        ),
-        "balance_request": _parse_canonical_json(
-            authorization.snapshot_balance_request_json, "snapshot balance request"
-        ),
-        "balance_response": _parse_canonical_json(
-            authorization.snapshot_balance_response_json, "snapshot balance response"
-        ),
-    }
+    snapshot = _parse_canonical_json(
+        authorization.treasury_snapshot_artifact_json,
+        "two-observer treasury snapshot",
+    )
+    if not hmac.compare_digest(
+        authorization.treasury_snapshot_artifact_sha256,
+        hashlib.sha256(
+            authorization.treasury_snapshot_artifact_json.encode("ascii")
+        ).hexdigest(),
+    ):
+        raise TreasuryExecutionArtifactError(
+            "two-observer treasury snapshot hash does not match"
+        )
     finality_evidence = {
         "facts": {
             "deploy_hash": finality.deploy_hash,
@@ -481,6 +499,7 @@ def build_native_treasury_execution_artifact(
             "exact_v3_proof": v3_proof,
             "v3_readback": readback,
             "snapshot": snapshot,
+            "snapshot_sha256": authorization.treasury_snapshot_artifact_sha256,
         },
         "executor_journal": {
             "state": journal.state.value,

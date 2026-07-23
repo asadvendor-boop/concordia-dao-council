@@ -27,7 +27,6 @@ from urllib.parse import urlsplit
 from pycspr import crypto, serializer
 from pycspr.factory.accounts import (
     create_public_key_from_account_key,
-    parse_private_key,
     parse_public_key_bytes,
 )
 from pycspr.factory.deploys import (
@@ -67,6 +66,7 @@ from shared.casper_rpc_transport import (
     RpcEndpointPolicyError,
     parse_rpc_authorization_file_args,
 )
+from shared.casper_signer_file import load_secure_casper_signer
 
 
 class LiveProofError(RuntimeError):
@@ -724,12 +724,12 @@ def _role_key(role: Mapping[str, Any]) -> tuple[object, object | None, str]:
         and role["custody"] == "server"
     ):
         try:
-            private = parse_private_key(
+            private = load_secure_casper_signer(
                 Path(str(role["secret_key_path"])),
-                KeyAlgorithm[str(role["key_algorithm"]).upper()],
+                str(role["key_algorithm"]),
             )
-        except (OSError, ValueError, KeyError) as exc:
-            raise LiveProofError("server-held role key could not be loaded") from exc
+        except Exception:
+            raise LiveProofError("server-held role key could not be loaded") from None
         return private, private, "server"
     raise LiveProofError("role must be an exact browser or server custody object")
 
@@ -1147,7 +1147,7 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
     package_hash = _hash32(args.package_hash, "package hash")
     contract_hash = _hash32(args.contract_hash, "contract hash")
     configured_role_accounts = _role_accounts(roles)
-    submit = bool(getattr(args, "submit", not args.prepare_only))
+    submit = bool(getattr(args, "submit", False))
     rpc_urls: tuple[str, str] | tuple[()] = ()
     rpc_transport: object | None = None
     if submit:
@@ -1543,7 +1543,6 @@ def build_live_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-attempts", type=int, default=30)
     parser.add_argument("--poll-seconds", type=float, default=6.0)
     parser.add_argument("--submit", action="store_true")
-    parser.add_argument("--prepare-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--resume-checkpoint", type=Path)
     parser.add_argument("--signed-deploy", type=Path)
     parser.add_argument("--journal", type=Path, required=True)
@@ -1554,7 +1553,6 @@ def build_live_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_live_parser()
     args = parser.parse_args()
-    args.prepare_only = not args.submit
     args.rpc_url = args.rpc_urls[0] if args.rpc_urls else ""
     try:
         result = asyncio.run(run(args))

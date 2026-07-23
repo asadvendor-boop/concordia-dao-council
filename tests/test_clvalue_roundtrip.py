@@ -64,9 +64,14 @@ from scripts.verify_v3_proof import ProofVerificationError, verify_v3_proof_docu
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = ROOT / "contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/governance_receiptv3_schema.json"
+SCHEMA = (
+    ROOT
+    / "contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/governance_receiptv3_schema.json"
+)
 VECTORS = ROOT / "tests/golden/envelope_v3"
-DEPLOYMENT_MANIFEST = ROOT / "contracts/odra-governance-receipt-v3/deployment.manifest.json"
+DEPLOYMENT_MANIFEST = (
+    ROOT / "contracts/odra-governance-receipt-v3/deployment.manifest.json"
+)
 HISTORICAL_ODRA_MANIFEST = ROOT / "handoff/HISTORICAL_ODRA_SHA256.txt"
 
 
@@ -131,11 +136,14 @@ def test_clv_08_prepared_finalize_args_match_generated_odra_schema_exactly(
     prepared = prepare_v3_envelope(document_factory())
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
 
-    assert diff_entry_point_args_against_schema(
-        schema,
-        prepared["entry_point"],
-        prepared["runtime_args"],
-    ) == []
+    assert (
+        diff_entry_point_args_against_schema(
+            schema,
+            prepared["entry_point"],
+            prepared["runtime_args"],
+        )
+        == []
+    )
 
 
 def test_wasm_04_locked_install_args_are_fail_closed_and_schema_exact() -> None:
@@ -155,7 +163,10 @@ def test_wasm_04_locked_install_args_are_fail_closed_and_schema_exact() -> None:
         installation_nonce="77" * 32,
     )
 
-    assert serializer.to_json(args["odra_cfg_package_hash_key_name"])["parsed"] == "concordia_governance_receipt_v3"
+    assert (
+        serializer.to_json(args["odra_cfg_package_hash_key_name"])["parsed"]
+        == "concordia_governance_receipt_v3"
+    )
     assert serializer.to_json(args["odra_cfg_is_upgradable"])["bytes"] == "00"
     assert serializer.to_json(args["odra_cfg_allow_key_override"])["bytes"] == "00"
     assert serializer.to_json(args["odra_cfg_is_upgrade"])["bytes"] == "00"
@@ -173,21 +184,33 @@ def test_wasm_04_locked_install_args_are_fail_closed_and_schema_exact() -> None:
         )
 
 
-def test_wasm_05_deployment_manifest_binds_and_rechecks_frozen_historical_inventory() -> None:
+def test_wasm_05_deployment_manifest_binds_and_rechecks_frozen_historical_inventory() -> (
+    None
+):
     deployment = json.loads(DEPLOYMENT_MANIFEST.read_text(encoding="utf-8"))
     inventory_bytes = HISTORICAL_ODRA_MANIFEST.read_bytes()
 
-    assert deployment["historical_isolation"]["manifest_sha256"] == hashlib.sha256(
-        inventory_bytes
-    ).hexdigest()
-    records = [line for line in inventory_bytes.decode("utf-8").splitlines() if line and not line.startswith("#")]
+    assert (
+        deployment["historical_isolation"]["manifest_sha256"]
+        == hashlib.sha256(inventory_bytes).hexdigest()
+    )
+    records = [
+        line
+        for line in inventory_bytes.decode("utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
     assert len(records) == deployment["historical_isolation"]["tracked_file_count"]
     for record in records:
         expected_sha256, relative_path = record.split("  ", 1)
-        assert hashlib.sha256((ROOT / relative_path).read_bytes()).hexdigest() == expected_sha256
+        assert (
+            hashlib.sha256((ROOT / relative_path).read_bytes()).hexdigest()
+            == expected_sha256
+        )
 
 
-def test_wasm_06_live_package_must_be_locked_single_version_one_without_upgrade_authority() -> None:
+def test_wasm_06_live_package_must_be_locked_single_version_one_without_upgrade_authority() -> (
+    None
+):
     package = {
         "ContractPackage": {
             "access_key": "uref-" + "aa" * 32 + "-007",
@@ -221,7 +244,12 @@ def test_wasm_06_live_package_must_be_locked_single_version_one_without_upgrade_
         ("disabled_versions", [{"contract_version": 1, "protocol_version_major": 2}]),
         (
             "groups",
-            [{"group_name": "upgrader_group", "group_users": ["uref-" + "cc" * 32 + "-007"]}],
+            [
+                {
+                    "group_name": "upgrader_group",
+                    "group_users": ["uref-" + "cc" * 32 + "-007"],
+                }
+            ],
         ),
         ("access_key", "uref-not-a-canonical-uref"),
     ]
@@ -232,7 +260,9 @@ def test_wasm_06_live_package_must_be_locked_single_version_one_without_upgrade_
             _resolve_locked_contract(broken)
 
 
-def test_wasm_07_finalized_install_deploy_reproves_wasm_locked_args_and_signature() -> None:
+def test_wasm_07_finalized_install_deploy_reproves_wasm_locked_args_and_signature() -> (
+    None
+):
     private = parse_private_key_bytes(bytes([7]) * 32, KeyAlgorithm.ED25519)
     public = private.to_public_key()
     roles = {
@@ -299,7 +329,7 @@ def test_install_payload_requires_and_persists_exact_source_and_deployment_commi
 ) -> None:
     private = parse_private_key_bytes(bytes([7]) * 32, KeyAlgorithm.ED25519)
     monkeypatch.setattr(
-        "scripts.install_governance_receipt_v3.parse_private_key",
+        "scripts.install_governance_receipt_v3.load_secure_casper_signer",
         lambda *_: private,
     )
     roles = {
@@ -356,7 +386,9 @@ def _cl_bytes(inner: bytes) -> dict[str, object]:
     }
 
 
-def _rpc(method: str, params: dict[str, object], result: dict[str, object]) -> dict[str, object]:
+def _rpc(
+    method: str, params: dict[str, object], result: dict[str, object]
+) -> dict[str, object]:
     request = {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
     response = {"jsonrpc": "2.0", "id": method, "result": result}
     return {
@@ -366,7 +398,11 @@ def _rpc(method: str, params: dict[str, object], result: dict[str, object]) -> d
         "request": request,
         "response": response,
         "canonical_sha256": hashlib.sha256(
-            json.dumps({"request": request, "response": response}, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                {"request": request, "response": response},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
         ).hexdigest(),
     }
 
@@ -405,18 +441,31 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
                     "block": {
                         "Version2": {
                             "hash": ids["block"],
-                            "header": {"height": 9_010, "state_root_hash": ids["state_root"]},
+                            "header": {
+                                "height": 9_010,
+                                "state_root_hash": ids["state_root"],
+                            },
                             "body": {},
                         }
                     },
                     "proofs": [],
-                }
+                },
             },
         ),
         _rpc(
             "query_global_state",
-            {"state_identifier": {"StateRootHash": ids["state_root"]}, "key": "hash-" + ids["contract"], "path": []},
-            {"stored_value": {"Contract": {"contract_package_hash": "contract-package-" + ids["package"]}}},
+            {
+                "state_identifier": {"StateRootHash": ids["state_root"]},
+                "key": "hash-" + ids["contract"],
+                "path": [],
+            },
+            {
+                "stored_value": {
+                    "Contract": {
+                        "contract_package_hash": "contract-package-" + ids["package"]
+                    }
+                }
+            },
         ),
     ]
 
@@ -427,7 +476,10 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
                 {
                     "state_root_hash": ids["state_root"],
                     "dictionary_identifier": {
-                        "ContractNamedKey": {"key": "hash-" + ids["contract"], "dictionary_name": "state"}
+                        "ContractNamedKey": {
+                            "key": "hash-" + ids["contract"],
+                            "dictionary_name": "state",
+                        }
                     },
                     "dictionary_item_key": state_dictionary_key(index, mapping),
                 },
@@ -435,7 +487,9 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
             )
         )
 
-    proposal_key = len(ids["proposal"].encode()).to_bytes(4, "little") + ids["proposal"].encode()
+    proposal_key = (
+        len(ids["proposal"].encode()).to_bytes(4, "little") + ids["proposal"].encode()
+    )
     dictionary(1, b"", (3).to_bytes(4, "little"))
     dictionary(2, b"", bytes.fromhex(ids["domain"]))
     dictionary(3, b"", len(b"casper-test").to_bytes(4, "little") + b"casper-test")
@@ -476,7 +530,9 @@ def _role_private_keys() -> dict[str, object]:
     }
 
 
-def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dict[str, str]) -> dict[str, object]:
+def _live_run(
+    prepared: dict[str, object], readback: dict[str, object], ids: dict[str, str]
+) -> dict[str, object]:
     role_keys = _role_private_keys()
     role_accounts = {}
     for role, private in role_keys.items():
@@ -527,7 +583,9 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                         "Version2": {
                             "initiator": {"PublicKey": public.account_key.hex()},
                             "error_message": (
-                                f"User error: {error_code}" if error_code is not None else None
+                                f"User error: {error_code}"
+                                if error_code is not None
+                                else None
                             ),
                             "current_price": 1,
                             "limit": "5000000000",
@@ -562,9 +620,7 @@ def _live_run(prepared: dict[str, object], readback: dict[str, object], ids: dic
                                 "state_root_hash": state_root_hash,
                                 "timestamp": block_timestamp,
                             },
-                            "body": {
-                                "transactions": {"0": [{"Deploy": deploy_hash}]}
-                            },
+                            "body": {"transactions": {"0": [{"Deploy": deploy_hash}]}},
                         }
                     },
                     "proofs": [],
@@ -657,7 +713,9 @@ def _deployment_evidence(
         casper_chain_name="casper-test",
         installation_nonce=nonce,
     )
-    wasm = (ROOT / "contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm").read_bytes()
+    wasm = (
+        ROOT / "contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm"
+    ).read_bytes()
     install = create_deploy(
         create_deploy_parameters(installer, "casper-test", timestamp=1_784_750_400),
         create_standard_payment(30_000_000_000),
@@ -728,7 +786,7 @@ def _deployment_evidence(
                         }
                     ]
                 }
-            }
+            },
         },
     )
     package_rpc = _rpc(
@@ -757,8 +815,10 @@ def _deployment_evidence(
             "block_header": None,
             "merkle_proof": "contract-proof",
             "stored_value": {
-                "Contract": {"contract_package_hash": "contract-package-" + ids["package"]}
-            }
+                "Contract": {
+                    "contract_package_hash": "contract-package-" + ids["package"]
+                }
+            },
         },
     )
     state_root_rpc = _rpc(
@@ -863,7 +923,10 @@ def _deployment_evidence(
                 "broadcast_response": {
                     "jsonrpc": "2.0",
                     "id": "concordia-v3-install",
-                    "result": {"api_version": "2.0.0", "deploy_hash": install_json["hash"]},
+                    "result": {
+                        "api_version": "2.0.0",
+                        "deploy_hash": install_json["hash"],
+                    },
                 },
                 "install_deploy": install_raw,
                 "state_root": {
@@ -893,9 +956,9 @@ def _bound_v3_proof() -> tuple[dict[str, object], dict[str, object], dict[str, s
     prepared = prepare_v3_envelope(document)
     transcripts, ids = _readback_fixture()
     proposal = document["header"]["proposal_id"]
-    old_proposal_key = len(ids["proposal"].encode()).to_bytes(4, "little") + ids[
-        "proposal"
-    ].encode()
+    old_proposal_key = (
+        len(ids["proposal"].encode()).to_bytes(4, "little") + ids["proposal"].encode()
+    )
     new_proposal_key = len(proposal.encode()).to_bytes(4, "little") + proposal.encode()
     role_accounts = {
         name: private.to_public_key().to_account_hash().hex()
@@ -910,15 +973,25 @@ def _bound_v3_proof() -> tuple[dict[str, object], dict[str, object], dict[str, s
     }
     for transcript in transcripts:
         params = transcript["params"]
-        item_key = params.get("dictionary_item_key") if isinstance(params, dict) else None
+        item_key = (
+            params.get("dictionary_item_key") if isinstance(params, dict) else None
+        )
         replacements = {
-            state_dictionary_key(11, old_proposal_key): state_dictionary_key(11, new_proposal_key),
-            state_dictionary_key(12, old_proposal_key): state_dictionary_key(12, new_proposal_key),
-            state_dictionary_key(14, old_proposal_key): state_dictionary_key(14, new_proposal_key),
-            state_dictionary_key(15, old_proposal_key): state_dictionary_key(15, new_proposal_key),
-            state_dictionary_key(16, bytes.fromhex(ids["action"])): state_dictionary_key(
-                16, bytes.fromhex(prepared["action_id"])
+            state_dictionary_key(11, old_proposal_key): state_dictionary_key(
+                11, new_proposal_key
             ),
+            state_dictionary_key(12, old_proposal_key): state_dictionary_key(
+                12, new_proposal_key
+            ),
+            state_dictionary_key(14, old_proposal_key): state_dictionary_key(
+                14, new_proposal_key
+            ),
+            state_dictionary_key(15, old_proposal_key): state_dictionary_key(
+                15, new_proposal_key
+            ),
+            state_dictionary_key(
+                16, bytes.fromhex(ids["action"])
+            ): state_dictionary_key(16, bytes.fromhex(prepared["action_id"])),
         }
         if item_key == state_dictionary_key(2):
             transcript["response"]["result"]["stored_value"] = _cl_bytes(
@@ -970,7 +1043,9 @@ def _bound_v3_proof() -> tuple[dict[str, object], dict[str, object], dict[str, s
     return proof, prepared, ids
 
 
-def test_rb_01_through_10_reparse_raw_state_root_pinned_transcripts_into_opaque_readback() -> None:
+def test_rb_01_through_10_reparse_raw_state_root_pinned_transcripts_into_opaque_readback() -> (
+    None
+):
     artifact, ids = _sealed_readback_artifact()
     verified = verify_and_seal_readback_artifact(artifact)
 
@@ -997,12 +1072,17 @@ def test_readback_accepts_exact_casper_v1_and_v2_block_with_signatures_wrappers(
     block_version: str,
 ) -> None:
     transcripts, ids = _readback_fixture()
-    wrapped_block = transcripts[0]["response"]["result"]["block_with_signatures"]["block"]
+    wrapped_block = transcripts[0]["response"]["result"]["block_with_signatures"][
+        "block"
+    ]
     payload = wrapped_block.pop("Version2")
     wrapped_block[block_version] = payload
     transcripts[0]["canonical_sha256"] = hashlib.sha256(
         json.dumps(
-            {"request": transcripts[0]["request"], "response": transcripts[0]["response"]},
+            {
+                "request": transcripts[0]["request"],
+                "response": transcripts[0]["response"],
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -1020,7 +1100,9 @@ def test_readback_accepts_exact_casper_v1_and_v2_block_with_signatures_wrappers(
     assert artifact["facts"]["observed_block_height"] == 9_010
 
 
-def test_readback_rejects_flags_echoes_unpinned_queries_and_tampered_transcripts() -> None:
+def test_readback_rejects_flags_echoes_unpinned_queries_and_tampered_transcripts() -> (
+    None
+):
     artifact, _ = _sealed_readback_artifact()
     for mutation in ("boolean", "echo", "state_root", "transcript"):
         broken = copy.deepcopy(artifact)
@@ -1031,9 +1113,9 @@ def test_readback_rejects_flags_echoes_unpinned_queries_and_tampered_transcripts
         elif mutation == "state_root":
             broken["transcripts"][2]["params"]["state_root_hash"] = "ff" * 32
         else:
-            broken["transcripts"][0]["response"]["result"]["block_with_signatures"]["block"]["Version2"][
-                "header"
-            ]["height"] = 9_002
+            broken["transcripts"][0]["response"]["result"]["block_with_signatures"][
+                "block"
+            ]["Version2"]["header"]["height"] = 9_002
         with pytest.raises(ReadbackValidationError):
             verify_and_seal_readback_artifact(broken)
 
@@ -1048,11 +1130,15 @@ def test_readback_rejects_post_factory_public_slot_tampering() -> None:
 
 
 @pytest.mark.parametrize("mutation", ["zero_proposer", "duplicate_finalizer_signer"])
-def test_readback_rejects_zero_or_cross_role_colliding_governance_state(mutation: str) -> None:
+def test_readback_rejects_zero_or_cross_role_colliding_governance_state(
+    mutation: str,
+) -> None:
     transcripts, ids = _readback_fixture()
     key = state_dictionary_key(4 if mutation == "zero_proposer" else 5)
     replacement = bytes(32) if mutation == "zero_proposer" else bytes.fromhex("03" * 32)
-    target = next(item for item in transcripts if item["params"].get("dictionary_item_key") == key)
+    target = next(
+        item for item in transcripts if item["params"].get("dictionary_item_key") == key
+    )
     target["response"]["result"]["stored_value"] = _cl_bytes(replacement)
     target["canonical_sha256"] = hashlib.sha256(
         json.dumps(
@@ -1073,7 +1159,9 @@ def test_readback_rejects_zero_or_cross_role_colliding_governance_state(mutation
         )
 
 
-def test_offline_verifier_recomputes_envelope_and_readback_instead_of_trusting_booleans() -> None:
+def test_offline_verifier_recomputes_envelope_and_readback_instead_of_trusting_booleans() -> (
+    None
+):
     proof, _, _ = _bound_v3_proof()
 
     result = verify_v3_proof_document(proof)
@@ -1122,7 +1210,9 @@ def test_offline_verifier_rejects_reversed_finality_observation_time() -> None:
         verify_v3_proof_document(proof)
 
 
-def test_offline_verifier_rejects_observation_chronology_reversed_across_steps() -> None:
+def test_offline_verifier_rejects_observation_chronology_reversed_across_steps() -> (
+    None
+):
     proof, _, _ = _bound_v3_proof()
     proof["run"]["steps"][0]["finality_block_evidence"]["observed_at"] = (
         "2099-01-01T00:00:00.000Z"
@@ -1132,7 +1222,9 @@ def test_offline_verifier_rejects_observation_chronology_reversed_across_steps()
         verify_v3_proof_document(proof)
 
 
-def test_offline_verifier_accepts_lost_broadcast_only_after_hash_reconciliation() -> None:
+def test_offline_verifier_accepts_lost_broadcast_only_after_hash_reconciliation() -> (
+    None
+):
     proof, _, _ = _bound_v3_proof()
     record = proof["run"]["steps"][0]
     record.pop("broadcast_transcript")
@@ -1189,7 +1281,9 @@ def test_offline_verifier_rejects_nonmonotonic_contract_step_finality() -> None:
         ).encode()
     ).hexdigest()
 
-    with pytest.raises(ProofVerificationError, match="block evidence|preceding contract step"):
+    with pytest.raises(
+        ProofVerificationError, match="block evidence|preceding contract step"
+    ):
         verify_v3_proof_document(proof)
 
 
@@ -1238,7 +1332,9 @@ def test_offline_verifier_rejects_equal_height_readback_on_different_block() -> 
     proof["readback"] = readback
     proof["run"]["readback"] = copy.deepcopy(readback)
 
-    with pytest.raises(ProofVerificationError, match="different block at exact finalization height"):
+    with pytest.raises(
+        ProofVerificationError, match="different block at exact finalization height"
+    ):
         verify_v3_proof_document(proof)
 
 
@@ -1262,7 +1358,9 @@ def test_offline_verifier_rejects_equal_height_readback_on_different_block() -> 
         "build_command",
     ],
 )
-def test_proof_verifier_binds_finalized_locked_deployment_release_and_roles(tamper: str) -> None:
+def test_proof_verifier_binds_finalized_locked_deployment_release_and_roles(
+    tamper: str,
+) -> None:
     proof, _, _ = _bound_v3_proof()
     deployment = proof["deployment"]
     if tamper == "missing":
@@ -1278,9 +1376,9 @@ def test_proof_verifier_binds_finalized_locked_deployment_release_and_roles(tamp
     elif tamper == "threshold":
         deployment["threshold"] = 3
     elif tamper == "package_lock":
-        deployment["raw_rpc"]["package"]["response"]["result"]["stored_value"]["ContractPackage"][
-            "lock_status"
-        ] = "Unlocked"
+        deployment["raw_rpc"]["package"]["response"]["result"]["stored_value"][
+            "ContractPackage"
+        ]["lock_status"] = "Unlocked"
     elif tamper == "install_height":
         deployment["install_block_height"] += 1
     elif tamper == "finality_summary":
@@ -1308,7 +1406,9 @@ def test_proof_verifier_binds_finalized_locked_deployment_release_and_roles(tamp
         verify_v3_proof_document(proof)
 
 
-def test_live_runner_derives_outcomes_only_from_exact_casper_v2_execution_result() -> None:
+def test_live_runner_derives_outcomes_only_from_exact_casper_v2_execution_result() -> (
+    None
+):
     prepared = prepare_v3_envelope(_native_document())
     readback, ids = _sealed_readback_artifact()
     run = _live_run(prepared, readback, ids)
@@ -1538,13 +1638,17 @@ def test_mixed_custody_browser_resume_is_checkpoint_bound_single_use_and_fail_cl
             "00" if signature[-2:] != "00" else "01"
         )
     elif tamper == "stale":
-        now_seconds = deploy.header.timestamp.value + deploy.header.ttl.as_milliseconds / 1000 + 1
+        now_seconds = (
+            deploy.header.timestamp.value + deploy.header.ttl.as_milliseconds / 1000 + 1
+        )
     elif tamper == "checkpoint_choreography":
         checkpoint["run"]["steps"][0]["name"] = "approve_a"
         checkpoint["run"]["next_step"] = "approve_a"
         checkpoint["signature_request"]["step_name"] = "approve_a"
         checkpoint_without_hash = {
-            key: value for key, value in checkpoint.items() if key != "checkpoint_sha256"
+            key: value
+            for key, value in checkpoint.items()
+            if key != "checkpoint_sha256"
         }
         checkpoint["checkpoint_sha256"] = hashlib.sha256(
             json.dumps(
@@ -1570,7 +1674,9 @@ def test_mixed_custody_browser_resume_is_checkpoint_bound_single_use_and_fail_cl
         )
 
 
-def test_mixed_custody_browser_resume_accepts_exact_signed_deploy_and_seals_consumption() -> None:
+def test_mixed_custody_browser_resume_accepts_exact_signed_deploy_and_seals_consumption() -> (
+    None
+):
     prepared = prepare_v3_envelope(_native_document())
     role_keys = _role_private_keys()
     browser_private = role_keys["proposer"]
@@ -1703,7 +1809,9 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
         async def post(self, _: str, *, json: dict[str, object]) -> FakeResponse:
             return FakeResponse(json)
 
-    async def fake_finality(**kwargs: object) -> tuple[dict[str, object], dict[str, object]]:
+    async def fake_finality(
+        **kwargs: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
         deploy_hash = str(kwargs["deploy_hash"])
         transcript = _rpc(
             "info_get_deploy",
@@ -1723,7 +1831,9 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
             "block_height": 9_002,
         }
 
-    monkeypatch.setattr(live_proof_runner, "capture_v3_checkpoint_state", fake_checkpoint_state)
+    monkeypatch.setattr(
+        live_proof_runner, "capture_v3_checkpoint_state", fake_checkpoint_state
+    )
     monkeypatch.setattr(
         live_proof_runner,
         "build_public_rpc_transport",
@@ -1835,9 +1945,10 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
     assert second["status"] == "waiting_for_browser_signature"
     assert second["next_step_index"] == 1
     assert second["run"]["steps"][0]["observed_outcome"]["success"] is True
-    assert second["prior_state_readback"]["expected"]["completed_steps"][0][
-        "name"
-    ] == "propose_exact"
+    assert (
+        second["prior_state_readback"]["expected"]["completed_steps"][0]["name"]
+        == "propose_exact"
+    )
     assert second["run"]["prepared"] == prepared
 
     broken = copy.deepcopy(second)
@@ -1849,7 +1960,9 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
         if key != "artifact_sha256"
     }
     broken["prior_state_readback"]["artifact_sha256"] = hashlib.sha256(
-        json.dumps(prior_unsigned, sort_keys=True, separators=(",", ":")).encode("ascii")
+        json.dumps(prior_unsigned, sort_keys=True, separators=(",", ":")).encode(
+            "ascii"
+        )
     ).hexdigest()
     broken["signature_request"]["prior_state_readback_sha256"] = broken[
         "prior_state_readback"
@@ -1899,7 +2012,7 @@ async def test_server_lost_response_resumes_by_exact_hash_without_rebroadcast(
     roles_path.write_text(json.dumps(roles), encoding="utf-8")
     monkeypatch.setattr(
         live_proof_runner,
-        "parse_private_key",
+        "load_secure_casper_signer",
         lambda path, algorithm: role_keys[path.stem],
     )
     monkeypatch.setattr(
@@ -1961,9 +2074,9 @@ async def test_server_lost_response_resumes_by_exact_hash_without_rebroadcast(
     assert calls == 1
 
     tampered = json.loads(journal_path.read_text(encoding="utf-8"))
-    tampered["steps"][0]["deploy"]["session"]["StoredContractByHash"][
-        "entry_point"
-    ] = "forged_entry_point"
+    tampered["steps"][0]["deploy"]["session"]["StoredContractByHash"]["entry_point"] = (
+        "forged_entry_point"
+    )
     journal_path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(LiveProofError, match="frozen|canonical|invalid"):
         await live_proof_runner.run(args)
@@ -1983,22 +2096,32 @@ async def test_server_lost_response_resumes_by_exact_hash_without_rebroadcast(
         "unrelated_nested_success",
     ],
 )
-def test_live_proof_verifier_rejects_adversarial_raw_step_transcript_tampering(tamper: str) -> None:
+def test_live_proof_verifier_rejects_adversarial_raw_step_transcript_tampering(
+    tamper: str,
+) -> None:
     proof, _, _ = _bound_v3_proof()
     run = proof["run"]
     if tamper == "error_code":
         step = run["steps"][1]
-        step["finality_transcript"]["response"]["result"]["execution_info"]["execution_result"]["Version2"][
-            "error_message"
-        ] = "User error: 10"
+        step["finality_transcript"]["response"]["result"]["execution_info"][
+            "execution_result"
+        ]["Version2"]["error_message"] = "User error: 10"
     elif tamper == "runtime_arg":
-        run["steps"][5]["deploy"]["session"]["StoredContractByHash"]["args"][2][1]["parsed"] = 99
+        run["steps"][5]["deploy"]["session"]["StoredContractByHash"]["args"][2][1][
+            "parsed"
+        ] = 99
     elif tamper == "broadcast_hash":
-        run["steps"][0]["broadcast_transcript"]["response"]["result"]["deploy_hash"] = "ff" * 32
+        run["steps"][0]["broadcast_transcript"]["response"]["result"]["deploy_hash"] = (
+            "ff" * 32
+        )
     elif tamper == "role":
-        run["role_accounts"]["signer_b"]["account_hash"] = run["role_accounts"]["signer_a"]["account_hash"]
+        run["role_accounts"]["signer_b"]["account_hash"] = run["role_accounts"][
+            "signer_a"
+        ]["account_hash"]
     elif tamper == "payment":
-        run["steps"][0]["deploy"]["payment"]["ModuleBytes"]["args"][0][1]["parsed"] = "1"
+        run["steps"][0]["deploy"]["payment"]["ModuleBytes"]["args"][0][1]["parsed"] = (
+            "1"
+        )
     elif tamper == "header":
         run["steps"][0]["deploy"]["header"]["chain_name"] = "casper"
     elif tamper == "signature":
@@ -2007,13 +2130,13 @@ def test_live_proof_verifier_rejects_adversarial_raw_step_transcript_tampering(t
             "00" if signature[-2:] != "00" else "01"
         )
     elif tamper == "node_deploy":
-        run["steps"][0]["finality_transcript"]["response"]["result"]["deploy"]["header"][
-            "chain_name"
-        ] = "casper"
+        run["steps"][0]["finality_transcript"]["response"]["result"]["deploy"][
+            "header"
+        ]["chain_name"] = "casper"
     else:
-        result = run["steps"][5]["finality_transcript"]["response"]["result"]["execution_info"][
-            "execution_result"
-        ]["Version2"]
+        result = run["steps"][5]["finality_transcript"]["response"]["result"][
+            "execution_info"
+        ]["execution_result"]["Version2"]
         del result["error_message"]
         result["effects"] = [{"kind": {"Success": {}}}]
 
@@ -2022,7 +2145,10 @@ def test_live_proof_verifier_rejects_adversarial_raw_step_transcript_tampering(t
             transcript = step[name]
             transcript["canonical_sha256"] = hashlib.sha256(
                 json.dumps(
-                    {"request": transcript["request"], "response": transcript["response"]},
+                    {
+                        "request": transcript["request"],
+                        "response": transcript["response"],
+                    },
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode()

@@ -18,11 +18,8 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
-import ipaddress
 import json
-import os
 import re
-import secrets
 import subprocess
 import sys
 import time
@@ -30,7 +27,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
-from urllib.parse import urlsplit
 
 from pycspr import serializer
 from cryptography.hazmat.primitives import serialization
@@ -41,6 +37,10 @@ from pycspr.types.node.rpc import Deploy
 
 from scripts.read_v3_state import verify_and_seal_readback_artifact
 from scripts.verify_v3_proof import verify_v3_proof_document
+from shared.atomic_private_file import (
+    AtomicPrivateFileError,
+    write_private_file_once,
+)
 from shared.casper_rpc_transport import (
     PinnedHttpsJsonRpc,
     RpcRemoteError,
@@ -74,6 +74,12 @@ from shared.v3_authorization import (
     validate_verified_authorization,
     verify_exact_v3_finalization,
     verify_native_authorization,
+)
+from shared.treasury_snapshot import (
+    TreasurySnapshotError,
+    VerifiedTreasurySnapshot,
+    canonical_snapshot_node_origin,
+    verify_treasury_snapshot_artifact,
 )
 
 
@@ -150,56 +156,10 @@ def _reject_nonfinite_json_constant(_: str) -> object:
 
 
 def _snapshot_node_origin(value: object) -> tuple[str, int]:
-    if type(value) is not str or not value:
-        raise OperatorError("treasury snapshot node URL is invalid")
     try:
-        parts = urlsplit(value)
-        port = parts.port
-    except ValueError as exc:
-        raise OperatorError("treasury snapshot node URL is invalid") from exc
-    host = parts.hostname
-    if (
-        parts.scheme != "https"
-        or host is None
-        or parts.username is not None
-        or parts.password is not None
-        or parts.query
-        or parts.fragment
-        or parts.path != "/rpc"
-        or port not in (None, 443)
-    ):
-        raise OperatorError("treasury snapshot node URL is not credential-free HTTPS")
-    normalized = host.casefold().rstrip(".")
-    if not normalized or not normalized.isascii():
-        raise OperatorError("treasury snapshot node hostname is invalid")
-    try:
-        ipaddress.ip_address(normalized.strip("[]"))
-    except ValueError:
-        pass
-    else:
-        raise OperatorError("treasury snapshot node must use a DNS hostname")
-    if (
-        "." not in normalized
-        or normalized.endswith(".local")
-        or normalized in {"localhost", "localhost.localdomain"}
-        or value != f"https://{normalized}/rpc"
-    ):
-        raise OperatorError(
-            "treasury snapshot node hostname is not canonical public DNS"
-        )
-    return normalized, 443
-
-
-def _snapshot_capture_time(value: object) -> str:
-    if type(value) is not str or not value.endswith("Z"):
-        raise OperatorError("treasury snapshot capture time is invalid")
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError as exc:
-        raise OperatorError("treasury snapshot capture time is invalid") from exc
-    if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
-        raise OperatorError("treasury snapshot capture time is not UTC")
-    return value
+        return canonical_snapshot_node_origin(value)
+    except TreasurySnapshotError as exc:
+        raise OperatorError(str(exc)) from exc
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
@@ -227,105 +187,17 @@ def _snapshot_from_artifact(
     expected_block_hash: bytes,
     expected_block_height: int,
     expected_balance_motes: int,
-) -> VerifiedAccountBalance:
-    snapshot = _object(value, "treasury snapshot artifact")
-    if (
-        set(snapshot)
-        != {
-            "schema_id",
-            "network",
-            "source_account_hash",
-            "expected_balance_motes",
-            "observations",
-        }
-        or snapshot.get("schema_id") != "concordia.native-treasury-snapshot.v1"
-    ):
-        raise OperatorError("treasury snapshot artifact fields are not exact")
-    if (
-        snapshot.get("network") != "casper-test"
-        or snapshot.get("source_account_hash") != expected_account_hash.hex()
-        or snapshot.get("expected_balance_motes") != str(expected_balance_motes)
-    ):
-        raise OperatorError("treasury snapshot identity differs from the typed action")
-    observations = snapshot.get("observations")
-    if type(observations) is not list or len(observations) != 2:
-        raise OperatorError("treasury snapshot requires exactly two node observations")
-    proofs: list[VerifiedAccountBalance] = []
-    origins: set[tuple[str, int]] = set()
+) -> VerifiedTreasurySnapshot:
     try:
-        expected_root: bytes | None = None
-        for raw_observation in observations:
-            observation = _object(raw_observation, "treasury snapshot observation")
-            if set(observation) != {
-                "node_url",
-                "captured_at",
-                "status_request",
-                "status_response",
-                "block_request",
-                "block_response",
-                "balance_request",
-                "balance_response",
-            }:
-                raise OperatorError(
-                    "treasury snapshot observation fields are not exact"
-                )
-            origin = _snapshot_node_origin(observation.get("node_url"))
-            if origin in origins:
-                raise OperatorError("treasury snapshot nodes are not distinct")
-            origins.add(origin)
-            _snapshot_capture_time(observation.get("captured_at"))
-            observed_hash, observed_height, observed_root = _block_facts(
-                observation["block_response"]
-            )
-            if (
-                observed_hash != expected_block_hash.hex()
-                or observed_height != expected_block_height
-            ):
-                raise OperatorError(
-                    "treasury snapshot block differs from the typed action"
-                )
-            root = bytes.fromhex(observed_root)
-            if expected_root is None:
-                expected_root = root
-            elif root != expected_root:
-                raise OperatorError("treasury snapshot nodes disagree on state root")
-            proofs.append(
-                verify_account_balance_at_block(
-                    chain_status_request=observation["status_request"],
-                    chain_status_payload=observation["status_response"],
-                    canonical_block_request=observation["block_request"],
-                    canonical_block_payload=observation["block_response"],
-                    balance_request=observation["balance_request"],
-                    balance_response=observation["balance_response"],
-                    expected_account_hash=expected_account_hash,
-                    expected_block_hash=expected_block_hash,
-                    expected_block_height=expected_block_height,
-                    expected_state_root_hash=root,
-                    expected_balance_motes=expected_balance_motes,
-                )
-            )
-        first, second = proofs
-        first_facts = (
-            first.network,
-            first.account_hash,
-            first.block_hash,
-            first.block_height,
-            first.state_root_hash,
-            first.balance_motes,
+        return verify_treasury_snapshot_artifact(
+            value,
+            expected_account_hash=expected_account_hash,
+            expected_block_hash=expected_block_hash,
+            expected_block_height=expected_block_height,
+            expected_balance_motes=expected_balance_motes,
         )
-        second_facts = (
-            second.network,
-            second.account_hash,
-            second.block_hash,
-            second.block_height,
-            second.state_root_hash,
-            second.balance_motes,
-        )
-        if first_facts != second_facts:
-            raise OperatorError("treasury snapshot node observations do not agree")
-        return first
-    except ValueError as exc:
-        raise OperatorError("treasury snapshot artifact is not parser-valid") from exc
+    except TreasurySnapshotError as exc:
+        raise OperatorError(str(exc)) from exc
 
 
 def verify_native_authorization_artifacts(
@@ -486,57 +358,14 @@ def load_signer_from_file(
 def atomic_write_once(path: Path, data: bytes) -> None:
     """Create an artifact durably; same bytes are idempotent, others conflict."""
 
-    candidate = Path(path)
-    if type(data) is not bytes or not data:
-        raise OperatorError("artifact bytes must be non-empty")
-    if (
-        not candidate.is_absolute()
-        or not candidate.parent.is_dir()
-        or candidate.parent.is_symlink()
-    ):
-        raise OperatorError("artifact path must be absolute in an existing directory")
-    if candidate.exists():
-        if candidate.is_symlink() or not candidate.is_file():
-            raise OperatorError("artifact target is not a regular file")
-        try:
-            existing = candidate.read_bytes()
-        except OSError as exc:
-            raise OperatorError("existing artifact could not be read") from exc
-        if existing != data:
-            raise OperatorError("artifact already exists with different bytes")
-        return
-    temporary = candidate.parent / (
-        f".{candidate.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
-    )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
-        descriptor = os.open(temporary, flags, 0o644)
-        try:
-            with os.fdopen(descriptor, "wb", closefd=False) as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-        finally:
-            os.close(descriptor)
-        try:
-            os.link(temporary, candidate)
-        except FileExistsError:
-            if candidate.is_symlink() or not candidate.is_file():
-                raise OperatorError("artifact target is not a regular file")
-            if candidate.read_bytes() != data:
-                raise OperatorError("artifact already exists with different bytes")
-        directory = os.open(candidate.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    except OSError as exc:
-        raise OperatorError("artifact could not be written durably") from exc
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        write_private_file_once(Path(path), data, allow_identical=True)
+    except AtomicPrivateFileError as exc:
+        if "different bytes or unsafe metadata" in str(exc):
+            raise OperatorError(
+                "artifact already exists with different bytes or unsafe metadata"
+            ) from None
+        raise OperatorError("artifact could not be written safely") from None
 
 
 def build_posthoc_release_manifest(
@@ -1367,6 +1196,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--release-manifest-out", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.submit and args.finalize_release_manifest is not None:
+            raise OperatorError(
+                "submit mode accepts only --v3-proof, --treasury-snapshot, "
+                "exactly two --rpc values, optional --rpc-authorization-file, "
+                "--journal, --signer-key-file, --key-algorithm, and --artifact-out"
+            )
         if args.capture_snapshot:
             if (
                 args.submit
@@ -1463,6 +1298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.submit and (
             args.source_account is not None
             or args.snapshot_out is not None
+            or args.finalize_release_manifest is not None
             or args.artifact_commit is not None
             or args.release_manifest_out is not None
         ):

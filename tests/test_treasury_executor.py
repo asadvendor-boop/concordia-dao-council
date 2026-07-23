@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import multiprocessing
 import sqlite3
 import threading
@@ -16,6 +17,7 @@ from pycspr.factory.accounts import parse_private_key_bytes
 from pycspr.types.crypto import KeyAlgorithm
 
 from shared.casper_state_proof import verify_account_balance_at_block
+from shared.treasury_snapshot import verify_treasury_snapshot_artifact
 from shared.native_transfer_deploy import (
     DEFAULT_NATIVE_TRANSFER_PAYMENT_MOTES,
     build_signed_native_transfer_deploy,
@@ -83,7 +85,7 @@ def _verified(
     snapshot_block_height = int(str(body["snapshot_block_height"]))
     snapshot_state_root = "98" * 32
     snapshot_balance = int(str(body["treasury_snapshot_balance_motes"]))
-    snapshot = verify_account_balance_at_block(
+    primary_snapshot = verify_account_balance_at_block(
         chain_status_request={
             "jsonrpc": "2.0",
             "id": 1,
@@ -144,6 +146,41 @@ def _verified(
         expected_block_hash=bytes.fromhex(snapshot_block_hash),
         expected_block_height=snapshot_block_height,
         expected_state_root_hash=bytes.fromhex(snapshot_state_root),
+        expected_balance_motes=snapshot_balance,
+    )
+    observations = []
+    for index, node in enumerate(("rpc-a.example", "rpc-b.example"), start=1):
+        observation = {
+            "node_url": f"https://{node}/rpc",
+            "captured_at": f"2026-07-23T00:00:0{index}Z",
+            "status_request": json.loads(primary_snapshot.status_request_json),
+            "status_response": json.loads(primary_snapshot.status_json),
+            "block_request": json.loads(primary_snapshot.block_request_json),
+            "block_response": json.loads(primary_snapshot.block_json),
+            "balance_request": json.loads(primary_snapshot.balance_request_json),
+            "balance_response": json.loads(primary_snapshot.balance_response_json),
+        }
+        for field in (
+            "status_request",
+            "status_response",
+            "block_request",
+            "block_response",
+            "balance_request",
+            "balance_response",
+        ):
+            observation[field]["id"] = index
+        observations.append(observation)
+    snapshot = verify_treasury_snapshot_artifact(
+        {
+            "schema_id": "concordia.native-treasury-snapshot.v1",
+            "network": "casper-test",
+            "source_account_hash": SOURCE_ACCOUNT.hex(),
+            "expected_balance_motes": str(snapshot_balance),
+            "observations": observations,
+        },
+        expected_account_hash=SOURCE_ACCOUNT,
+        expected_block_hash=bytes.fromhex(snapshot_block_hash),
+        expected_block_height=snapshot_block_height,
         expected_balance_motes=snapshot_balance,
     )
     return verify_native_authorization(
@@ -371,6 +408,35 @@ def test_tx01_restart_reparses_persisted_raw_snapshot_transcript(
         )
 
     with pytest.raises(AuthorizationMismatch, match="authorization transcript"):
+        TreasuryExecutor(database_path).get(_key(authorization))
+
+
+@pytest.mark.parametrize("mutation", ("drop", "swap", "mutate_second"))
+def test_tx01_restart_reparses_exact_two_observer_snapshot_artifact(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    database_path = tmp_path / "executor.db"
+    _executor, authorization = _authorized_executor(database_path)
+    with sqlite3.connect(database_path) as db:
+        raw = db.execute(
+            "SELECT treasury_snapshot_artifact_json FROM treasury_execution_journal"
+        ).fetchone()[0]
+        artifact = json.loads(raw)
+        if mutation == "drop":
+            artifact["observations"] = artifact["observations"][:1]
+        elif mutation == "swap":
+            artifact["observations"] = list(reversed(artifact["observations"]))
+        else:
+            value = artifact["observations"][1]["balance_response"]["result"]["value"]
+            value["total_balance"] = "625000000001"
+            value["available_balance"] = "625000000001"
+        db.execute(
+            "UPDATE treasury_execution_journal SET treasury_snapshot_artifact_json=?",
+            (json.dumps(artifact, sort_keys=True, separators=(",", ":")),),
+        )
+
+    with pytest.raises(AuthorizationMismatch, match="snapshot|authorization"):
         TreasuryExecutor(database_path).get(_key(authorization))
 
 

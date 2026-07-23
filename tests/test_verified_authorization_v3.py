@@ -17,6 +17,7 @@ from shared.v3_authorization import (
     verify_native_authorization,
 )
 from shared.casper_state_proof import verify_account_balance_at_block
+from shared.treasury_snapshot import verify_treasury_snapshot_artifact
 from scripts.read_v3_state import verify_and_seal_readback_artifact
 from tests.v3_treasury_fixtures import treasury_v3_proof
 
@@ -70,7 +71,7 @@ def _snapshot(body: dict[str, object]):
     state_root = "98" * 32
     account_hash = bytes.fromhex(str(body["source_account"]))
     balance = int(str(body["treasury_snapshot_balance_motes"]))
-    return verify_account_balance_at_block(
+    primary = verify_account_balance_at_block(
         chain_status_request={
             "jsonrpc": "2.0",
             "id": 1,
@@ -131,6 +132,41 @@ def _snapshot(body: dict[str, object]):
         expected_block_hash=bytes.fromhex(block_hash),
         expected_block_height=block_height,
         expected_state_root_hash=bytes.fromhex(state_root),
+        expected_balance_motes=balance,
+    )
+    observations = []
+    for index, node in enumerate(("rpc-a.example", "rpc-b.example"), start=1):
+        observation = {
+            "node_url": f"https://{node}/rpc",
+            "captured_at": f"2026-07-23T00:00:0{index}Z",
+            "status_request": json.loads(primary.status_request_json),
+            "status_response": json.loads(primary.status_json),
+            "block_request": json.loads(primary.block_request_json),
+            "block_response": json.loads(primary.block_json),
+            "balance_request": json.loads(primary.balance_request_json),
+            "balance_response": json.loads(primary.balance_response_json),
+        }
+        for field in (
+            "status_request",
+            "status_response",
+            "block_request",
+            "block_response",
+            "balance_request",
+            "balance_response",
+        ):
+            observation[field]["id"] = index
+        observations.append(observation)
+    return verify_treasury_snapshot_artifact(
+        {
+            "schema_id": "concordia.native-treasury-snapshot.v1",
+            "network": "casper-test",
+            "source_account_hash": account_hash.hex(),
+            "expected_balance_motes": str(balance),
+            "observations": observations,
+        },
+        expected_account_hash=account_hash,
+        expected_block_hash=bytes.fromhex(block_hash),
+        expected_block_height=block_height,
         expected_balance_motes=balance,
     )
 

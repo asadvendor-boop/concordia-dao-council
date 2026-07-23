@@ -19,7 +19,6 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from pycspr import crypto, serializer
-from pycspr.factory.accounts import parse_private_key
 from pycspr.factory.deploys import (
     create_deploy,
     create_deploy_parameters,
@@ -27,7 +26,6 @@ from pycspr.factory.deploys import (
 )
 from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
 from pycspr.types.cl import CLV_Bool, CLV_ByteArray, CLV_String, CLV_U512, CLV_U8
-from pycspr.types.crypto import KeyAlgorithm
 from pycspr.types.node.rpc import Deploy, DeployOfModuleBytes
 
 from scripts.derive_deployment_domain_v3 import deployment_domain_record
@@ -39,6 +37,7 @@ from shared.casper_rpc_transport import (
     parse_rpc_authorization_file_args,
     validate_public_rpc_endpoints as _validate_shared_rpc_endpoints,
 )
+from shared.casper_signer_file import load_secure_casper_signer
 
 
 PACKAGE_KEY_NAME = "concordia_governance_receipt_v3"
@@ -66,6 +65,18 @@ JOURNAL_STATES = {
     "broadcast_ambiguous",
     "terminal_rejected",
     "finalized",
+}
+_V2_EXECUTION_RESULT_FIELDS = {
+    "initiator",
+    "error_message",
+    "current_price",
+    "limit",
+    "consumed",
+    "cost",
+    "refund",
+    "transfers",
+    "size_estimate",
+    "effects",
 }
 
 
@@ -511,6 +522,22 @@ def verify_git_release_identity(
     if git("status", "--porcelain"):
         raise InstallValidationError("release Git tree must be clean")
     git("cat-file", "-e", source + "^{commit}")
+    try:
+        ancestry = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", source, deployment],
+            cwd=repository_root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError as exc:
+        raise InstallValidationError("release Git ancestry cannot be verified") from exc
+    if ancestry.returncode == 1:
+        raise InstallValidationError(
+            "source_commit must be an ancestor of deployment_commit"
+        )
+    if ancestry.returncode != 0:
+        raise InstallValidationError("release Git ancestry cannot be verified")
     for relative in release_paths:
         current = (repository_root / relative).read_bytes()
         try:
@@ -637,30 +664,18 @@ def verify_two_node_deploy_finality(
             or deploy_response["id"] != deploy_request["id"]
         ):
             raise InstallValidationError("deploy finality request/response is invalid")
-        try:
-            result = deploy_response["result"]
-            returned_deploy = result["deploy"]
-            execution_info = result["execution_info"]
-            returned_hash = _strip_hash(returned_deploy["hash"], "returned deploy hash")
-            execution_block = _strip_hash(
-                execution_info["block_hash"], "execution block hash"
-            )
-            execution_height = execution_info["block_height"]
-            versioned = execution_info["execution_result"]["Version2"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise InstallValidationError("deploy finality response is invalid") from exc
-        if returned_hash != expected_hash:
-            raise InstallValidationError("node returned another deploy")
-        error_message = versioned.get("error_message")
-        if error_message is None:
-            outcome = (True, None)
-        elif isinstance(error_message, str):
-            match = re.search(
-                r"(?:User error|ApiError::User)[:( ]+(\d+)", error_message
-            )
-            outcome = (False, int(match.group(1)) if match else None)
-        else:
-            raise InstallValidationError("deploy execution outcome is invalid")
+        parsed_execution = _parse_exact_v2_execution_response(
+            deploy_response,
+            expected_hash=expected_hash,
+            allow_pending=False,
+        )
+        assert parsed_execution is not None
+        execution_block = parsed_execution["block_hash"]
+        execution_height = parsed_execution["block_height"]
+        outcome = (
+            bool(parsed_execution["success"]),
+            parsed_execution["user_error"],
+        )
         if expected_user_error is None and outcome != (True, None):
             raise InstallValidationError("deploy did not finalize successfully")
         if expected_user_error is not None and outcome != (False, expected_user_error):
@@ -702,6 +717,85 @@ def verify_two_node_deploy_finality(
         "node_observations": [dict(item) for item in observations],
         "endpoint_identities": endpoint_identities,
     }
+
+
+def _parse_exact_v2_execution_response(
+    response: Mapping[str, Any],
+    *,
+    expected_hash: str,
+    allow_pending: bool,
+) -> dict[str, Any] | None:
+    """Parse one unambiguous Casper v2 execution marker."""
+
+    try:
+        if set(response) != {"jsonrpc", "id", "result"} or response["jsonrpc"] != "2.0":
+            raise ValueError("response fields")
+        result = response["result"]
+        if not isinstance(result, Mapping) or set(result) != {
+            "api_version",
+            "deploy",
+            "execution_info",
+        }:
+            raise ValueError("result fields")
+        if not isinstance(result["api_version"], str):
+            raise ValueError("api version")
+        deploy = result["deploy"]
+        if not isinstance(deploy, Mapping):
+            raise ValueError("deploy")
+        returned_hash = _strip_hash(deploy["hash"], "returned deploy hash")
+        if returned_hash != expected_hash:
+            raise InstallValidationError("node returned another deploy")
+        execution = result["execution_info"]
+        if execution is None:
+            if allow_pending:
+                return None
+            raise ValueError("pending execution")
+        if not isinstance(execution, Mapping) or set(execution) != {
+            "block_hash",
+            "block_height",
+            "execution_result",
+        }:
+            raise ValueError("execution fields")
+        block_hash = _strip_hash(execution["block_hash"], "execution block hash")
+        block_height = execution["block_height"]
+        if type(block_height) is not int or block_height < 0:
+            raise ValueError("execution height")
+        execution_result = execution["execution_result"]
+        if not isinstance(execution_result, Mapping) or set(execution_result) != {
+            "Version2"
+        }:
+            raise ValueError("execution version")
+        versioned = execution_result["Version2"]
+        if (
+            not isinstance(versioned, Mapping)
+            or set(versioned) != _V2_EXECUTION_RESULT_FIELDS
+        ):
+            raise ValueError("Version2 fields")
+        error_message = versioned["error_message"]
+        if error_message is None:
+            success = True
+            user_error = None
+        elif type(error_message) is str:
+            match = re.search(
+                r"(?:User error|ApiError::User)[:( ]+(\d+)", error_message
+            )
+            success = False
+            user_error = int(match.group(1)) if match else None
+        else:
+            raise ValueError("error marker")
+        return {
+            "block_hash": block_hash,
+            "block_height": block_height,
+            "success": success,
+            "user_error": user_error,
+            "error_message": error_message,
+        }
+    except InstallValidationError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InstallValidationError(
+            "deploy finality execution response is invalid"
+        ) from exc
 
 
 def _safe_rpc_payload(
@@ -771,16 +865,15 @@ def reconcile_two_node_deploy(
             continue
         except (RpcEndpointPolicyError, RpcTransportError) as exc:
             raise InstallValidationError("public RPC request failed") from exc
-        result = response.get("result")
-        if not isinstance(result, Mapping):
-            raise InstallValidationError("public RPC finality response is invalid")
-        execution = result.get("execution_info")
+        execution = _parse_exact_v2_execution_response(
+            response,
+            expected_hash=expected_hash,
+            allow_pending=True,
+        )
         if execution is None:
             pending = True
             continue
-        if not isinstance(execution, Mapping):
-            raise InstallValidationError("public RPC finality response is invalid")
-        block_hash = _strip_hash(execution.get("block_hash"), "execution block hash")
+        block_hash = execution["block_hash"]
         block_request = {
             "jsonrpc": "2.0",
             "id": f"concordia-wp10-block-{index}",
@@ -992,10 +1085,9 @@ def build_signed_install_payload(
             f"Wasm filename must be generated-schema authority {expected_wasm_name!r}"
         )
     try:
-        algorithm = KeyAlgorithm[key_algorithm.strip().upper()]
-        private_key = parse_private_key(secret_key_path, algorithm)
-    except (KeyError, OSError, ValueError) as exc:
-        raise InstallValidationError("installer key could not be loaded") from exc
+        private_key = load_secure_casper_signer(secret_key_path, key_algorithm)
+    except Exception:
+        raise InstallValidationError("installer key could not be loaded") from None
     public_key = private_key.to_public_key()
     installer_hash = public_key.to_account_hash().hex()
     session_args = build_locked_install_args(
@@ -1528,17 +1620,20 @@ def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 def build_install_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--secret-key", type=Path, required=True)
-    parser.add_argument("--key-algorithm", default="ED25519")
-    parser.add_argument("--roles", type=Path, required=True)
-    parser.add_argument("--threshold", type=int, default=2)
-    parser.add_argument("--installation-nonce", required=True)
-    parser.add_argument("--wasm", type=Path, required=True)
-    parser.add_argument("--schema", type=Path, required=True)
-    parser.add_argument("--payment-motes", type=int, default=30_000_000_000)
-    parser.add_argument("--ttl", default="30m")
-    parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--deployment-commit", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--prepare", action="store_true")
+    mode.add_argument("--resume", action="store_true")
+    parser.add_argument("--secret-key", type=Path)
+    parser.add_argument("--key-algorithm")
+    parser.add_argument("--roles", type=Path)
+    parser.add_argument("--threshold", type=int)
+    parser.add_argument("--installation-nonce")
+    parser.add_argument("--wasm", type=Path)
+    parser.add_argument("--schema", type=Path)
+    parser.add_argument("--payment-motes", type=int)
+    parser.add_argument("--ttl")
+    parser.add_argument("--source-commit")
+    parser.add_argument("--deployment-commit")
     parser.add_argument(
         "--rpc-url",
         dest="rpc_urls",
@@ -1554,29 +1649,65 @@ def build_install_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--submit", action="store_true")
     parser.add_argument("--journal", type=Path, required=True)
-    parser.add_argument("--manifest-out", type=Path, required=True)
+    parser.add_argument("--manifest-out", type=Path)
     return parser
+
+
+_PREPARE_REQUIRED_FIELDS = (
+    "secret_key",
+    "roles",
+    "installation_nonce",
+    "wasm",
+    "schema",
+    "source_commit",
+    "deployment_commit",
+)
+_PREPARE_INTENT_FIELDS = _PREPARE_REQUIRED_FIELDS + (
+    "key_algorithm",
+    "threshold",
+    "payment_motes",
+    "ttl",
+)
+
+
+def _validate_install_mode(args: argparse.Namespace) -> None:
+    """Reject implicit resume and mixed fresh/stale install intent."""
+
+    if args.prepare:
+        if (
+            args.submit
+            or args.rpc_urls
+            or args.rpc_authorization_file
+            or args.manifest_out is not None
+        ):
+            raise InstallValidationError(
+                "prepare mode cannot submit, access RPC, or write a final manifest"
+            )
+        if any(getattr(args, field) is None for field in _PREPARE_REQUIRED_FIELDS):
+            raise InstallValidationError(
+                "prepare mode requires the complete fresh install intent"
+            )
+        if args.journal.exists():
+            raise InstallValidationError(
+                "prepare mode refuses an existing journal; use explicit --resume"
+            )
+        return
+    if any(getattr(args, field) is not None for field in _PREPARE_INTENT_FIELDS):
+        raise InstallValidationError(
+            "resume mode rejects every fresh role, key, nonce, build, and commit argument"
+        )
+    if not args.submit or args.manifest_out is None:
+        raise InstallValidationError("resume mode requires --submit and --manifest-out")
+    if not args.journal.exists():
+        raise InstallValidationError("resume mode requires an existing journal")
 
 
 def main() -> int:
     parser = build_install_parser()
     args = parser.parse_args()
     try:
-        if args.journal.exists():
-            journal = DurableDeployJournal.open(args.journal)
-            intent = journal.intent
-            if intent.get("kind") != "v3_install" or not isinstance(
-                intent.get("manifest"), Mapping
-            ):
-                raise InstallValidationError("install journal intent is invalid")
-            manifest = dict(intent["manifest"])
-            payload = {
-                "jsonrpc": "2.0",
-                "id": "concordia-v3-install",
-                "method": "account_put_deploy",
-                "params": {"deploy": journal.signed_deploy},
-            }
-        else:
+        _validate_install_mode(args)
+        if args.prepare:
             identity = verify_git_release_identity(
                 ROOT,
                 source_commit=args.source_commit,
@@ -1586,14 +1717,18 @@ def main() -> int:
             roles = json.loads(args.roles.read_text(encoding="utf-8"))
             payload, manifest = build_signed_install_payload(
                 secret_key_path=args.secret_key,
-                key_algorithm=args.key_algorithm,
+                key_algorithm=args.key_algorithm or "ED25519",
                 roles=roles,
-                threshold=args.threshold,
+                threshold=args.threshold if args.threshold is not None else 2,
                 installation_nonce=args.installation_nonce,
                 wasm_path=args.wasm,
                 schema_path=args.schema,
-                payment_amount_motes=args.payment_motes,
-                ttl=args.ttl,
+                payment_amount_motes=(
+                    args.payment_motes
+                    if args.payment_motes is not None
+                    else 30_000_000_000
+                ),
+                ttl=args.ttl or "30m",
                 source_commit=identity["source_commit"],
                 deployment_commit=identity["deployment_commit"],
             )
@@ -1603,98 +1738,115 @@ def main() -> int:
                 signed_deploy=payload["params"]["deploy"],
                 deploy_hash=str(manifest["install_deploy_hash"]),
             )
-        if args.submit:
-            verify_git_release_identity(
-                ROOT,
-                source_commit=str(manifest.get("source_commit", "")),
-                deployment_commit=str(manifest.get("deployment_commit", "")),
-                release_paths=RELEASE_IDENTITY_PATHS,
-            )
-            authorization_files = parse_rpc_authorization_file_args(
-                args.rpc_authorization_file,
-                args.rpc_urls,
-            )
-            rpc_transport = (
-                build_public_rpc_transport(
-                    args.rpc_urls,
-                    authorization_files=authorization_files,
-                )
-                if authorization_files
-                else build_public_rpc_transport(args.rpc_urls)
-            )
-            rpc_urls = rpc_transport.endpoints
-
-            def broadcast(
-                signed_deploy: Mapping[str, Any], deploy_hash: str
-            ) -> dict[str, Any]:
-                exact_payload = {
-                    "jsonrpc": "2.0",
-                    "id": "concordia-v3-install",
-                    "method": "account_put_deploy",
-                    "params": {"deploy": dict(signed_deploy)},
-                }
-                parsed = _safe_rpc_payload(rpc_transport, rpc_urls[0], exact_payload)
-                result = parsed.get("result")
-                if (
-                    not isinstance(result, Mapping)
-                    or str(result.get("deploy_hash", "")).lower() != deploy_hash
-                ):
-                    return {
-                        "status": "ambiguous",
-                        "deploy_hash": deploy_hash,
+            print(
+                json.dumps(
+                    {
+                        "status": "prepared",
+                        "manifest": None,
+                        "journal": str(args.journal),
                     }
-                return {
-                    "status": "submitted",
-                    "deploy_hash": deploy_hash,
-                    "raw_response": parsed,
-                }
-
-            journal = execute_journaled_submission(
-                journal,
-                broadcast=broadcast,
-                reconcile=lambda deploy_hash: reconcile_two_node_deploy(
-                    rpc_transport,
-                    deploy_hash=deploy_hash,
-                    deploy_expires_at=deploy_expiry_epoch(journal.signed_deploy),
-                ),
-            )
-            if journal.state != "finalized":
-                print(
-                    json.dumps(
-                        {
-                            "status": journal.state,
-                            "manifest": None,
-                            "journal": str(args.journal),
-                        }
-                    )
                 )
-                return 3
-            journal_evidence = journal.evidence
-            reconciliation = journal_evidence["reconciliation"]
-            broadcast_evidence = journal_evidence.get("broadcast")
-            raw_broadcast = (
-                broadcast_evidence.get("raw_response")
-                if isinstance(broadcast_evidence, Mapping)
-                else None
             )
-            if not isinstance(raw_broadcast, Mapping):
-                raw_broadcast = {
-                    "status": "response_lost_reconciled_by_hash",
-                    "deploy_hash": journal.deploy_hash,
+            return 0
+
+        journal = DurableDeployJournal.open(args.journal)
+        intent = journal.intent
+        if intent.get("kind") != "v3_install" or not isinstance(
+            intent.get("manifest"), Mapping
+        ):
+            raise InstallValidationError("install journal intent is invalid")
+        manifest = dict(intent["manifest"])
+        verify_git_release_identity(
+            ROOT,
+            source_commit=str(manifest.get("source_commit", "")),
+            deployment_commit=str(manifest.get("deployment_commit", "")),
+            release_paths=RELEASE_IDENTITY_PATHS,
+        )
+        authorization_files = parse_rpc_authorization_file_args(
+            args.rpc_authorization_file,
+            args.rpc_urls,
+        )
+        rpc_transport = (
+            build_public_rpc_transport(
+                args.rpc_urls,
+                authorization_files=authorization_files,
+            )
+            if authorization_files
+            else build_public_rpc_transport(args.rpc_urls)
+        )
+        rpc_urls = rpc_transport.endpoints
+
+        def broadcast(
+            signed_deploy: Mapping[str, Any], deploy_hash: str
+        ) -> dict[str, Any]:
+            exact_payload = {
+                "jsonrpc": "2.0",
+                "id": "concordia-v3-install",
+                "method": "account_put_deploy",
+                "params": {"deploy": dict(signed_deploy)},
+            }
+            parsed = _safe_rpc_payload(rpc_transport, rpc_urls[0], exact_payload)
+            result = parsed.get("result")
+            if (
+                not isinstance(result, Mapping)
+                or str(result.get("deploy_hash", "")).lower() != deploy_hash
+            ):
+                return {
+                    "status": "ambiguous",
+                    "deploy_hash": deploy_hash,
                 }
-            manifest = finalize_deployment_manifest(
-                rpc_transport=rpc_transport,
-                rpc_url=rpc_urls[0],
-                manifest=manifest,
-                broadcast_response=raw_broadcast,
-                two_node_finality=reconciliation,
+            return {
+                "status": "submitted",
+                "deploy_hash": deploy_hash,
+                "raw_response": parsed,
+            }
+
+        journal = execute_journaled_submission(
+            journal,
+            broadcast=broadcast,
+            reconcile=lambda deploy_hash: reconcile_two_node_deploy(
+                rpc_transport,
+                deploy_hash=deploy_hash,
+                deploy_expires_at=deploy_expiry_epoch(journal.signed_deploy),
+            ),
+        )
+        if journal.state != "finalized":
+            print(
+                json.dumps(
+                    {
+                        "status": journal.state,
+                        "manifest": None,
+                        "journal": str(args.journal),
+                    }
+                )
             )
-            _atomic_write_json(args.manifest_out, manifest)
+            return 3
+        journal_evidence = journal.evidence
+        reconciliation = journal_evidence["reconciliation"]
+        broadcast_evidence = journal_evidence.get("broadcast")
+        raw_broadcast = (
+            broadcast_evidence.get("raw_response")
+            if isinstance(broadcast_evidence, Mapping)
+            else None
+        )
+        if not isinstance(raw_broadcast, Mapping):
+            raw_broadcast = {
+                "status": "response_lost_reconciled_by_hash",
+                "deploy_hash": journal.deploy_hash,
+            }
+        manifest = finalize_deployment_manifest(
+            rpc_transport=rpc_transport,
+            rpc_url=rpc_urls[0],
+            manifest=manifest,
+            broadcast_response=raw_broadcast,
+            two_node_finality=reconciliation,
+        )
+        _atomic_write_json(args.manifest_out, manifest)
         print(
             json.dumps(
                 {
-                    "status": "finalized" if args.submit else "prepared",
-                    "manifest": str(args.manifest_out) if args.submit else None,
+                    "status": "finalized",
+                    "manifest": str(args.manifest_out),
                     "journal": str(args.journal),
                 }
             )

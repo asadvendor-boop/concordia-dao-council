@@ -54,6 +54,12 @@ NODE_A = "https://rpc-a.example/rpc"
 NODE_B = "https://rpc-b.example/rpc"
 GAS_MOTES = 123_456_789
 PRE_RECIPIENT_BALANCE = 7_000_000_000
+SNAPSHOT_PARITY_VECTORS = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "golden/treasury_snapshot/validator_parity.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _snapshot_artifact(proof: dict[str, object]) -> dict[str, object]:
@@ -517,6 +523,14 @@ def test_prepare_only_recomputes_exact_v3_and_raw_snapshot_without_rpc() -> None
         authorization.treasury_snapshot_balance_motes == EXACT_TREASURY_BASELINE_MOTES
     )
     assert authorization.approved_allocation_bps == EXACT_APPROVED_BPS
+    persisted_snapshot = json.loads(authorization.treasury_snapshot_artifact_json)
+    assert len(persisted_snapshot["observations"]) == 2
+    assert (
+        authorization.treasury_snapshot_artifact_sha256
+        == hashlib.sha256(
+            authorization.treasury_snapshot_artifact_json.encode("ascii")
+        ).hexdigest()
+    )
 
 
 def test_snapshot_capture_binds_two_nodes_to_same_exact_625_cspr_state() -> None:
@@ -554,6 +568,37 @@ def test_offline_snapshot_rejects_raw_ip_observer_identity() -> None:
 
     with pytest.raises(OperatorError, match="DNS hostname"):
         verify_native_authorization_artifacts(proof, snapshot)
+
+
+def test_offline_snapshot_rejects_one_observer() -> None:
+    proof = _temporally_valid_v3_proof()
+    snapshot = _snapshot_artifact(proof)
+    snapshot["observations"] = snapshot["observations"][:1]
+
+    with pytest.raises(OperatorError, match="exactly two"):
+        verify_native_authorization_artifacts(proof, snapshot)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    SNAPSHOT_PARITY_VECTORS["cases"],
+    ids=lambda value: value["id"],
+)
+def test_python_snapshot_validator_matches_frozen_cross_runtime_vectors(
+    vector: dict[str, object],
+) -> None:
+    proof = _temporally_valid_v3_proof()
+    snapshot = _snapshot_artifact(proof)
+    field = vector["field"]
+    if field in {"node_url", "captured_at"}:
+        snapshot["observations"][0][field] = vector["value"]
+    elif field == "expected_balance_motes":
+        snapshot[field] = vector["value"]
+    if vector["accept"] is True:
+        verify_native_authorization_artifacts(proof, snapshot)
+    else:
+        with pytest.raises(OperatorError, match="snapshot|hostname|capture"):
+            verify_native_authorization_artifacts(proof, snapshot)
 
 
 def test_unactivated_recipient_fails_before_signing_or_broadcast(
@@ -778,6 +823,17 @@ def test_lost_broadcast_response_restarts_by_hash_without_second_send(
     assert artifact["authorization"]["typed_body"]["amount_motes"] == str(
         EXACT_TRANSFER_MOTES
     )
+    assert len(artifact["authorization"]["snapshot"]["observations"]) == 2
+    assert (
+        artifact["authorization"]["snapshot_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                artifact["authorization"]["snapshot"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ).hexdigest()
+    )
 
 
 def test_restart_cannot_relabel_persisted_execution_with_new_source_commit(
@@ -994,6 +1050,7 @@ def test_posthoc_mode_rejects_every_unrelated_argument(
         ("--snapshot-out", "/tmp/snapshot.json"),
         ("--artifact-commit", "ab" * 20),
         ("--release-manifest-out", "/tmp/release.json"),
+        ("--finalize-release-manifest", "/tmp/existing-artifact.json"),
     ),
 )
 def test_submit_mode_rejects_every_non_submit_argument(
@@ -1010,9 +1067,50 @@ def test_atomic_artifact_write_is_idempotent_but_never_overwrites(
 ) -> None:
     destination = tmp_path / "artifact.json"
     atomic_write_once(destination, b'{"a":1}')
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
     atomic_write_once(destination, b'{"a":1}')
     with pytest.raises(OperatorError, match="different bytes"):
         atomic_write_once(destination, b'{"a":2}')
+
+
+def test_atomic_artifact_write_rejects_unsafe_existing_metadata(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "artifact.json"
+    destination.write_bytes(b'{"a":1}')
+    destination.chmod(0o644)
+
+    with pytest.raises(OperatorError, match="different bytes|unsafe metadata"):
+        atomic_write_once(destination, b'{"a":1}')
+
+    linked = tmp_path / "linked-artifact.json"
+    linked.write_bytes(b'{"a":1}')
+    linked.chmod(0o600)
+    (tmp_path / "second-name.json").hardlink_to(linked)
+    with pytest.raises(OperatorError, match="different bytes|unsafe metadata"):
+        atomic_write_once(linked, b'{"a":1}')
+
+
+def test_atomic_artifact_write_rejects_final_and_ancestor_symlinks(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected.json"
+    protected.write_bytes(b"protected")
+    final_link = tmp_path / "artifact.json"
+    final_link.symlink_to(protected)
+    with pytest.raises(OperatorError, match="could not be written|unsafe"):
+        atomic_write_once(final_link, b'{"a":1}')
+    assert protected.read_bytes() == b"protected"
+
+    real_parent = tmp_path / "real-parent"
+    nested = real_parent / "nested"
+    nested.mkdir(parents=True)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    through_ancestor = linked_parent / "nested" / "artifact.json"
+    with pytest.raises(OperatorError, match="could not be written|unsafe"):
+        atomic_write_once(through_ancestor, b'{"a":1}')
+    assert not (nested / "artifact.json").exists()
 
 
 def test_posthoc_release_manifest_verifies_exact_committed_artifact_bytes(

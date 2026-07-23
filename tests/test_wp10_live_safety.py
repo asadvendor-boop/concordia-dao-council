@@ -130,7 +130,9 @@ def test_journal_is_durable_before_broadcast_and_timeout_resumes_by_hash(
     assert second.deploy_hash == deploy_hash
 
 
-def test_duplicate_submit_of_finalized_journal_never_calls_network(tmp_path: Path) -> None:
+def test_duplicate_submit_of_finalized_journal_never_calls_network(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "deploy.journal.json"
     deploy = _signed_journal_deploy()
     deploy_hash = str(deploy["hash"]).lower()
@@ -191,17 +193,27 @@ def test_journal_rejects_resealed_semantic_deploy_tampering(tmp_path: Path) -> N
         value["signed_deploy"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("ascii")
     value["signed_deploy_json_bytes_hex"] = canonical_deploy.hex()
-    value["signed_deploy_sha256"] = __import__("hashlib").sha256(canonical_deploy).hexdigest()
+    value["signed_deploy_sha256"] = (
+        __import__("hashlib").sha256(canonical_deploy).hexdigest()
+    )
     unsigned = {key: item for key, item in value.items() if key != "journal_sha256"}
-    value["journal_sha256"] = __import__("hashlib").sha256(
-        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    ).hexdigest()
+    value["journal_sha256"] = (
+        __import__("hashlib")
+        .sha256(
+            json.dumps(
+                unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("ascii")
+        )
+        .hexdigest()
+    )
     path.write_text(json.dumps(value), encoding="ascii")
     with pytest.raises(InstallValidationError, match="canonical Casper"):
         DurableDeployJournal.open(path)
 
 
-def _deploy_response(*, block_hash: str = BLOCK_HASH, height: int = 42) -> dict[str, object]:
+def _deploy_response(
+    *, block_hash: str = BLOCK_HASH, height: int = 42
+) -> dict[str, object]:
     return {
         "jsonrpc": "2.0",
         "id": "finality",
@@ -211,7 +223,20 @@ def _deploy_response(*, block_hash: str = BLOCK_HASH, height: int = 42) -> dict[
             "execution_info": {
                 "block_hash": block_hash,
                 "block_height": height,
-                "execution_result": {"Version2": {"error_message": None}},
+                "execution_result": {
+                    "Version2": {
+                        "initiator": "account-hash-" + ("11" * 32),
+                        "error_message": None,
+                        "current_price": "1",
+                        "limit": "1000000000",
+                        "consumed": "10",
+                        "cost": "10",
+                        "refund": "0",
+                        "transfers": [],
+                        "size_estimate": 1,
+                        "effects": [],
+                    }
+                },
             },
         },
     }
@@ -321,6 +346,54 @@ def test_two_node_finality_requires_block_inclusion_and_agreement() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing_error_message",
+        "extra_version2_field",
+        "ambiguous_version",
+        "extra_execution_info_field",
+        "legacy_execution_results_marker",
+        "missing_execution_info",
+        "null_execution_info",
+        "non_null_success_marker",
+    ),
+)
+def test_install_finality_requires_one_exact_non_null_v2_execution(
+    mutation: str,
+) -> None:
+    observation = _node_observation("rpc-a.example")
+    response = observation["deploy_response"]
+    result = response["result"]
+    if mutation == "missing_execution_info":
+        del result["execution_info"]
+    elif mutation == "null_execution_info":
+        result["execution_info"] = None
+    elif mutation == "legacy_execution_results_marker":
+        result["execution_results"] = []
+    else:
+        execution = result["execution_info"]
+        if mutation == "extra_execution_info_field":
+            execution["ambiguous"] = True
+        else:
+            versioned = execution["execution_result"]
+            version2 = versioned["Version2"]
+            if mutation == "missing_error_message":
+                del version2["error_message"]
+            elif mutation == "extra_version2_field":
+                version2["ambiguous"] = True
+            elif mutation == "ambiguous_version":
+                versioned["Version1"] = {"Success": {}}
+            elif mutation == "non_null_success_marker":
+                version2["error_message"] = False
+
+    with pytest.raises(InstallValidationError, match="finality|execution"):
+        verify_two_node_deploy_finality(
+            [observation, _node_observation("rpc-b.example")],
+            deploy_hash=DEPLOY_HASH,
+        )
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
 
@@ -329,7 +402,9 @@ def test_release_identity_rejects_dirty_tree_and_forged_commits(tmp_path: Path) 
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True
+    )
     subprocess.run(["git", "config", "user.name", "WP10 test"], cwd=repo, check=True)
     source = repo / "release.txt"
     source.write_text("release\n", encoding="utf-8")
@@ -363,6 +438,45 @@ def test_release_identity_rejects_dirty_tree_and_forged_commits(tmp_path: Path) 
         )
 
 
+def test_release_identity_requires_source_to_ancestor_deployment(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "WP10 test"], cwd=repo, check=True)
+    source = repo / "release.txt"
+    source.write_text("release\n", encoding="utf-8")
+    subprocess.run(["git", "add", "release.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "source"], cwd=repo, check=True)
+    source_commit = _git(repo, "rev-parse", "HEAD")
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    deployment_commit = subprocess.check_output(
+        ["git", "commit-tree", tree, "-m", "unrelated deployment"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/heads/unrelated", deployment_commit],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "switch", "-q", "unrelated"], cwd=repo, check=True)
+
+    with pytest.raises(InstallValidationError, match="ancestor"):
+        verify_git_release_identity(
+            repo,
+            source_commit=source_commit,
+            deployment_commit=deployment_commit,
+            release_paths=("release.txt",),
+        )
+
+
 @pytest.mark.parametrize("approved", [0, 1, 2999, 3000, 10_000])
 def test_negative_allocation_is_always_valid_and_different(approved: int) -> None:
     negative = choose_negative_allocation_bps(approved)
@@ -371,32 +485,130 @@ def test_negative_allocation_is_always_valid_and_different(approved: int) -> Non
     assert negative == (2999 if approved == 3000 else 3000)
 
 
-def test_live_and_install_cli_are_prepare_only_by_default() -> None:
+def test_live_and_install_cli_use_explicit_safe_modes() -> None:
     install = build_install_parser().parse_args(
         [
-            "--secret-key", "key",
-            "--roles", "roles.json",
-            "--installation-nonce", "11" * 32,
-            "--wasm", "contract.wasm",
-            "--schema", "schema.json",
-            "--source-commit", "22" * 20,
-            "--deployment-commit", "22" * 20,
-            "--journal", "install.journal.json",
-            "--manifest-out", "manifest.json",
+            "--prepare",
+            "--secret-key",
+            "key",
+            "--roles",
+            "roles.json",
+            "--installation-nonce",
+            "11" * 32,
+            "--wasm",
+            "contract.wasm",
+            "--schema",
+            "schema.json",
+            "--source-commit",
+            "22" * 20,
+            "--deployment-commit",
+            "22" * 20,
+            "--journal",
+            "install.journal.json",
         ]
     )
+    assert install.prepare is True
+    assert install.resume is False
     assert install.submit is False
     live = build_live_parser().parse_args(
         [
             "input.json",
-            "--roles", "roles.json",
-            "--package-hash", "33" * 32,
-            "--contract-hash", "44" * 32,
-            "--journal", "run.journal.json",
-            "--out", "run.json",
+            "--roles",
+            "roles.json",
+            "--package-hash",
+            "33" * 32,
+            "--contract-hash",
+            "44" * 32,
+            "--journal",
+            "run.journal.json",
+            "--out",
+            "run.json",
         ]
     )
     assert live.submit is False
+
+
+def test_install_cli_requires_exactly_one_prepare_or_resume_mode() -> None:
+    parser = build_install_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--journal", "journal.json"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--prepare", "--resume", "--journal", "journal.json"])
+
+
+@pytest.mark.parametrize(
+    "fresh_argument",
+    (
+        ("--secret-key", "/tmp/key.pem"),
+        ("--key-algorithm", "ED25519"),
+        ("--roles", "/tmp/roles.json"),
+        ("--threshold", "2"),
+        ("--installation-nonce", "11" * 32),
+        ("--wasm", "/tmp/contract.wasm"),
+        ("--schema", "/tmp/schema.json"),
+        ("--payment-motes", "30000000000"),
+        ("--ttl", "30m"),
+        ("--source-commit", "22" * 20),
+        ("--deployment-commit", "22" * 20),
+    ),
+)
+def test_install_resume_rejects_every_fresh_intent_argument_before_open_or_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_argument: tuple[str, str],
+) -> None:
+    stale_journal = tmp_path / "stale.journal.json"
+    stale_journal.write_text("{}", encoding="ascii")
+    monkeypatch.setattr(
+        "scripts.install_governance_receipt_v3.DurableDeployJournal.open",
+        lambda *_: pytest.fail(
+            "invalid resume args must be rejected before journal open"
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.install_governance_receipt_v3.build_public_rpc_transport",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid resume args must be rejected before network"
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "install_governance_receipt_v3.py",
+            "--resume",
+            "--submit",
+            "--journal",
+            str(stale_journal),
+            "--manifest-out",
+            str(tmp_path / "manifest.json"),
+            *fresh_argument,
+        ],
+    )
+    with pytest.raises(SystemExit):
+        install_main()
+
+
+def test_install_modes_reject_submit_during_prepare_and_read_only_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for argv in (
+        ["--prepare", "--submit"],
+        ["--resume"],
+    ):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "install_governance_receipt_v3.py",
+                *argv,
+                "--journal",
+                str(tmp_path / "journal.json"),
+            ],
+        )
+        with pytest.raises(SystemExit):
+            install_main()
 
 
 def test_install_prepare_persists_exact_deploy_without_network(
@@ -435,15 +647,23 @@ def test_install_prepare_persists_exact_deploy_without_network(
         "argv",
         [
             "install_governance_receipt_v3.py",
-            "--secret-key", str(tmp_path / "unused-key"),
-            "--roles", str(roles),
-            "--installation-nonce", "11" * 32,
-            "--wasm", str(tmp_path / "contract.wasm"),
-            "--schema", str(tmp_path / "schema.json"),
-            "--source-commit", "22" * 20,
-            "--deployment-commit", "22" * 20,
-            "--journal", str(journal),
-            "--manifest-out", str(manifest_out),
+            "--prepare",
+            "--secret-key",
+            str(tmp_path / "unused-key"),
+            "--roles",
+            str(roles),
+            "--installation-nonce",
+            "11" * 32,
+            "--wasm",
+            str(tmp_path / "contract.wasm"),
+            "--schema",
+            str(tmp_path / "schema.json"),
+            "--source-commit",
+            "22" * 20,
+            "--deployment-commit",
+            "22" * 20,
+            "--journal",
+            str(journal),
         ],
     )
     assert install_main() == 0
@@ -451,6 +671,38 @@ def test_install_prepare_persists_exact_deploy_without_network(
     assert persisted.state == "prepared"
     assert persisted.signed_deploy == json.loads(json.dumps(deploy))
     assert not manifest_out.exists()
+
+
+def test_live_cli_rejects_removed_prepare_only_flag_before_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.run_v3_live_proof.run",
+        lambda *_: pytest.fail("unknown mixed mode must fail before run"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_v3_live_proof.py",
+            str(tmp_path / "input.json"),
+            "--roles",
+            str(tmp_path / "roles.json"),
+            "--package-hash",
+            "33" * 32,
+            "--contract-hash",
+            "44" * 32,
+            "--journal",
+            str(tmp_path / "run.journal.json"),
+            "--out",
+            str(tmp_path / "run.json"),
+            "--submit",
+            "--prepare-only",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        __import__("scripts.run_v3_live_proof", fromlist=["main"]).main()
 
 
 def test_frozen_seven_step_release_rejects_threshold_three() -> None:
