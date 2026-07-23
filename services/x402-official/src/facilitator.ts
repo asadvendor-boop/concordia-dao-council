@@ -21,11 +21,19 @@ import {
   REFUSAL_CODES,
   ServiceRefusal,
 } from "./errors.js";
-import { readBoundedJson } from "./http.js";
+import { readBoundedJson, readBoundedText } from "./http.js";
+import {
+  sanitizeResponseHeaders,
+  settleCallId,
+  sha256Hex,
+  type SettleCallStart,
+  type SettleJournal,
+} from "./settle-journal.js";
 import type {
   FacilitatorTransport,
   PaymentPayloadWire,
   PaymentRequirementsWire,
+  SettleCallBinding,
   SettleResponseWire,
   SupportedDocumentWire,
   SupportedKindWire,
@@ -86,11 +94,19 @@ export interface FacilitatorTransportTestOptions {
   allowUnfrozenOriginForTest?: boolean;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  /**
+   * The durable upstream-settle journal. REQUIRED for any `/settle` call:
+   * without it, `settle()` refuses before any network I/O (fail closed).
+   * Production wiring (index.ts) always provides it; only tests exercising
+   * the credential-discipline paths of verify/supported may omit it.
+   */
+  settleJournal?: SettleJournal;
 }
 
 export class HttpFacilitatorTransport implements FacilitatorTransport {
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
+  private readonly settleJournal: SettleJournal | undefined;
 
   constructor(
     private readonly baseUrl: string,
@@ -108,6 +124,7 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
     }
     this.timeoutMs = options.timeoutMs ?? CREDENTIALED_FETCH_TIMEOUT_MS;
     this.maxResponseBytes = options.maxResponseBytes ?? MAX_FACILITATOR_RESPONSE_BYTES;
+    this.settleJournal = options.settleJournal;
   }
 
   private async request(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -160,8 +177,123 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
     return this.request("POST", "/verify", body);
   }
 
-  settle(body: unknown): Promise<unknown> {
-    return this.request("POST", "/settle", body);
+  /**
+   * Credentialed `/settle` with the durable journal wrapped around it:
+   *
+   * 1. serialize the request body EXACTLY ONCE; those bytes are both
+   *    journaled and sent — there is no second serialization to drift;
+   * 2. append `request_started` durably (synchronous=FULL). If the append
+   *    fails, the network is NEVER called;
+   * 3. send. A transport failure or non-2xx appends a bounded
+   *    `request_failed` (status + allowlisted headers only — a credentialed
+   *    non-2xx body is never read, because it can reflect the token);
+   * 4. on 2xx, read the raw bytes bounded and append `response_observed`
+   *    BEFORE parsing. If that terminal append fails, this method never
+   *    returns success — the reserved ledger row keeps recovery fail-closed.
+   *
+   * Retry/reconcile/cross-binding paths never reach this method (the
+   * ledger's exclusive-submission CAS is the only caller), so the journal's
+   * one-start-per-authorization indexes are an independent second enforcement
+   * of the at-most-one-settle promise, not the primary one.
+   */
+  async settle(body: unknown, binding: SettleCallBinding): Promise<unknown> {
+    // No journal, no settle: the durable evidence requirement is structural.
+    const settleJournal = this.settleJournal;
+    if (settleJournal === undefined) {
+      throw new ServiceRefusal(500, "settle_journal_not_configured", "internal");
+    }
+    const token = this.tokenProvider();
+    const requestBody = JSON.stringify(body);
+    const start: SettleCallStart = {
+      callId: "",
+      binding,
+      requestMethod: "POST",
+      requestUrl: `${this.baseUrl}/settle`,
+      requestBody,
+      requestBodySha256: sha256Hex(requestBody),
+    };
+    start.callId = settleCallId(binding, start.requestBodySha256);
+
+    // Durable start BEFORE any credentialed I/O; a failed append throws and
+    // nothing is sent.
+    settleJournal.recordRequestStarted(start);
+
+    let response: Response;
+    try {
+      response = await fetch(start.requestUrl, {
+        method: "POST",
+        headers: {
+          // Raw token. Never a "Bearer " prefix (§11). The journal records
+          // only the constant content-type header — never this credential.
+          authorization: token,
+          "content-type": "application/json",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(this.timeoutMs),
+        body: requestBody,
+      });
+    } catch {
+      settleJournal.recordRequestFailed(
+        start,
+        null,
+        null,
+        "facilitator_unreachable",
+      );
+      throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
+    }
+
+    if (!response.ok) {
+      // Never read a credentialed non-2xx body (401 reflects the token) —
+      // and never store one: the journal gets status + allowlisted headers.
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* discarded */
+      }
+      settleJournal.recordRequestFailed(
+        start,
+        response.status,
+        sanitizeResponseHeaders(response.headers),
+        `facilitator_http_${response.status}`,
+      );
+      if (response.status >= 500) {
+        throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
+      }
+      throw new ServiceRefusal(
+        502,
+        `facilitator_http_${response.status}`,
+        "upstream_malformed",
+      );
+    }
+
+    let text: string;
+    try {
+      text = await readBoundedText(response, this.maxResponseBytes);
+    } catch {
+      settleJournal.recordRequestFailed(
+        start,
+        response.status,
+        sanitizeResponseHeaders(response.headers),
+        "response_too_large",
+      );
+      throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
+    }
+
+    // The raw bytes are evidence BEFORE they are interpretation: journal the
+    // response first, then parse. If the append fails this throws and the
+    // parsed result is never returned.
+    settleJournal.recordResponseObserved(
+      start,
+      response.status,
+      sanitizeResponseHeaders(response.headers),
+      text,
+    );
+
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
+    }
   }
 }
 

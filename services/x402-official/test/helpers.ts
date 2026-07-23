@@ -284,6 +284,7 @@ export function buildRegistryRecord(
 export class MockFacilitator implements FacilitatorTransport {
   verifyCalls: unknown[] = [];
   settleCalls: unknown[] = [];
+  settleBindings: SettleCallBinding[] = [];
   supportedCalls = 0;
   supportedResponse: unknown = {
     kinds: [{ x402Version: 2, scheme: "exact", network: FROZEN.network }],
@@ -310,8 +311,9 @@ export class MockFacilitator implements FacilitatorTransport {
     return this.verifyResponse;
   }
 
-  async settle(body: unknown): Promise<unknown> {
+  async settle(body: unknown, binding: SettleCallBinding): Promise<unknown> {
     this.settleCalls.push(body);
+    this.settleBindings.push(binding);
     if (this.settleError) throw this.settleError;
     return this.settleResponse;
   }

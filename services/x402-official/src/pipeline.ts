@@ -714,11 +714,25 @@ async function submitSettlement(
 
   let settleResponse: SettleResponseWire;
   try {
-    const rawSettle = await deps.facilitator.settle({
-      x402Version: 2,
-      paymentPayload: payment.paymentPayload,
-      paymentRequirements: payment.requirements,
-    });
+    // The binding travels with the ONE permitted settle call so the durable
+    // upstream-call journal records exactly which authorization it served.
+    const rawSettle = await deps.facilitator.settle(
+      {
+        x402Version: 2,
+        paymentPayload: payment.paymentPayload,
+        paymentRequirements: payment.requirements,
+      },
+      {
+        network: config.network,
+        wcsprContract: row.wcsprContract,
+        signedPaymentPayloadHash: hash,
+        payerAccountHash: row.payerAccountHash,
+        authorizationNonce: row.authorizationNonce,
+        resourceId: row.resourceId,
+        actionId: row.actionId,
+        envelopeHash: row.envelopeHash,
+      },
+    );
     settleResponse = validateSettleResponse(rawSettle, config.network);
   } catch (error) {
     // Response lost/malformed after journaling: the attempt is over but its

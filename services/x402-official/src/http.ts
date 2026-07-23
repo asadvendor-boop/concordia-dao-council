@@ -16,10 +16,15 @@ export class BoundedResponseError extends Error {
   }
 }
 
-export async function readBoundedJson(
+/**
+ * Bounded RAW text read. Split out from `readBoundedJson` so the settle path
+ * can journal the exact received bytes BEFORE parsing them — the journal
+ * records what the upstream actually sent, not our interpretation of it.
+ */
+export async function readBoundedText(
   response: Response,
   maxBytes: number,
-): Promise<unknown> {
+): Promise<string> {
   const advertised = response.headers.get("content-length");
   if (advertised !== null) {
     const declared = Number(advertised);
@@ -41,7 +46,7 @@ export async function readBoundedJson(
     if (Buffer.byteLength(text, "utf8") > maxBytes) {
       throw new BoundedResponseError("response_too_large");
     }
-    return JSON.parse(text);
+    return text;
   }
 
   const reader = body.getReader();
@@ -67,6 +72,12 @@ export async function readBoundedJson(
   } finally {
     reader.releaseLock();
   }
-  const text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
-  return JSON.parse(text);
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+}
+
+export async function readBoundedJson(
+  response: Response,
+  maxBytes: number,
+): Promise<unknown> {
+  return JSON.parse(await readBoundedText(response, maxBytes)) as unknown;
 }

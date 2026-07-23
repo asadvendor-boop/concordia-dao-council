@@ -14,6 +14,8 @@ WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+# The settle-journal migration is read at runtime (dist/../migrations).
+COPY migrations ./migrations
 # Durable fulfillment ledger volume (compose: x402_official_data:/data).
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]

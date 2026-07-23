@@ -181,13 +181,33 @@ export type SettlementLocator =
   | { found: true; transactionHash: string }
   | { found: false; observed: FinalizedObservationBoundary };
 
+/**
+ * Identity a credentialed `/settle` call is journaled under: the frozen
+ * network, the WCSPR contract, and the authorization/governance bindings of
+ * the fulfillment row that reserved this one-and-only submission.
+ */
+export interface SettleCallBinding {
+  network: string;
+  wcsprContract: string;
+  signedPaymentPayloadHash: string;
+  payerAccountHash: string;
+  authorizationNonce: string;
+  resourceId: string;
+  actionId: string;
+  envelopeHash: string;
+}
+
 export interface FacilitatorTransport {
   /** GET /supported — parsed 2xx JSON body. */
   supported(): Promise<unknown>;
   /** POST /verify — parsed 2xx JSON body. Throws sanitized errors otherwise. */
   verify(body: unknown): Promise<unknown>;
-  /** POST /settle — parsed 2xx JSON body. Throws sanitized errors otherwise. */
-  settle(body: unknown): Promise<unknown>;
+  /**
+   * POST /settle — parsed 2xx JSON body. Throws sanitized errors otherwise.
+   * The binding identifies the durable journal entry every credentialed
+   * settle call must append BEFORE any network I/O.
+   */
+  settle(body: unknown, binding: SettleCallBinding): Promise<unknown>;
 }
 
 export type RegistryLookupResult =
