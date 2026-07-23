@@ -41,7 +41,6 @@ import hashlib
 import json
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -60,6 +59,7 @@ from shared.official_x402_release_adapter import (
     _WCSPR_VERSION,
     _account_hash_from_public_key,
     _canonical,
+    _canonical_journal_rows,
     _casper_public_key,
     _casper_signature,
     _eip712_digest,
@@ -68,7 +68,7 @@ from shared.official_x402_release_adapter import (
     _resource_url_hash,
     _runtime_args_expected,
     _signed_payload_hash,
-    _tagged_account_hash,
+    _journal_root,
     _verify_casper_eip712_signature,
 )
 from shared.atomic_private_file import write_private_file_once
@@ -175,10 +175,7 @@ def _read_json(path: Path, *, context: str) -> Any:
         raw = read_secure_secret_file(path, max_bytes=_MAX_INPUT_BYTES)
     except Exception as exc:  # secure reader raises its own typed error
         raise _fail(f"{context} could not be read securely: {exc}") from exc
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        raise _fail(f"{context} is not valid UTF-8 JSON") from exc
+    return _strict_json_bytes(raw, context=context)
 
 
 def _require_mapping(value: Any, *, context: str) -> Mapping[str, Any]:
@@ -243,6 +240,12 @@ def build_prepared_authorization(request: Mapping[str, Any]) -> dict[str, Any]:
     authorized. Nothing is signed here.
     """
 
+    request_snapshot = _strict_json_bytes(
+        _canonical(request), context="prepare request"
+    )
+    if not isinstance(request_snapshot, dict):
+        raise _fail("prepare request must be one JSON object")
+    request = request_snapshot
     if request.get("schema_version") != PREPARE_REQUEST_SCHEMA:
         raise _fail(
             f"prepare request schema must be {PREPARE_REQUEST_SCHEMA}"
@@ -370,6 +373,8 @@ def build_prepared_authorization(request: Mapping[str, Any]) -> dict[str, Any]:
             "resource_url_hash": resource_url_hash.hex(),
             "report_hash": report_hash.hex(),
         },
+        "prepare_request": request_snapshot,
+        "prepare_request_sha256": _sha256_hex(_canonical(request_snapshot)),
         "accepted": accepted,
         "resource": resource,
         "report_base64": _b64(report_bytes),
@@ -457,6 +462,12 @@ def build_imported_authorization(
         raise _fail(
             f"prepared authorization schema must be {PREPARED_AUTHORIZATION_SCHEMA}"
         )
+    prepare_request = _require_mapping(
+        prepared.get("prepare_request"), context="prepared.prepare_request"
+    )
+    recomputed_prepared = build_prepared_authorization(prepare_request)
+    if _canonical(recomputed_prepared) != _canonical(prepared):
+        raise _fail("prepared authorization differs from its derived record")
     eip712 = _require_mapping(prepared.get("eip712"), context="prepared.eip712")
     digest_hex = _require_hex(
         eip712.get("digest_hex"), length=64, context="prepared digest"
@@ -507,33 +518,25 @@ def build_imported_authorization(
     valid_before = _require_int(fields.get("valid_before"), context="valid_before")
     nonce_hex = _require_hex(fields.get("nonce_hex"), length=64, context="nonce_hex")
 
-    # The signed payload the runtime submits, matching the shape the adapter
-    # cross-checks (§ body fields + resource + accepted + signature/pubkey).
-    body = {
-        "x402_version": "2",
-        "payer": derived_payer,
-        "payee": payee_hex,
+    authorization_message = {
+        "from": "00" + derived_payer,
+        "to": "00" + payee_hex,
         "value": str(value),
-        "eip712_auth_nonce": nonce_hex,
-        "valid_after": str(valid_after),
-        "valid_before": str(valid_before),
-        "resource_url_hash": prepared["bindings"]["resource_url_hash"],
-        "report_hash": prepared["bindings"]["report_hash"],
-        "payment_requirements_hash": prepared["bindings"]["payment_requirements_hash"],
+        "validAfter": str(valid_after),
+        "validBefore": str(valid_before),
+        "nonce": nonce_hex,
     }
+    # Freeze the exact production x402 payload.  Capture must reuse these
+    # bytes; it may not reconstruct a second, merely equivalent request.
     signed_payload = {
         "x402Version": 2,
         "resource": resource,
         "accepted": accepted,
-        "signature": signature.hex(),
-        "publicKey": public_key.hex(),
-        "payer_account_hash": derived_payer,
-        "payee_account_hash": payee_hex,
-        "value": str(value),
-        "valid_after": valid_after,
-        "valid_before": valid_before,
-        "nonce": nonce_hex,
-        "body": body,
+        "payload": {
+            "signature": signature.hex(),
+            "publicKey": public_key.hex(),
+            "authorization": authorization_message,
+        },
     }
 
     requirements_hash = bytes.fromhex(prepared["bindings"]["payment_requirements_hash"])
@@ -599,16 +602,19 @@ def _require_utc(value: Any, *, context: str) -> str:
     return value
 
 
-def _bundle_bytes(value: Any, *, context: str) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise _fail(f"{context} must be non-empty base64 text")
+def _bundle_bytes(
+    value: Any, *, context: str, allow_empty: bool = False
+) -> bytes:
+    if not isinstance(value, str) or (not value and not allow_empty):
+        qualifier = "base64 text" if allow_empty else "non-empty base64 text"
+        raise _fail(f"{context} must be {qualifier}")
     try:
         raw = base64.b64decode(value, validate=True)
     except Exception as exc:
         raise _fail(f"{context} is not canonical base64") from exc
     if base64.b64encode(raw).decode("ascii") != value:
         raise _fail(f"{context} is not canonical base64")
-    if not raw:
+    if not raw and not allow_empty:
         raise _fail(f"{context} must not be empty")
     return raw
 
@@ -649,56 +655,216 @@ def _http_exchange(
     }
 
 
-def _rpc_exchange(
-    *, url: str, request_bytes: bytes, response_bytes: bytes, observed_at: str
-) -> dict[str, Any]:
-    return {
-        "url": url,
+def _raw_http_exchange(
+    value: Any,
+    *,
+    context: str,
+    expected_method: str,
+    expected_url: str,
+    expected_request_bytes: bytes,
+) -> tuple[dict[str, Any], bytes]:
+    """Project one observed HTTP exchange without inventing wire facts."""
+
+    entry = _require_mapping(value, context=context)
+    expected_keys = {
+        "method",
+        "url",
+        "request_body_base64",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    }
+    if set(entry) != expected_keys:
+        raise _fail(f"{context} keys differ from the raw HTTP shape")
+    request_bytes = _bundle_bytes(
+        entry.get("request_body_base64"),
+        context=f"{context}.request_body_base64",
+        allow_empty=True,
+    )
+    if (
+        entry.get("method") != expected_method
+        or entry.get("url") != expected_url
+        or request_bytes != expected_request_bytes
+        or entry.get("response_content_type") != "application/json"
+    ):
+        raise _fail(f"{context} method, URL, body or content type differs")
+    status = _require_int(
+        entry.get("response_status"), context=f"{context}.response_status"
+    )
+    if status != 200:
+        # Refuse before decoding or copying an upstream error body.
+        raise _fail(f"{context} did not return HTTP 200")
+    response_bytes = _bundle_bytes(
+        entry.get("response_body_base64"),
+        context=f"{context}.response_body_base64",
+    )
+    observed_at = _require_utc(
+        entry.get("observed_at"), context=f"{context}.observed_at"
+    )
+    return (
+        _http_exchange(
+            method=expected_method,
+            url=expected_url,
+            request_bytes=request_bytes,
+            response_bytes=response_bytes,
+            status=status,
+            observed_at=observed_at,
+        ),
+        response_bytes,
+    )
+
+
+def _raw_rpc_exchange(
+    value: Any, *, context: str, expected_url: str
+) -> tuple[dict[str, Any], bytes, bytes]:
+    entry = _require_mapping(value, context=context)
+    if set(entry) != {
+        "url",
+        "request_body_base64",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    }:
+        raise _fail(f"{context} keys differ from the raw RPC shape")
+    request_bytes = _bundle_bytes(
+        entry.get("request_body_base64"),
+        context=f"{context}.request_body_base64",
+    )
+    status = _require_int(
+        entry.get("response_status"), context=f"{context}.response_status"
+    )
+    if (
+        entry.get("url") != expected_url
+        or status != 200
+        or entry.get("response_content_type") != "application/json"
+    ):
+        raise _fail(f"{context} URL or HTTP result differs")
+    response_bytes = _bundle_bytes(
+        entry.get("response_body_base64"),
+        context=f"{context}.response_body_base64",
+    )
+    observed_at = _require_utc(
+        entry.get("observed_at"), context=f"{context}.observed_at"
+    )
+    exchange = {
+        "url": expected_url,
         "request_body_base64": _b64(request_bytes),
         "request_body_sha256": _sha256_hex(request_bytes),
-        "response_status": 200,
+        "response_status": status,
         "response_content_type": "application/json",
         "response_body_base64": _b64(response_bytes),
         "response_body_sha256": _sha256_hex(response_bytes),
         "observed_at": observed_at,
     }
+    return exchange, request_bytes, response_bytes
 
 
-def _paid_resource_exchange(
+def _raw_paid_resource_exchange(
+    value: Any,
     *,
-    url: str,
-    payment_payload: Mapping[str, Any],
-    response_body: bytes,
-    status: int,
-    observed_at: str,
-    payment_response: Mapping[str, Any] | None,
+    context: str,
+    expected_payload: Mapping[str, Any],
+    expect_payment_response: bool,
 ) -> dict[str, Any]:
-    decoded_payment_payload = _canonical(payment_payload)
-    payment_signature_raw = _b64(decoded_payment_payload).encode("ascii")
-    request_headers = _canonical(
-        {"payment-signature": payment_signature_raw.decode("ascii")}
+    """Derive adapter fields solely from observed header/body bytes."""
+
+    entry = _require_mapping(value, context=context)
+    expected_keys = {
+        "method",
+        "url",
+        "request_headers_canonical_json_base64",
+        "request_body_base64",
+        "response_status",
+        "response_headers_canonical_json_base64",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    }
+    if set(entry) != expected_keys:
+        raise _fail(f"{context} keys differ from the raw paid-resource shape")
+    request_headers = _bundle_bytes(
+        entry.get("request_headers_canonical_json_base64"),
+        context=f"{context}.request_headers",
     )
-    if payment_response is None:
-        response_headers_object: dict[str, str] = {}
-    else:
-        decoded_payment_response = _canonical(payment_response)
-        payment_response_raw = _b64(decoded_payment_response).encode("ascii")
-        response_headers_object = {
-            "payment-response": payment_response_raw.decode("ascii")
-        }
-    response_headers = _canonical(response_headers_object)
+    request_headers_object = _strict_json_bytes(
+        request_headers, context=f"{context}.request_headers"
+    )
+    if (
+        not isinstance(request_headers_object, dict)
+        or _canonical(request_headers_object) != request_headers
+        or set(request_headers_object) != {"payment-signature"}
+    ):
+        raise _fail(f"{context} request headers are not canonical payment evidence")
+    signature_value = _require_str(
+        request_headers_object.get("payment-signature"),
+        context=f"{context}.payment-signature",
+    )
+    try:
+        signed_payload_bytes = base64.b64decode(signature_value, validate=True)
+    except Exception as exc:
+        raise _fail(f"{context} payment-signature is not base64") from exc
+    if (
+        base64.b64encode(signed_payload_bytes).decode("ascii")
+        != signature_value
+        or signed_payload_bytes != _canonical(expected_payload)
+    ):
+        raise _fail(f"{context} payment-signature differs from the frozen payload")
+
+    request_body = _bundle_bytes(
+        entry.get("request_body_base64"),
+        context=f"{context}.request_body",
+        allow_empty=True,
+    )
+    response_headers = _bundle_bytes(
+        entry.get("response_headers_canonical_json_base64"),
+        context=f"{context}.response_headers",
+        allow_empty=False,
+    )
+    response_headers_object = _strict_json_bytes(
+        response_headers, context=f"{context}.response_headers"
+    )
+    if (
+        not isinstance(response_headers_object, dict)
+        or _canonical(response_headers_object) != response_headers
+    ):
+        raise _fail(f"{context} response headers are not canonical JSON")
+    response_body = _bundle_bytes(
+        entry.get("response_body_base64"),
+        context=f"{context}.response_body",
+    )
+    status = _require_int(
+        entry.get("response_status"), context=f"{context}.response_status"
+    )
+    observed_at = _require_utc(
+        entry.get("observed_at"), context=f"{context}.observed_at"
+    )
+    if (
+        entry.get("method") != "GET"
+        or request_body
+        or entry.get("response_content_type") != "application/json"
+    ):
+        raise _fail(f"{context} method, body or content type differs")
+
     exchange: dict[str, Any] = {
         "method": "GET",
-        "url": url,
+        "url": _require_str(entry.get("url"), context=f"{context}.url"),
         "request_headers_canonical_json_base64": _b64(request_headers),
         "request_headers_canonical_json_sha256": _sha256_hex(request_headers),
         "request_body_base64": "",
         "request_body_sha256": _sha256_hex(b""),
-        "payment_signature_raw_value_base64": _b64(payment_signature_raw),
-        "payment_signature_raw_value_sha256": _sha256_hex(payment_signature_raw),
-        "payment_signature_decoded_payload_base64": _b64(decoded_payment_payload),
+        "payment_signature_raw_value_base64": _b64(
+            signature_value.encode("ascii")
+        ),
+        "payment_signature_raw_value_sha256": _sha256_hex(
+            signature_value.encode("ascii")
+        ),
+        "payment_signature_decoded_payload_base64": _b64(
+            signed_payload_bytes
+        ),
         "payment_signature_decoded_payload_sha256": _sha256_hex(
-            decoded_payment_payload
+            signed_payload_bytes
         ),
         "response_status": status,
         "response_headers_canonical_json_base64": _b64(response_headers),
@@ -708,31 +874,77 @@ def _paid_resource_exchange(
         "response_body_sha256": _sha256_hex(response_body),
         "observed_at": observed_at,
     }
-    if payment_response is not None:
+    if expect_payment_response:
+        if status != 200 or set(response_headers_object) != {"payment-response"}:
+            raise _fail(f"{context} successful payment response is absent")
+        payment_response_value = _require_str(
+            response_headers_object.get("payment-response"),
+            context=f"{context}.payment-response",
+        )
+        try:
+            settlement_bytes = base64.b64decode(
+                payment_response_value, validate=True
+            )
+        except Exception as exc:
+            raise _fail(f"{context} payment-response is not base64") from exc
+        if (
+            base64.b64encode(settlement_bytes).decode("ascii")
+            != payment_response_value
+            or _canonical(
+                _strict_json_bytes(
+                    settlement_bytes,
+                    context=f"{context}.payment-response",
+                )
+            )
+            != settlement_bytes
+        ):
+            raise _fail(f"{context} payment-response is not canonical")
         exchange.update(
             {
-                "payment_response_raw_value_base64": _b64(payment_response_raw),
-                "payment_response_raw_value_sha256": _sha256_hex(payment_response_raw),
+                "payment_response_raw_value_base64": _b64(
+                    payment_response_value.encode("ascii")
+                ),
+                "payment_response_raw_value_sha256": _sha256_hex(
+                    payment_response_value.encode("ascii")
+                ),
                 "payment_response_decoded_settlement_base64": _b64(
-                    decoded_payment_response
+                    settlement_bytes
                 ),
                 "payment_response_decoded_settlement_sha256": _sha256_hex(
-                    decoded_payment_response
+                    settlement_bytes
                 ),
             }
         )
+    elif status != 409 or response_headers_object:
+        raise _fail(f"{context} rejection status or response headers differ")
     return exchange
 
 
-def _row_observation(
-    row: Mapping[str, Any], *, observed_at: str, instance_id: str
-) -> dict[str, Any]:
-    row_bytes = _canonical(row)
+def _raw_row_observation(value: Any, *, context: str) -> dict[str, Any]:
+    entry = _require_mapping(value, context=context)
+    if set(entry) != {
+        "row_canonical_json_base64",
+        "observed_at",
+        "service_instance_id",
+    }:
+        raise _fail(f"{context} keys differ from the raw row shape")
+    row_bytes = _bundle_bytes(
+        entry.get("row_canonical_json_base64"),
+        context=f"{context}.row_canonical_json_base64",
+    )
+    row = _strict_json_bytes(row_bytes, context=f"{context}.row")
+    if not isinstance(row, dict) or _canonical(row) != row_bytes:
+        raise _fail(f"{context} row is not canonical JSON")
     return {
         "row_canonical_json_base64": _b64(row_bytes),
         "row_canonical_json_sha256": _sha256_hex(row_bytes),
-        "observed_at": observed_at,
-        "service_instance_id": instance_id,
+        "observed_at": _require_utc(
+            entry.get("observed_at"), context=f"{context}.observed_at"
+        ),
+        "service_instance_id": _require_str(
+            entry.get("service_instance_id"),
+            context=f"{context}.service_instance_id",
+        ),
     }
 
 
@@ -750,146 +962,80 @@ def _load_journal_migration() -> bytes:
 
 
 def _build_upstream_settle_journal(
-    *,
-    row: Mapping[str, Any],
-    request_bytes: bytes,
-    response_bytes: bytes,
-    request_started_at: str,
-    response_observed_at: str,
-    authoritative_database_id: str,
-    snapshots_meta: Mapping[str, Mapping[str, str]],
+    value: Any,
 ) -> dict[str, Any]:
-    """Execute the frozen migration and derive the three journal snapshots.
+    """Project actual SQLite backups; never create or insert evidence rows."""
 
-    The append-only settle-call journal is rebuilt here from the exact frozen
-    migration and the two derived rows (one ``request_started`` and one
-    ``response_observed``). ``call_id`` and ``journal_root`` are recomputed;
-    a single deterministic backup image backs all three snapshots so they are
-    byte-identical, as the accepted adapter's cross-snapshot equality requires.
-    """
-
+    entry = _require_mapping(value, context="fulfillment.journal")
+    if set(entry) != {"authoritative_database_id", "snapshots"}:
+        raise _fail("fulfillment.journal keys differ from the raw journal shape")
     migration = _load_journal_migration()
-    call_id = _sha256_hex(
-        _UPSTREAM_SETTLE_CALL_DOMAIN
-        + bytes.fromhex(row["signedPaymentPayloadHash"])
-        + bytes.fromhex(row["authorizationNonce"])
+    snapshots_input = _require_mapping(
+        entry.get("snapshots"), context="fulfillment.journal.snapshots"
     )
-    bindings = (
-        call_id,
-        row["network"],
-        row["wcsprContract"],
-        row["signedPaymentPayloadHash"],
-        row["payerAccountHash"],
-        row["authorizationNonce"],
-        row["resourceId"],
-        row["actionId"],
-        row["envelopeHash"],
+    names = (
+        "after_first_release",
+        "after_exact_retry",
+        "after_cross_binding_reuse",
     )
-    request_headers = _canonical({"content-type": "application/json"})
-    response_headers = _canonical({"content-type": "application/json"})
-    insert_columns = _JOURNAL_COLUMNS[1:]
-    started_values = (
-        "request_started",
-        *bindings,
-        "POST",
-        _SETTLE_URL,
-        request_headers,
-        request_bytes,
-        _sha256_hex(request_bytes),
-        None,
-        None,
-        None,
-        None,
-        None,
-        request_started_at,
-    )
-    response_values = (
-        "response_observed",
-        *bindings,
-        None,
-        None,
-        None,
-        None,
-        None,
-        200,
-        response_headers,
-        response_bytes,
-        _sha256_hex(response_bytes),
-        None,
-        response_observed_at,
-    )
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        directory = Path(temporary_directory)
-        source = sqlite3.connect(directory / "journal.sqlite3")
+    if set(snapshots_input) != set(names):
+        raise _fail("journal snapshots differ from the required raw stages")
+    snapshots: dict[str, dict[str, Any]] = {}
+    for name in names:
+        context = f"fulfillment.journal.snapshots.{name}"
+        snapshot = _require_mapping(
+            snapshots_input.get(name), context=context
+        )
+        if set(snapshot) != {
+            "sqlite_backup_base64",
+            "observed_at",
+            "service_instance_id",
+        }:
+            raise _fail(f"{context} keys differ from the raw snapshot shape")
+        database_bytes = _bundle_bytes(
+            snapshot.get("sqlite_backup_base64"),
+            context=f"{context}.sqlite_backup_base64",
+        )
+        connection = sqlite3.connect(":memory:")
         try:
-            source.executescript(migration.decode("utf-8"))
-            placeholders = ",".join("?" for _ in insert_columns)
-            statement = (
-                "INSERT INTO x402_upstream_settle_calls ("
-                + ",".join(insert_columns)
-                + f") VALUES ({placeholders})"
-            )
-            source.execute(statement, started_values)
-            source.execute(statement, response_values)
-            source.commit()
-            selected = source.execute(
-                "SELECT "
-                + ",".join(_JOURNAL_COLUMNS)
-                + " FROM x402_upstream_settle_calls ORDER BY sequence"
-            ).fetchall()
-            canonical_rows: list[dict[str, Any]] = []
-            for selected_row in selected:
-                canonical_row: dict[str, Any] = {}
-                for key, value in zip(_JOURNAL_COLUMNS, selected_row, strict=True):
-                    if key in _JOURNAL_BLOB_COLUMNS:
-                        canonical_row[f"{key}_base64"] = (
-                            None if value is None else _b64(bytes(value))
-                        )
-                    else:
-                        canonical_row[key] = value
-                canonical_rows.append(canonical_row)
-            image_path = directory / "snapshot.sqlite3"
-            destination = sqlite3.connect(image_path)
-            try:
-                source.backup(destination)
-            finally:
-                destination.close()
-            database_bytes = image_path.read_bytes()
+            connection.deserialize(database_bytes)
+            connection.execute("PRAGMA trusted_schema=OFF")
+            connection.execute("PRAGMA query_only=ON")
+            if connection.execute("PRAGMA integrity_check").fetchall() != [
+                ("ok",)
+            ]:
+                raise _fail(f"{context} SQLite integrity check failed")
+            canonical_rows = _canonical_journal_rows(connection)
         except sqlite3.Error as exc:
-            raise _fail("upstream settle journal could not be assembled") from exc
+            raise _fail(f"{context} is not a readable SQLite backup") from exc
         finally:
-            source.close()
-    rows_bytes = _canonical(canonical_rows)
-    journal_root = _sha256_hex(
-        _SETTLE_CALL_JOURNAL_DOMAIN
-        + len(canonical_rows).to_bytes(8, "big")
-        + b"".join(hashlib.sha256(_canonical(item)).digest() for item in canonical_rows)
-    )
-
-    def snapshot(meta: Mapping[str, str]) -> dict[str, Any]:
-        return {
+            connection.close()
+        rows_bytes = _canonical(canonical_rows)
+        snapshots[name] = {
             "sqlite_backup_base64": _b64(database_bytes),
             "sqlite_backup_sha256": _sha256_hex(database_bytes),
             "rows_canonical_json_base64": _b64(rows_bytes),
             "rows_canonical_json_sha256": _sha256_hex(rows_bytes),
-            "journal_root_sha256": journal_root,
-            "observed_at": meta["observed_at"],
-            "service_instance_id": meta["service_instance_id"],
+            "journal_root_sha256": _journal_root(canonical_rows),
+            "observed_at": _require_utc(
+                snapshot.get("observed_at"),
+                context=f"{context}.observed_at",
+            ),
+            "service_instance_id": _require_str(
+                snapshot.get("service_instance_id"),
+                context=f"{context}.service_instance_id",
+            ),
         }
 
     return {
         "schema_id": _UPSTREAM_SETTLE_JOURNAL_SCHEMA_ID,
-        "authoritative_database_id": authoritative_database_id,
+        "authoritative_database_id": _require_str(
+            entry.get("authoritative_database_id"),
+            context="fulfillment.journal.authoritative_database_id",
+        ),
         "migration_sql_base64": _b64(migration),
         "migration_sql_sha256": _sha256_hex(migration),
-        "snapshots": {
-            name: snapshot(snapshots_meta[name])
-            for name in (
-                "after_first_release",
-                "after_exact_retry",
-                "after_cross_binding_reuse",
-            )
-        },
+        "snapshots": snapshots,
     }
 
 
@@ -897,14 +1043,12 @@ def _build_wcspr_readback(
     value: Any, *, context: str, runtime_args: list[dict[str, str]]
 ) -> dict[str, Any]:
     entry = _require_mapping(value, context=context)
-    observed_at = _require_utc(entry.get("observed_at"), context=f"{context}.observed_at")
-    rpc_request = _bundle_bytes(
-        entry.get("rpc_request_body_base64"),
-        context=f"{context}.rpc_request_body_base64",
-    )
-    rpc_response = _bundle_bytes(
-        entry.get("rpc_response_body_base64"),
-        context=f"{context}.rpc_response_body_base64",
+    if set(entry) != {"rpc_transcript"}:
+        raise _fail(f"{context} keys differ from the raw readback shape")
+    transcript, _request_bytes, _response_bytes = _raw_rpc_exchange(
+        entry.get("rpc_transcript"),
+        context=f"{context}.rpc_transcript",
+        expected_url=_CASPER_RPC_URL,
     )
     return {
         "package_hash": _WCSPR_PACKAGE,
@@ -913,13 +1057,8 @@ def _build_wcspr_readback(
         "lock_status": "Unlocked",
         "entry_point": "transfer_with_authorization",
         "runtime_args": runtime_args,
-        "observed_at": observed_at,
-        "rpc_transcript": _rpc_exchange(
-            url=_CASPER_RPC_URL,
-            request_bytes=rpc_request,
-            response_bytes=rpc_response,
-            observed_at=observed_at,
-        ),
+        "observed_at": transcript["observed_at"],
+        "rpc_transcript": transcript,
     }
 
 
@@ -929,24 +1068,12 @@ def _build_settlement_provider(value: Any, *, context: str) -> dict[str, Any]:
     origin = _require_str(entry.get("origin"), context=f"{context}.origin")
 
     def rpc(name: str) -> dict[str, Any]:
-        sub = _require_mapping(entry.get(name), context=f"{context}.{name}")
-        observed_at = _require_utc(
-            sub.get("observed_at"), context=f"{context}.{name}.observed_at"
+        exchange, _request_bytes, _response_bytes = _raw_rpc_exchange(
+            entry.get(name),
+            context=f"{context}.{name}",
+            expected_url=origin,
         )
-        request_bytes = _bundle_bytes(
-            sub.get("request_body_base64"),
-            context=f"{context}.{name}.request_body_base64",
-        )
-        response_bytes = _bundle_bytes(
-            sub.get("response_body_base64"),
-            context=f"{context}.{name}.response_body_base64",
-        )
-        return _rpc_exchange(
-            url=origin,
-            request_bytes=request_bytes,
-            response_bytes=response_bytes,
-            observed_at=observed_at,
-        )
+        return exchange
 
     return {
         "endpoint_id": endpoint_id,
@@ -973,6 +1100,8 @@ def _derive_parsed_settlement(
         execution_info = transaction["result"]["execution_info"]
         block_hash = execution_info["block_hash"]
         block_height = execution_info["block_height"]
+        execution_result = execution_info["execution_result"]["Version2"]
+        execution_error = execution_result["error_message"]
         header = block["result"]["block_with_signatures"]["block"]["Version2"][
             "header"
         ]
@@ -987,8 +1116,8 @@ def _derive_parsed_settlement(
         "block_height": block_height,
         "state_root_hash": state_root_hash,
         "block_timestamp": block_timestamp,
-        "execution_success": True,
-        "execution_error": None,
+        "execution_success": execution_error is None,
+        "execution_error": execution_error,
         "target_contract_hash": _WCSPR_CONTRACT,
         "contract_version": _WCSPR_VERSION,
         "entry_point": "transfer_with_authorization",
@@ -1059,25 +1188,13 @@ def _governance_binding(
 
 def _facilitator_exchange(
     value: Any, *, context: str, method: str, url: str, request_bytes: bytes
-) -> dict[str, Any]:
-    entry = _require_mapping(value, context=context)
-    status = _require_int(
-        entry.get("response_status"), context=f"{context}.response_status"
-    )
-    # Fail closed on any non-200 BEFORE decoding or persisting the body.
-    if status != 200:
-        raise _fail(f"{context} did not return HTTP 200")
-    observed_at = _require_utc(entry.get("observed_at"), context=f"{context}.observed_at")
-    response_bytes = _bundle_bytes(
-        entry.get("response_body_base64"), context=f"{context}.response_body_base64"
-    )
-    return _http_exchange(
-        method=method,
-        url=url,
-        request_bytes=request_bytes,
-        response_bytes=response_bytes,
-        status=status,
-        observed_at=observed_at,
+) -> tuple[dict[str, Any], bytes]:
+    return _raw_http_exchange(
+        value,
+        context=context,
+        expected_method=method,
+        expected_url=url,
+        expected_request_bytes=request_bytes,
     )
 
 
@@ -1114,6 +1231,16 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         imported.get("signed_payment_payload"),
         context="imported_authorization.signed_payment_payload",
     )
+    payload_in = _require_mapping(
+        signed_payload_in.get("payload"),
+        context="imported_authorization.signed_payment_payload.payload",
+    )
+    authorization_in = _require_mapping(
+        payload_in.get("authorization"),
+        context=(
+            "imported_authorization.signed_payment_payload.payload.authorization"
+        ),
+    )
     public_key_hex = _casper_public_key(
         imported.get("public_key_hex"), "imported public key"
     )
@@ -1133,15 +1260,35 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     payee_hex = _require_hex(
         imported.get("payee_account_hash"), length=64, context="payee_account_hash"
     )
-    value = _u256_decimal(signed_payload_in.get("value"), context="authorization value")
+    if payload_in.get("publicKey") != public_key_hex:
+        raise _fail("imported public key differs from the frozen payment payload")
+    if payload_in.get("signature") != signature_hex:
+        raise _fail("imported signature differs from the frozen payment payload")
+    payer_tagged = _require_hex(
+        authorization_in.get("from"), length=66, context="authorization payer"
+    )
+    payee_tagged = _require_hex(
+        authorization_in.get("to"), length=66, context="authorization payee"
+    )
+    if not payer_tagged.startswith("00") or not payee_tagged.startswith("00"):
+        raise _fail("authorization payer and payee must be account-tagged")
+    value = _u256_decimal(
+        authorization_in.get("value"), context="authorization value"
+    )
     valid_after = _require_int(
-        signed_payload_in.get("valid_after"), context="valid_after"
+        _u256_decimal(
+            authorization_in.get("validAfter"), context="valid_after"
+        ),
+        context="valid_after",
     )
     valid_before = _require_int(
-        signed_payload_in.get("valid_before"), context="valid_before"
+        _u256_decimal(
+            authorization_in.get("validBefore"), context="valid_before"
+        ),
+        context="valid_before",
     )
     nonce_hex = _require_hex(
-        signed_payload_in.get("nonce"), length=64, context="authorization nonce"
+        authorization_in.get("nonce"), length=64, context="authorization nonce"
     )
 
     extra = _require_mapping(accepted.get("extra"), context="accepted.extra")
@@ -1159,6 +1306,8 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     payer_hex = payer.hex()
     payee = bytes.fromhex(payee_hex)
     nonce = bytes.fromhex(nonce_hex)
+    if payer_tagged != "00" + payer_hex or payee_tagged != "00" + payee_hex:
+        raise _fail("frozen authorization accounts differ from imported identities")
 
     requirements_hash = _payment_requirements_hash(accepted)
     resource_url_hash = _resource_url_hash(resource_url)
@@ -1177,24 +1326,7 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         nonce=nonce,
     )
 
-    authorization_message = {
-        "from": "00" + payer_hex,
-        "to": "00" + payee_hex,
-        "value": str(value),
-        "validAfter": str(valid_after),
-        "validBefore": str(valid_before),
-        "nonce": nonce_hex,
-    }
-    signed_payment_payload = {
-        "x402Version": 2,
-        "resource": resource,
-        "accepted": accepted,
-        "payload": {
-            "signature": signature_hex,
-            "publicKey": public_key_hex,
-            "authorization": authorization_message,
-        },
-    }
+    signed_payment_payload = dict(signed_payload_in)
     signed_payload_hash = _signed_payload_hash(
         payment_payload=signed_payment_payload,
         requirements_hash=requirements_hash,
@@ -1213,6 +1345,24 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         "paymentRequirements": accepted,
     }
     facilitator_request_bytes = _canonical(facilitator_request)
+    frozen_verify = _bundle_bytes(
+        imported.get("frozen_verify_request_body_base64"),
+        context="imported frozen verify request",
+    )
+    frozen_settle = _bundle_bytes(
+        imported.get("frozen_settle_request_body_base64"),
+        context="imported frozen settle request",
+    )
+    if (
+        frozen_verify != frozen_settle
+        or frozen_verify != facilitator_request_bytes
+        or imported.get("facilitator_request") != facilitator_request
+        or imported.get("frozen_request_body_sha256")
+        != _sha256_hex(facilitator_request_bytes)
+        or imported.get("signed_payment_payload_hash")
+        != signed_payload_hash.hex()
+    ):
+        raise _fail("imported frozen request differs from the verified authorization")
     eip712_domain = {
         "name": token_name,
         "version": domain_version,
@@ -1236,28 +1386,32 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     facilitator_in = _require_mapping(
         bundle.get("facilitator"), context="facilitator"
     )
-    supported = _facilitator_exchange(
+    supported, _supported_response_bytes = _facilitator_exchange(
         facilitator_in.get("supported"),
         context="facilitator.supported",
         method="GET",
         url=_SUPPORTED_URL,
         request_bytes=b"",
     )
-    verify_exchange = _facilitator_exchange(
+    verify_exchange, verify_response_bytes = _facilitator_exchange(
         facilitator_in.get("verify"),
         context="facilitator.verify",
         method="POST",
         url=_VERIFY_URL,
         request_bytes=facilitator_request_bytes,
     )
-    settle_exchange = _facilitator_exchange(
+    settle_exchange, settle_response_bytes = _facilitator_exchange(
         facilitator_in.get("settle"),
         context="facilitator.settle",
         method="POST",
         url=_SETTLE_URL,
         request_bytes=facilitator_request_bytes,
     )
-    settle_response_bytes = base64.b64decode(settle_exchange["response_body_base64"])
+    verify_response = _strict_json_bytes(
+        verify_response_bytes, context="verify response"
+    )
+    if not isinstance(verify_response, dict):
+        raise _fail("verify response must be a JSON object")
     settle_response = _strict_json_bytes(
         settle_response_bytes, context="settle response"
     )
@@ -1266,16 +1420,27 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     transaction = _require_hex(
         settle_response.get("transaction"), length=64, context="settlement transaction"
     )
+    verify_payer = _require_hex(
+        verify_response.get("payer"), length=66, context="verify payer"
+    )
+    settle_payer = _require_hex(
+        settle_response.get("payer"), length=66, context="settle payer"
+    )
+    if not verify_payer.startswith("00") or not settle_payer.startswith("00"):
+        raise _fail("facilitator payer must be an account-tagged hash")
     facilitator = {
         "supported": supported,
         "verify": verify_exchange,
         "settle": settle_exchange,
-        "parsed_verify": {"is_valid": True, "payer_account_hash": payer_hex},
+        "parsed_verify": {
+            "is_valid": verify_response.get("isValid"),
+            "payer_account_hash": verify_payer[2:],
+        },
         "parsed_settle": {
-            "success": True,
+            "success": settle_response.get("success"),
             "transaction": transaction,
-            "network": _NETWORK,
-            "payer_account_hash": payer_hex,
+            "network": settle_response.get("network"),
+            "payer_account_hash": settle_payer[2:],
         },
     }
 
@@ -1330,88 +1495,44 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         "parsed_settlement": parsed_settlement,
     }
 
-    # --- fulfillment: derived row, paid exchanges, rebuilt journal ------------
-    fulfillment_in = _require_mapping(bundle.get("fulfillment"), context="fulfillment")
-    created_at = _require_utc(
-        fulfillment_in.get("created_at"), context="fulfillment.created_at"
+    # --- fulfillment: raw rows, raw paid HTTP, raw SQLite backups -----------
+    fulfillment_in = _require_mapping(
+        bundle.get("fulfillment"), context="fulfillment"
     )
-    settled_at = _require_utc(
-        fulfillment_in.get("settled_at"), context="fulfillment.settled_at"
-    )
-    resource_id = _resource_id_from_url(resource_url)
-    fulfillment_row = {
-        "network": _NETWORK,
-        "signedPaymentPayloadHash": signed_payload_hash.hex(),
-        "resourceId": resource_id,
-        "actionId": governance_binding["action_id"],
-        "envelopeHash": governance_binding["envelope_hash"],
-        "resourceUrlHash": resource_url_hash.hex(),
-        "reportHash": report_hash.hex(),
-        "paymentRequirementsHash": requirements_hash.hex(),
-        "payerAccountHash": payer_hex,
-        "payeeAccountHash": payee_hex,
-        "valueAtomic": str(value),
-        "validAfter": str(valid_after),
-        "validBefore": str(valid_before),
-        "authorizationNonce": nonce_hex,
-        "publicKey": public_key_hex,
-        "signature": signature_hex,
-        "wcsprContract": _WCSPR_CONTRACT,
-        "state": "finalized",
-        "settlementTransactionHash": transaction,
-        "settlementResponseHash": _sha256_hex(settle_response_bytes),
-        "responseJson": settle_response_bytes.decode("utf-8"),
-        "settledAt": settled_at,
-        "failureReason": None,
-        "recoveryLeaseId": None,
-        "recoveryLeaseExpiresAt": None,
-        "createdAt": created_at,
-        "updatedAt": settled_at,
-    }
-    first_row_in = _require_mapping(
+    if set(fulfillment_in) != {
+        "first_row",
+        "post_restart_row",
+        "first_release",
+        "exact_retry",
+        "cross_binding_reuse",
+        "journal",
+    }:
+        raise _fail("fulfillment keys differ from the raw observation shape")
+    first_row = _raw_row_observation(
         fulfillment_in.get("first_row"), context="fulfillment.first_row"
     )
-    post_restart_in = _require_mapping(
+    post_restart_row = _raw_row_observation(
         fulfillment_in.get("post_restart_row"),
         context="fulfillment.post_restart_row",
     )
-    first_row = _row_observation(
-        fulfillment_row,
-        observed_at=_require_utc(
-            first_row_in.get("observed_at"),
-            context="fulfillment.first_row.observed_at",
-        ),
-        instance_id=_require_str(
-            first_row_in.get("service_instance_id"),
-            context="fulfillment.first_row.service_instance_id",
-        ),
+    first_row_object = _strict_json_bytes(
+        base64.b64decode(first_row["row_canonical_json_base64"]),
+        context="fulfillment.first_row.row",
     )
-    post_restart_row = _row_observation(
-        fulfillment_row,
-        observed_at=_require_utc(
-            post_restart_in.get("observed_at"),
-            context="fulfillment.post_restart_row.observed_at",
-        ),
-        instance_id=_require_str(
-            post_restart_in.get("service_instance_id"),
-            context="fulfillment.post_restart_row.service_instance_id",
-        ),
+    if not isinstance(first_row_object, dict):
+        raise _fail("fulfillment first row must be one JSON object")
+    settled_at = _require_utc(
+        first_row_object.get("settledAt"),
+        context="fulfillment.first_row.settledAt",
     )
 
-    first_release_at = _require_utc(
-        fulfillment_in.get("first_release_observed_at"),
-        context="fulfillment.first_release_observed_at",
-    )
-    exact_retry_at = _require_utc(
-        fulfillment_in.get("exact_retry_observed_at"),
-        context="fulfillment.exact_retry_observed_at",
-    )
     cross_in = _require_mapping(
-        fulfillment_in.get("cross_binding"), context="fulfillment.cross_binding"
+        fulfillment_in.get("cross_binding_reuse"),
+        context="fulfillment.cross_binding_reuse",
     )
-    cross_url = _require_str(cross_in.get("url"), context="fulfillment.cross_binding.url")
-    cross_at = _require_utc(
-        cross_in.get("observed_at"), context="fulfillment.cross_binding.observed_at"
+    cross_url = _require_str(
+        cross_in.get("url"),
+        context="fulfillment.cross_binding_reuse.url",
     )
     cross_payment_payload = {
         "x402Version": 2,
@@ -1419,75 +1540,27 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         "accepted": accepted,
         "payload": signed_payment_payload["payload"],
     }
-    first_release = _paid_resource_exchange(
-        url=resource_url,
-        payment_payload=signed_payment_payload,
-        response_body=report_bytes,
-        status=200,
-        observed_at=first_release_at,
-        payment_response=settle_response,
+    first_release = _raw_paid_resource_exchange(
+        fulfillment_in.get("first_release"),
+        context="fulfillment.first_release",
+        expected_payload=signed_payment_payload,
+        expect_payment_response=True,
     )
-    exact_retry = _paid_resource_exchange(
-        url=resource_url,
-        payment_payload=signed_payment_payload,
-        response_body=report_bytes,
-        status=200,
-        observed_at=exact_retry_at,
-        payment_response=settle_response,
+    exact_retry = _raw_paid_resource_exchange(
+        fulfillment_in.get("exact_retry"),
+        context="fulfillment.exact_retry",
+        expected_payload=signed_payment_payload,
+        expect_payment_response=True,
     )
-    cross_binding_reuse = _paid_resource_exchange(
-        url=cross_url,
-        payment_payload=cross_payment_payload,
-        response_body=_canonical(_CROSS_BINDING_REJECTION_BODY),
-        status=409,
-        observed_at=cross_at,
-        payment_response=None,
+    cross_binding_reuse = _raw_paid_resource_exchange(
+        cross_in,
+        context="fulfillment.cross_binding_reuse",
+        expected_payload=cross_payment_payload,
+        expect_payment_response=False,
     )
-
-    journal_in = _require_mapping(
-        fulfillment_in.get("journal"), context="fulfillment.journal"
-    )
-    snapshots_in = _require_mapping(
-        journal_in.get("snapshots"), context="fulfillment.journal.snapshots"
-    )
-    snapshots_meta: dict[str, dict[str, str]] = {}
-    for name in (
-        "after_first_release",
-        "after_exact_retry",
-        "after_cross_binding_reuse",
-    ):
-        snapshot_in = _require_mapping(
-            snapshots_in.get(name), context=f"fulfillment.journal.snapshots.{name}"
-        )
-        snapshots_meta[name] = {
-            "observed_at": _require_utc(
-                snapshot_in.get("observed_at"),
-                context=f"fulfillment.journal.snapshots.{name}.observed_at",
-            ),
-            "service_instance_id": _require_str(
-                snapshot_in.get("service_instance_id"),
-                context=(
-                    f"fulfillment.journal.snapshots.{name}.service_instance_id"
-                ),
-            ),
-        }
+    first_release_at = first_release["observed_at"]
     upstream_settle_journal = _build_upstream_settle_journal(
-        row=fulfillment_row,
-        request_bytes=facilitator_request_bytes,
-        response_bytes=settle_response_bytes,
-        request_started_at=_require_utc(
-            journal_in.get("request_started_observed_at"),
-            context="fulfillment.journal.request_started_observed_at",
-        ),
-        response_observed_at=_require_utc(
-            journal_in.get("response_observed_observed_at"),
-            context="fulfillment.journal.response_observed_observed_at",
-        ),
-        authoritative_database_id=_require_str(
-            journal_in.get("authoritative_database_id"),
-            context="fulfillment.journal.authoritative_database_id",
-        ),
-        snapshots_meta=snapshots_meta,
+        fulfillment_in.get("journal")
     )
 
     # --- assemble, self-verify against the accepted adapter, then return ------
@@ -1569,12 +1642,16 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
 
 def _emit(document: Mapping[str, Any], out: str | None) -> int:
     payload = _canonical(document)
-    if out is None:
-        sys.stdout.write(payload.decode("ascii") + "\n")
-        return 0
+    if out is None or not Path(out).is_absolute():
+        raise _fail("output path must be absolute and explicitly provided")
     write_private_file_once(Path(out), payload)
     sys.stdout.write(
-        json.dumps({"written": out, "sha256": __import__("hashlib").sha256(payload).hexdigest()})
+        json.dumps(
+            {
+                "written": True,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
         + "\n"
     )
     return 0
@@ -1614,20 +1691,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     prepare = sub.add_parser("prepare", help="build EIP-712 signing inputs")
     prepare.add_argument("--request", required=True)
-    prepare.add_argument("--out", default=None)
+    prepare.add_argument("--out", required=True)
     prepare.set_defaults(handler=_cmd_prepare)
 
     imp = sub.add_parser("import", help="verify a signed result offline")
     imp.add_argument("--prepared", required=True)
     imp.add_argument("--signed", required=True)
-    imp.add_argument("--out", default=None)
+    imp.add_argument("--out", required=True)
     imp.set_defaults(handler=_cmd_import)
 
     capture = sub.add_parser(
         "capture", help="assemble the official live-evidence artifact"
     )
     capture.add_argument("--bundle", required=True)
-    capture.add_argument("--out", default=None)
+    capture.add_argument("--out", required=True)
     capture.set_defaults(handler=_cmd_capture)
 
     return parser

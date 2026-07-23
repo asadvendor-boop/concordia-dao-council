@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import base64
 import copy
-import importlib
 import json
 import runpy
+import stat
 from pathlib import Path
 from typing import Any, Callable
 
@@ -189,6 +189,17 @@ class TestImport:
         # The frozen request body is the canonical serialization exactly once.
         frozen = base64.b64decode(imported["frozen_verify_request_body_base64"])
         assert frozen == _canonical(imported["facilitator_request"])
+        assert set(imported["signed_payment_payload"]) == {
+            "x402Version",
+            "resource",
+            "accepted",
+            "payload",
+        }
+        assert set(imported["signed_payment_payload"]["payload"]) == {
+            "signature",
+            "publicKey",
+            "authorization",
+        }
         assert len(imported["signed_payment_payload_hash"]) == 64
 
     def test_import_verifies_secp256k1(self) -> None:
@@ -241,6 +252,16 @@ class TestImport:
         # derived payer differs — both are fail-closed refusals.
         assert isinstance(exc.value, CaptureError)
 
+    def test_import_rejects_a_prepared_record_mutated_after_derivation(self) -> None:
+        prepared = build_prepared_authorization(
+            _prepare_request(_ed25519_payer())
+        )
+        signed = _sign_ed25519()
+        prepared["resource"]["description"] = "changed after wallet review"
+
+        with pytest.raises(CaptureError, match="prepared|derive|record"):
+            build_imported_authorization(prepared, signed)
+
 
 def test_prepared_output_is_canonical_and_writeonce(tmp_path: Path) -> None:
     from scripts.official_x402_capture import _emit
@@ -287,7 +308,7 @@ def _reencode(base64_text: str, mutate: Callable[[Any], None]) -> str:
     return _ascii_b64(_ref_canonical(document))
 
 
-def _build_capture_bundle() -> dict[str, Any]:
+def _build_legacy_capture_inputs() -> dict[str, Any]:
     """Assemble a synthetic, fully-consistent raw capture bundle."""
 
     private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
@@ -511,6 +532,152 @@ def _build_capture_bundle() -> dict[str, Any]:
     }
 
 
+def _raw_http(exchange: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(exchange[key])
+        for key in (
+            "method",
+            "url",
+            "request_body_base64",
+            "response_status",
+            "response_content_type",
+            "response_body_base64",
+            "observed_at",
+        )
+    }
+
+
+def _raw_rpc(exchange: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(exchange[key])
+        for key in (
+            "url",
+            "request_body_base64",
+            "response_status",
+            "response_content_type",
+            "response_body_base64",
+            "observed_at",
+        )
+    }
+
+
+def _raw_paid_exchange(exchange: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(exchange[key])
+        for key in (
+            "method",
+            "url",
+            "request_headers_canonical_json_base64",
+            "request_body_base64",
+            "response_status",
+            "response_headers_canonical_json_base64",
+            "response_content_type",
+            "response_body_base64",
+            "observed_at",
+        )
+    }
+
+
+def _raw_row(observation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "row_canonical_json_base64": observation[
+            "row_canonical_json_base64"
+        ],
+        "observed_at": observation["observed_at"],
+        "service_instance_id": observation["service_instance_id"],
+    }
+
+
+def _raw_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sqlite_backup_base64": snapshot["sqlite_backup_base64"],
+        "observed_at": snapshot["observed_at"],
+        "service_instance_id": snapshot["service_instance_id"],
+    }
+
+
+def _build_capture_bundle() -> dict[str, Any]:
+    """Build raw observations, never an artifact-shaped producer summary."""
+
+    legacy = _build_legacy_capture_inputs()
+    reference_fixture = _REF["official_x402_artifact"]
+    reference = reference_fixture.__wrapped__()
+    fulfillment = reference["fulfillment"]
+    reference_journal = fulfillment["upstream_settle_journal"]
+    return {
+        key: copy.deepcopy(legacy[key])
+        for key in (
+            "bundle_version",
+            "captured_at",
+            "source_commit",
+            "deployment_commit",
+            "service_url",
+            "service_image_digest",
+            "imported_authorization",
+            "v3_proof_bytes_base64",
+            "report_bytes_base64",
+        )
+    } | {
+        "facilitator": {
+            name: _raw_http(reference["facilitator"][name])
+            for name in ("supported", "verify", "settle")
+        },
+        "wcspr_readbacks": {
+            name: {
+                "rpc_transcript": _raw_rpc(
+                    reference["wcspr_readbacks"][name]["rpc_transcript"]
+                )
+            }
+            for name in ("pre_verify", "pre_settle", "post_settle")
+        },
+        "settlement_providers": [
+            {
+                "endpoint_id": provider["endpoint_id"],
+                "origin": provider["origin"],
+                **{
+                    name: _raw_rpc(provider[name])
+                    for name in (
+                        "info_get_transaction",
+                        "chain_get_block",
+                        "info_get_status",
+                    )
+                },
+            }
+            for provider in reference["settlement_chain_evidence"][
+                "providers"
+            ]
+        ],
+        "fulfillment": {
+            "first_row": _raw_row(fulfillment["first_row"]),
+            "post_restart_row": _raw_row(
+                fulfillment["post_restart_row"]
+            ),
+            "first_release": _raw_paid_exchange(
+                fulfillment["first_release"]
+            ),
+            "exact_retry": _raw_paid_exchange(fulfillment["exact_retry"]),
+            "cross_binding_reuse": _raw_paid_exchange(
+                fulfillment["cross_binding_reuse"]
+            ),
+            "journal": {
+                "authoritative_database_id": reference_journal[
+                    "authoritative_database_id"
+                ],
+                "snapshots": {
+                    name: _raw_snapshot(
+                        reference_journal["snapshots"][name]
+                    )
+                    for name in (
+                        "after_first_release",
+                        "after_exact_retry",
+                        "after_cross_binding_reuse",
+                    )
+                },
+            },
+        },
+    }
+
+
 # Built once (the v3 proof verification is not free); every test deep-copies it.
 _BASE_BUNDLE = _build_capture_bundle()
 
@@ -520,7 +687,12 @@ def _bundle() -> dict[str, Any]:
 
 
 def test_capture_builds_self_verifying_official_x402_artifact() -> None:
-    document = build_official_x402_artifact(_bundle())
+    bundle = _bundle()
+    imported = bundle["imported_authorization"]
+    frozen_request = base64.b64decode(
+        imported["frozen_verify_request_body_base64"]
+    )
+    document = build_official_x402_artifact(bundle)
 
     # The generator recomputed the derived identity fields from raw inputs.
     binding = document["governance_binding"]
@@ -533,6 +705,12 @@ def test_capture_builds_self_verifying_official_x402_artifact() -> None:
     )
     assert binding["action_kind"] == "OfficialX402SettlementV1"
     assert document["release_order"]["v3_finalized_at"] == binding["finalized_at"]
+    assert base64.b64decode(
+        document["facilitator"]["verify"]["request_body_base64"]
+    ) == frozen_request
+    assert base64.b64decode(
+        document["facilitator"]["settle"]["request_body_base64"]
+    ) == frozen_request
 
     # And the accepted in-process adapter accepts the assembled artifact.
     raw = _canonical(document)
@@ -540,6 +718,21 @@ def test_capture_builds_self_verifying_official_x402_artifact() -> None:
     assert result["proof_type"] == "official_x402_settlement_v1"
     assert result["derived_facts"]["v3_finalized_exact"] is True
     assert all(check["passed"] is True for check in result["checks"])
+
+
+def test_capture_refuses_frozen_request_bytes_that_do_not_match_import() -> None:
+    bundle = _bundle()
+    imported = bundle["imported_authorization"]
+    frozen = bytearray(
+        base64.b64decode(imported["frozen_verify_request_body_base64"])
+    )
+    frozen[-1] ^= 1
+    corrupted = _ascii_b64(bytes(frozen))
+    imported["frozen_verify_request_body_base64"] = corrupted
+    imported["frozen_settle_request_body_base64"] = corrupted
+
+    with pytest.raises(CaptureError, match="frozen|request"):
+        build_official_x402_artifact(bundle)
 
 
 def test_capture_journal_snapshots_are_identical_and_root_bound() -> None:
@@ -633,9 +826,9 @@ def _mutate_provider_execution_error(bundle: dict[str, Any]) -> None:
 
 
 def _break_chainspec(bundle: dict[str, Any], phase: str) -> None:
-    readback = bundle["wcspr_readbacks"][phase]
-    readback["rpc_response_body_base64"] = _reencode(
-        readback["rpc_response_body_base64"],
+    readback = bundle["wcspr_readbacks"][phase]["rpc_transcript"]
+    readback["response_body_base64"] = _reencode(
+        readback["response_body_base64"],
         lambda responses: responses[0]["result"].__setitem__(
             "chainspec_name", "casper-main"
         ),
@@ -655,11 +848,15 @@ def _mutate_post_settle_readback(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_report_release_early(bundle: dict[str, Any]) -> None:
-    bundle["fulfillment"]["first_release_observed_at"] = "2026-07-22T20:23:59Z"
+    bundle["fulfillment"]["first_release"]["observed_at"] = (
+        "2026-07-22T20:23:59Z"
+    )
 
 
 def _mutate_cross_url_equals_resource(bundle: dict[str, Any]) -> None:
-    bundle["fulfillment"]["cross_binding"]["url"] = _REF["RESOURCE_URL"]
+    bundle["fulfillment"]["cross_binding_reuse"]["url"] = _REF[
+        "RESOURCE_URL"
+    ]
 
 
 def _mutate_restart_same_instance(bundle: dict[str, Any]) -> None:
@@ -669,7 +866,9 @@ def _mutate_restart_same_instance(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_retry_before_release(bundle: dict[str, Any]) -> None:
-    bundle["fulfillment"]["exact_retry_observed_at"] = "2026-07-22T20:25:05Z"
+    bundle["fulfillment"]["exact_retry"]["observed_at"] = (
+        "2026-07-22T20:25:05Z"
+    )
 
 
 def _mutate_journal_snapshot_instance(bundle: dict[str, Any]) -> None:
@@ -684,27 +883,27 @@ def _mutate_service_url(bundle: dict[str, Any]) -> None:
 # (id, mutation, expected substring in the fail-closed refusal message)
 _CAPTURE_MUTATIONS = (
     ("v3-proof", _mutate_v3_proof, "v3 proof"),
-    ("signature", _mutate_signature, "eip712_signature_verified"),
+    ("signature", _mutate_signature, "imported signature"),
     (
         "accepted-amount",
         _mutate_accepted_amount,
-        "authorization_equals_envelope_payer_payee_value_nonce_and_window",
+        "imported frozen request",
     ),
     (
         "accepted-timeout",
         _mutate_accepted_timeout,
-        "payment_requirements_hash_matches_envelope",
+        "imported frozen request",
     ),
     (
         "resource-description",
         _mutate_resource_description,
-        "signed_payment_payload_hash_matches_envelope",
+        "imported frozen request",
     ),
     ("report", _mutate_report, "report_hash_matches_envelope"),
     (
         "verify-is-valid",
         _mutate_verify_is_valid,
-        "facilitator_verify_returned_is_valid_true",
+        "self-verification",
     ),
     (
         "supported-kind",
@@ -714,7 +913,7 @@ _CAPTURE_MUTATIONS = (
     (
         "settle-success",
         _mutate_settle_success,
-        "facilitator_settlement_response_success_true",
+        "self-verification",
     ),
     ("settle-status", _mutate_settle_status, "did not return HTTP 200"),
     (
@@ -725,7 +924,7 @@ _CAPTURE_MUTATIONS = (
     (
         "provider-execution-error",
         _mutate_provider_execution_error,
-        "settlement_transaction_finalized_without_execution_error",
+        "self-verification",
     ),
     (
         "pre-verify-readback",
@@ -750,7 +949,7 @@ _CAPTURE_MUTATIONS = (
     (
         "cross-binding-url",
         _mutate_cross_url_equals_resource,
-        "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission",
+        "payment-signature",
     ),
     (
         "restart-instance",
@@ -797,3 +996,76 @@ def test_capture_output_is_canonical_and_writeonce(tmp_path: Path) -> None:
     assert out.read_bytes() == _canonical(document)
     with pytest.raises(Exception):
         _emit(document, str(out))
+
+
+def test_capture_requires_absolute_output_and_never_dumps_document(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.official_x402_capture import _emit
+
+    document = build_official_x402_artifact(_bundle())
+    with pytest.raises(CaptureError, match="absolute|output"):
+        _emit(document, None)
+    with pytest.raises(CaptureError, match="absolute|output"):
+        _emit(document, "relative.json")
+    assert "protected_report" not in capsys.readouterr().out
+
+    out = tmp_path / "artifact.json"
+    _emit(document, str(out))
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    stdout = capsys.readouterr().out
+    assert "protected_report" not in stdout
+    assert '"sha256"' in stdout
+
+
+def test_capture_refuses_missing_raw_paid_exchange() -> None:
+    bundle = _bundle()
+    del bundle["fulfillment"]["exact_retry"]
+    with pytest.raises(CaptureError):
+        build_official_x402_artifact(bundle)
+
+
+def test_capture_refuses_tampered_raw_paid_response() -> None:
+    bundle = _bundle()
+    body = bytearray(
+        base64.b64decode(
+            bundle["fulfillment"]["first_release"][
+                "response_body_base64"
+            ]
+        )
+    )
+    body[-1] ^= 1
+    bundle["fulfillment"]["first_release"]["response_body_base64"] = (
+        _ascii_b64(bytes(body))
+    )
+    with pytest.raises(CaptureError):
+        build_official_x402_artifact(bundle)
+
+
+def test_capture_refuses_tampered_raw_fulfillment_row() -> None:
+    bundle = _bundle()
+    row = bytearray(
+        base64.b64decode(
+            bundle["fulfillment"]["first_row"][
+                "row_canonical_json_base64"
+            ]
+        )
+    )
+    row[-1] ^= 1
+    bundle["fulfillment"]["first_row"]["row_canonical_json_base64"] = (
+        _ascii_b64(bytes(row))
+    )
+    with pytest.raises(CaptureError):
+        build_official_x402_artifact(bundle)
+
+
+def test_capture_refuses_tampered_raw_journal_backup() -> None:
+    bundle = _bundle()
+    slot = bundle["fulfillment"]["journal"]["snapshots"][
+        "after_exact_retry"
+    ]
+    raw = bytearray(base64.b64decode(slot["sqlite_backup_base64"]))
+    raw[-1] ^= 1
+    slot["sqlite_backup_base64"] = _ascii_b64(bytes(raw))
+    with pytest.raises(CaptureError):
+        build_official_x402_artifact(bundle)
