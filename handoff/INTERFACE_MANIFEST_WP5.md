@@ -1,10 +1,13 @@
 # INTERFACE MANIFEST — WP5 (official CSPR.cloud x402 settlement service)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `1c832f7` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` merge-blocker re-review fixes)
+- Producer commit: `2179eb0` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` resource-route transport invariant)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §6, §11, §12 "Official x402 local service v1", §13
-- Lane status: `npm ci` + typecheck clean; 281/281 vitest green x3 consecutive at `1c832f7` (incl. adversarial concurrency, stored-response-tampering, and terminal-invariant suites); `npm audit --audit-level=high` clean. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+- Lane status: `npm ci` + typecheck clean; 291/291 vitest green x3 consecutive at `2179eb0` (incl. adversarial concurrency, stored-response-tampering, terminal-invariant, and resource-transport suites); `npm audit --audit-level=high` clean. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+
+## Resource-route transport invariant (HTTP-surface blocker) — at `2179eb0`
+`GET /resource/:resourceId` can return a 2xx ONLY when the exact protected report bytes are released from a finalized, integrity-verified fulfillment row with a valid PAYMENT-RESPONSE header — true success and the exact idempotent retry are the only 200 report responses. Every non-release outcome maps non-2xx at the resource boundary: 402 payment/governance/settlement refusals (including protocol-shaped `ServiceRefusal(200)` codes such as `ungoverned_payload`, `blocked_upgrade_drift`, `settlement_execution_failed`, `post_settle_readback_failed` when surfaced via the resource route), 409 terminal binding conflicts, 429 throttled paid attempts, 503 pending/retryable, 500 ledger-integrity; residual sub-400 statuses are hard-coerced. The `/verify` + `/settle` wire semantics (protocol-shaped 200 refusal bodies) are UNCHANGED — the fix is the resource route's mapping layer. Paid resource attempts draw from the SAME per-client fixed-window settlement budget as `POST /settle` (throttle bypass closed). Pinned by ten HTTP-level tests (`test/server.test.ts` "protected resource transport invariant"): seven non-release outcomes each asserting non-2xx + no bytes + no PAYMENT-RESPONSE + no false release audit code, two positive release controls, one throttle test.
 
 ## Correction pass (post NO-GO review) — what changed at `929f4a2`
 - Readback fail-closed: `TransactionReadback.args` is mandatory; all EIGHT `transfer_with_authorization` args verified (exact CL type/ABI order, account-only Key variant, U256 value, validity window, nonce, public key, signature) + exact package/contract/transaction identity; `finalized:false` = resumable PENDING; lockStatus must be `Unlocked`.
