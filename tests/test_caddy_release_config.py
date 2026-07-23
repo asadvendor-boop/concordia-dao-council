@@ -71,6 +71,9 @@ def test_official_x402_host_exposes_only_frozen_method_path_pairs() -> None:
     assert "redir * /supported 308" in block
     assert "redir /supported 308" not in block
     assert block.count("reverse_proxy concordia-x402-official:8787") == 2
+    assert (
+        block.count("header_up X-Concordia-Client-IP {remote_host}") == 2
+    )
     assert 'respond "route_not_found" 404' in block
 
 

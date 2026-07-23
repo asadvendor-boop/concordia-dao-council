@@ -134,7 +134,10 @@
 		path /health /supported /resource/*
 	}
 	handle @x402_get {
-		reverse_proxy concordia-x402-official:8787
+		reverse_proxy concordia-x402-official:8787 {
+			# Caddy is the sole public ingress; overwrite any spoofed value.
+			header_up X-Concordia-Client-IP {remote_host}
+		}
 	}
 
 	@x402_post {
@@ -142,7 +145,10 @@
 		path /verify /settle
 	}
 	handle @x402_post {
-		reverse_proxy concordia-x402-official:8787
+		reverse_proxy concordia-x402-official:8787 {
+			# Keep settlement and paid-resource budgets isolated per real peer.
+			header_up X-Concordia-Client-IP {remote_host}
+		}
 	}
 
 	handle {
