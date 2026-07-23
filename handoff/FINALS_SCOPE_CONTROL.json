@@ -269,7 +269,7 @@
       ],
       "acceptance": [
         "The dynamic runtime inventory, rendered Compose, runtime images, full Caddy JSON, DNS, TLS, redirects, routes, APIs, console, and links match the release candidate.",
-        "Every submitted sslip alias remains healthy and YITING /mcp remains unchanged.",
+        "Every submitted sslip alias remains healthy and the pre-existing co-hosted /mcp route remains unchanged.",
         "Apex, www, docs, and x402 hosts expose only the approved surfaces."
       ],
       "evidence": [],
@@ -481,7 +481,7 @@
       "status": "pass",
       "required": "read-write release authority with sole-operator discipline",
       "evidence": [
-        "Alibaba Cloud Assistant access is available",
+        "Cloud-provider operator access is available",
         "Runtime inventory and Caddy 2.8 image were observed read-only",
         "Codex is the sole release operator"
       ],
@@ -606,7 +606,7 @@
       "status": "blocking",
       "required": [
         "Add and lock the real pypdf runtime dependency before PDF validation can be accepted.",
-        "Bind rendered Compose secret grants, runtime image identity, runtime configuration, exact Caddy JSON, YITING /mcp continuity, HTTP, TLS, DNS, Pages, npm registry provenance, two independent Casper RPC observations, and proof lineage to one release candidate.",
+        "Bind rendered Compose secret grants, runtime image identity, runtime configuration, exact Caddy JSON, pre-existing co-hosted /mcp continuity, HTTP, TLS, DNS, Pages, npm registry provenance, two independent Casper RPC observations, and proof lineage to one release candidate.",
         "Reject symlink outputs, unsanitized commands or environment details, marker-only evidence, self-attested proof booleans, unresolved OpenAPI schemas, unstable observation timestamps, and credential-bearing payloads.",
         "Require byte-exact no-whitespace Caddy secret-file preflight without displaying values.",
         "Verify deep route-specific response predicates rather than substring markers, and bind the exact Pages deployment status and deployed commit.",

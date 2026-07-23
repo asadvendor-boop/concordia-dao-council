@@ -7,6 +7,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from scripts.check_repo_hygiene import BLOCKED
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL = ROOT / "handoff/FINALS_SCOPE_CONTROL.json"
@@ -162,6 +164,12 @@ def _control() -> dict[str, object]:
 
 def _joined(value: object) -> str:
     return json.dumps(value, sort_keys=True).lower().replace("-", " ")
+
+
+def test_scope_control_contains_no_cross_project_identifiers() -> None:
+    text = CONTROL.read_text(encoding="utf-8")
+
+    assert [term for term in BLOCKED if term in text] == []
 
 
 def test_scope_control_is_bound_to_the_g1_manifest_authority() -> None:
