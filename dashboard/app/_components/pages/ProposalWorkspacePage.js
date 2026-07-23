@@ -19,6 +19,7 @@ import {
   getCard,
   getCardData,
   getProfile,
+  isAuthorizedApproval,
   inferMessageRole,
   messageBadge,
   navHref,
@@ -55,11 +56,18 @@ export function ProposalWorkspacePage({ data }) {
   const proposal = data.selectedProposal;
   const cards = data.evidence?.cards || [];
   const facts = deriveProposalFacts(proposal, data.evidence);
-  const workflow = deriveWorkflow(cards, proposal?.state);
+  const workflow = deriveWorkflow(cards, proposal?.state, proposal?.proposal_id);
   const handoffs = deriveHandoffs(cards);
   const activeHandoff = handoffs[handoffs.length - 1];
   const participants = ["rowan", "mercer", "verity", "alden", "locke", "core"];
-  const actions = proposal ? <>{getCard(cards, "ResponsePlan", true) && !getCard(cards, "StructuredApproval", true) && <PrimaryButton icon="approval" href={navHref("/approvals", proposal.proposal_id)}>Review Approval</PrimaryButton>}<PrimaryButton tone="secondary" icon="download" onClick={() => downloadEvidence(data.evidence, proposal.proposal_id)}>Export Evidence</PrimaryButton></> : null;
+  // The Review Approval CTA is suppressed ONLY by a genuine authorization
+  // (explicit affirmative decision bound to this proposal and the sealed plan
+  // hash). Rejected, unknown, unbound or malformed approvals never suppress
+  // the CTA — a mere StructuredApproval presence proves nothing.
+  const planCard = getCard(cards, "ResponsePlan", true);
+  const approvalCard = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
+  const approvalAuthorized = isAuthorizedApproval(approvalCard, proposal?.proposal_id, planCard);
+  const actions = proposal ? <>{planCard && !approvalAuthorized && <PrimaryButton icon="approval" href={navHref("/approvals", proposal.proposal_id)}>Review Approval</PrimaryButton>}<PrimaryButton tone="secondary" icon="download" onClick={() => downloadEvidence(data.evidence, proposal.proposal_id)}>Export Evidence</PrimaryButton></> : null;
   return <>
     <PageHeader title={proposal ? facts.title : "Proposal Workspace"} subtitle={proposal ? `${proposal.proposal_id} · ${facts.service} · ${facts.environment}` : "Select a proposal to inspect its Council Chamber."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill></div>} actions={actions} />
     <div className="page-toolbar"><ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} /><div className="toolbar-status">{data.roomMeta?.updatedAt ? `Council Chamber updated ${formatTime(data.roomMeta.updatedAt)}` : "Waiting for Council Chamber data"}</div></div>

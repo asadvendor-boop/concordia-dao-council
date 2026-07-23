@@ -9,6 +9,9 @@ import {
   deriveHandoffs,
   getCard,
   getProfile,
+  isAuthorizedApproval,
+  isDeniedApproval,
+  isReceiptVerified,
   navHref,
   normalizeRole,
 } from "../lib";
@@ -49,7 +52,16 @@ export function AgentsPage({ data }) {
   const cards = data.evidence?.cards || [];
   const handoffs = deriveHandoffs(cards);
   const recent = handoffs.slice(-4).reverse();
-  const activityByRole = { rowan: getCard(cards, "TriageDecision") ? "Proposal intake complete" : "Monitoring proposal intake", mercer: getCard(cards, "Assessment", true) ? "Evidence analysis complete" : "Ready for evidence analysis", verity: getCard(cards, "Verdict", true) ? "Independent review complete" : "Ready to challenge conclusions", alden: getCard(cards, "ResponsePlan", true) ? (getCard(cards, "StructuredApproval", true) ? "Plan authorized" : "Awaiting human approval") : "Ready to construct a response plan", locke: getCard(cards, "CasperExecutionReceipt", true) ? "Governance execution and receipt complete" : "Ready to execute · blocked until authorized", core: "Recording state and evidence chain", wells: "Presents the governance archive · non-reasoning persona" };
+  // No presence-based success labels: "Plan authorized" requires the explicit
+  // affirmative + bound approval predicate, and "Governance execution and
+  // receipt complete" requires a positively verified receipt. Unknown,
+  // rejected, unbound or unverified cards render honest non-complete labels.
+  const planCard = getCard(cards, "ResponsePlan", true);
+  const approvalCard = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
+  const receiptCard = getCard(cards, "CasperExecutionReceipt", true);
+  const planAuthorized = isAuthorizedApproval(approvalCard, data.selectedId, planCard);
+  const receiptVerified = isReceiptVerified(receiptCard);
+  const activityByRole = { rowan: getCard(cards, "TriageDecision") ? "Proposal intake complete" : "Monitoring proposal intake", mercer: getCard(cards, "Assessment", true) ? "Evidence analysis complete" : "Ready for evidence analysis", verity: getCard(cards, "Verdict", true) ? "Independent review complete" : "Ready to challenge conclusions", alden: planCard ? (planAuthorized ? "Plan authorized" : isDeniedApproval(approvalCard) ? "Authorization rejected" : "Awaiting human approval") : "Ready to construct a response plan", locke: receiptVerified ? "Governance execution and receipt complete" : receiptCard ? "Receipt recorded · verification not confirmed" : "Ready to execute · blocked until authorized", core: "Recording state and evidence chain", wells: "Presents the governance archive · non-reasoning persona" };
   const lastHandoffFor = (role) => { const item = [...handoffs].reverse().find((handoff) => handoff.from === role || handoff.to === role); return item ? `${getProfile(item.from).name} → ${getProfile(item.to).name}` : null; };
   const skillsEyebrow = data.skills.length ? `${data.skills.length} deterministic MCP-style contracts` : "Deterministic MCP-style contracts";
   return <>

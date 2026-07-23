@@ -105,9 +105,21 @@ test.describe("WP7 two-step demo capability protocol", () => {
       posted.capability = route.request().postDataJSON();
       return json(route, { capability: "cap-test-123", scenario_id: posted.capability?.scenario_id });
     });
+    // DELIBERATE MIGRATION (WP7 release blocker 8): the activation mock now
+    // returns the frozen WP3 demo-run-v1 body — status:"started" plus
+    // created_proposal_ids[] — instead of the legacy scalar {proposal_id}
+    // shape the API never returns. The request-shape assertions below are
+    // unchanged (not weakened).
     await page.route("**/api/demo/activate", (route) => {
       posted.activate = route.request().postDataJSON();
-      return json(route, { proposal_id: "DAO-PROP-DEMO-NEW", target: "defi-treasury" });
+      return json(route, {
+        schema_version: "demo-run-v1",
+        status: "started",
+        demo_run_id: "demo-run-test-1",
+        scenario_id: "defi-treasury",
+        is_demo: true,
+        created_proposal_ids: ["DAO-PROP-DEMO-NEW"],
+      });
     });
 
     await page.goto("/dashboard", { waitUntil: "domcontentloaded" });

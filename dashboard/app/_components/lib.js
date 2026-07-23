@@ -356,7 +356,7 @@ export function deriveProposalFacts(proposal, evidence) {
   };
 }
 
-export function deriveWorkflow(cards = [], proposalState = "") {
+export function deriveWorkflow(cards = [], proposalState = "", proposalId = "") {
   const byType = (type) => cards.filter((card) => card.card_type === type);
   const verdicts = byType("Verdict");
   const assessments = byType("Assessment");
@@ -367,6 +367,12 @@ export function deriveWorkflow(cards = [], proposalState = "") {
   const approval = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
   const receipt = getCard(cards, "CasperExecutionReceipt", true);
   const terminal = TERMINAL_STATES.has(String(proposalState).toUpperCase());
+  // Fail-closed step predicates (shared with deriveLifecycle): Authorization is
+  // complete only from the explicit authorized-approval predicate, and
+  // Execution/Receipt only from a positively verified receipt. Card presence,
+  // unknown decisions, rejections and unbound approvals never complete a step.
+  const authorized = isAuthorizedApproval(approval, proposalId, plan);
+  const executed = isReceiptVerified(receipt);
   const steps = [
     { id: "detected", label: "Detected", done: Boolean(getCard(cards, "ProposalCard")) },
     { id: "rowan", label: "Sentinel", done: Boolean(getCard(cards, "TriageDecision")) },
@@ -374,9 +380,9 @@ export function deriveWorkflow(cards = [], proposalState = "") {
     { id: "challenge", label: "Challenge", done: Boolean(challenge), skipped: Boolean(confirmation && !challenge), tone: challenge ? "warning" : "info" },
     { id: "revision", label: "Revision", done: Boolean(revision), skipped: Boolean(confirmation && !challenge) },
     { id: "plan", label: "Plan", done: Boolean(plan) },
-    { id: "authorization", label: "Authorization", done: Boolean(approval) },
-    { id: "execution", label: "Execution", done: Boolean(receipt) },
-    { id: "receipt", label: "Receipt", done: Boolean(receipt) && terminal },
+    { id: "authorization", label: "Authorization", done: authorized },
+    { id: "execution", label: "Execution", done: executed },
+    { id: "receipt", label: "Receipt", done: executed && terminal },
   ];
   let currentIndex = steps.findIndex((step) => !step.done && !step.skipped);
   if (currentIndex < 0) currentIndex = steps.length - 1;
@@ -385,21 +391,26 @@ export function deriveWorkflow(cards = [], proposalState = "") {
 
 // Seven-step proposal lifecycle for the Overview control room. Every "done"
 // flag derives from a real sealed evidence card — nothing is asserted without
-// a recorded card backing it.
-export function deriveLifecycle(cards = []) {
+// a recorded card backing it, and the Approved/Executed steps additionally
+// require the shared fail-closed predicates (explicit affirmative bound
+// approval, positively verified receipt), never card presence.
+export function deriveLifecycle(cards = [], proposalId = "") {
   const verdicts = (cards || []).filter((card) => card.card_type === "Verdict");
   const challenge = verdicts.find((card) => getCardData(card).decision === "CHALLENGE");
   const confirmation = [...verdicts].reverse().find((card) => getCardData(card).decision === "CONFIRM");
+  const plan = getCard(cards, "ResponsePlan", true);
   const approval = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
   const receipt = getCard(cards, "CasperExecutionReceipt", true);
+  const authorized = isAuthorizedApproval(approval, proposalId, plan);
+  const executed = isReceiptVerified(receipt);
   const steps = [
     { id: "detected", label: "Detected", done: Boolean(getCard(cards, "ProposalCard")) },
     { id: "triaged", label: "Triaged", done: Boolean(getCard(cards, "TriageDecision")) },
     { id: "assessed", label: "Assessed", done: cards.some((card) => card.card_type === "Assessment") },
     { id: "challenged", label: "Challenged", done: Boolean(challenge), skipped: Boolean(confirmation && !challenge), tone: challenge ? "warning" : "info" },
-    { id: "planned", label: "Planned", done: Boolean(getCard(cards, "ResponsePlan", true)) },
-    { id: "approved", label: "Approved", done: Boolean(approval) },
-    { id: "executed", label: "Executed", done: Boolean(receipt) },
+    { id: "planned", label: "Planned", done: Boolean(plan) },
+    { id: "approved", label: "Approved", done: authorized },
+    { id: "executed", label: "Executed", done: executed },
   ];
   let currentIndex = steps.findIndex((step) => !step.done && !step.skipped);
   if (currentIndex < 0) currentIndex = steps.length - 1;
@@ -460,6 +471,31 @@ export function isReceiptVerified(card) {
   const observations = (data.timeline || []).filter((event) => typeof event?.receipt_verified === "boolean");
   const last = observations[observations.length - 1];
   return last?.receipt_verified === true;
+}
+// Shared fail-closed binding predicates. Binding is only ever proven by
+// explicit field equality against the sealed evidence — a MISSING proposal_id
+// or plan hash is NOT a match, and no card type (including PolicyAuthorization)
+// is exempt.
+export function isApprovalBoundToProposal(card, proposalId) {
+  if (!card || !proposalId) return false;
+  const data = getCardData(card);
+  return Boolean(data.proposal_id) && String(data.proposal_id) === String(proposalId);
+}
+export function isApprovalBoundToPlan(card, planCard) {
+  if (!card || !planCard?.hash) return false;
+  const data = getCardData(card);
+  const planHash = data.plan_hash || data.plan_hash_hex;
+  return Boolean(planHash) && String(planHash) === String(planCard.hash);
+}
+// Single shared authorization predicate used by every page and by
+// deriveWorkflow/deriveLifecycle: an approval authorizes execution ONLY from an
+// explicit affirmative decision that is bound to THIS proposal and to the exact
+// sealed plan hash. Unknown, rejected, unbound or malformed approvals never
+// authorize — card presence proves nothing.
+export function isAuthorizedApproval(card, proposalId, planCard) {
+  return isAffirmativeApproval(card)
+    && isApprovalBoundToProposal(card, proposalId)
+    && isApprovalBoundToPlan(card, planCard);
 }
 
 export function cardSummary(card) {

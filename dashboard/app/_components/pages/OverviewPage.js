@@ -20,6 +20,9 @@ import {
   formatPercent,
   getCard,
   isActiveProposal,
+  isAuthorizedApproval,
+  isDeniedApproval,
+  isReceiptVerified,
   navHref,
   shortHash,
   stateLabel,
@@ -77,13 +80,18 @@ function DemoModal({ open, onClose, data }) {
     { id: "policy", name: "Protocol Drift", description: "Full pipeline · strategy deviates from DAO policy", icon: "activity" },
     { id: "credential", name: "RWA Credential Expiry", description: "Full pipeline · RWA attestation credential nearing expiry", icon: "shield" },
   ];
-  // Frozen demo-capability protocol (demo capability v1): the browser NEVER
-  // posts {scenario_type} and never holds an operator token. It (1) requests a
-  // short-lived capability bound to this scenario + client cookie, then (2)
-  // activates that exact capability. There is no public reset path. Replay of a
-  // consumed capability is idempotent (the Gateway returns the stored run), a
-  // 202 means the scenario is accepted and building, and every failure surfaces
-  // an honest error — nothing is asserted as started unless the Gateway said so.
+  // Frozen demo-capability protocol (demo capability v1 / WP3 demo-run-v1): the
+  // browser NEVER posts {scenario_type} and never holds an operator token. It
+  // (1) requests a short-lived capability bound to this scenario + client
+  // cookie, then (2) activates that exact capability. There is no public reset
+  // path. The activation contract is the frozen WP3 schema: a fresh run is
+  // `status:"started"`, a replay of a consumed capability is
+  // `status:"idempotent_replay"` (NEVER presented as a fresh start), a
+  // concurrent in-flight retry is a documented 202 `status:"running"`, a stored
+  // FAILED terminal replays `status:"failed"` with its honest error, and
+  // proposal ids come ONLY from `created_proposal_ids[]` — the API returns no
+  // scalar `proposal_id`. Nothing is asserted as started unless the Gateway
+  // said so.
   const fire = async (scenarioId) => {
     if (CONCORDIA_MODE === "reviewer") {
       data.setToast({ type: "info", message: "Live mutations are disabled in Public Review Mode. Open Runs & Replay instead." });
@@ -99,21 +107,36 @@ function DemoModal({ open, onClose, data }) {
       }
       const activateResponse = await fetch(`${ASSET_BASE}/api/demo/activate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ capability: capability.capability, scenario_id: scenarioId }) });
       const result = await activateResponse.json().catch(() => ({}));
-      if (activateResponse.status === 202) {
-        data.setToast({ type: "info", message: `Scenario accepted and is starting${result.proposal_id ? ` · ${result.proposal_id}` : ""}. It will appear once the council chain is created.` });
+      if (activateResponse.status === 202 && result.status === "running") {
+        // Documented WP3 202: the same run identity is still in flight. Nothing
+        // fresh was started, so no proposal is asserted or selected.
+        data.setToast({ type: "info", message: `This scenario is still running${result.demo_run_id ? ` · ${result.demo_run_id}` : ""}. It will appear once the council chain is created.` });
         await data.refreshBase(true);
-        if (result.proposal_id) data.selectProposal(result.proposal_id);
         onClose();
         return;
       }
+      if (result.status === "failed") {
+        // Stored FAILED terminal replay — surface the stored honest error.
+        throw new Error(result.error || "The recorded demo run for this scenario ended in failure.");
+      }
       if (!activateResponse.ok || result.error) throw new Error(result.error || `Activation returned ${activateResponse.status}`);
-      const idempotent = result.status === "already_activated" || result.idempotent === true || result.replayed === true;
-      data.setToast({ type: "success", message: `${result.proposal_id || "Proposal"} ${idempotent ? "already active — showing the existing run" : "started"} · ${result.target || scenarioId} is entering the full proposal pipeline.` });
+      // Frozen WP3 contract: the selected proposal derives from
+      // created_proposal_ids[0]; there is no scalar proposal id field.
+      const createdProposalIds = (Array.isArray(result.created_proposal_ids) ? result.created_proposal_ids : []).filter(Boolean);
+      const selectedProposalId = createdProposalIds[0] || null;
+      const idempotentReplay = result.status === "idempotent_replay";
+      if (result.status !== "started" && !idempotentReplay) {
+        // Fail-closed: an unrecognized success body never claims a started run.
+        throw new Error("The Gateway did not report a started demo run.");
+      }
+      data.setToast(idempotentReplay
+        ? { type: "info", message: `${selectedProposalId || "This scenario"} is already active — showing the existing run. No new pipeline was started.` }
+        : { type: "success", message: `${selectedProposalId || "Proposal"} started · ${result.scenario_id || scenarioId} is entering the full proposal pipeline.` });
       await data.refreshBase(true);
-      if (result.proposal_id) data.selectProposal(result.proposal_id);
+      if (selectedProposalId) data.selectProposal(selectedProposalId);
       onClose();
-    } catch {
-      data.setToast({ type: "error", message: "The scenario could not be started. Check the Gateway and Council mesh connection." });
+    } catch (error) {
+      data.setToast({ type: "error", message: error?.message ? `The scenario could not be started: ${error.message}` : "The scenario could not be started. Check the Gateway and Council mesh connection." });
     } finally { setFiring(null); }
   };
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -135,7 +158,7 @@ export function OverviewPage({ data }) {
   const activeEvidence = activeProposal?.proposal_id === data.selectedId ? data.evidence : null;
   const cards = activeEvidence?.cards || [];
   const facts = deriveProposalFacts(activeProposal, activeEvidence);
-  const lifecycle = deriveLifecycle(cards);
+  const lifecycle = deriveLifecycle(cards, activeProposal?.proposal_id);
   const eventFeed = cards.slice(-5).reverse();
   const showBaseIssue = useDelayedFlag(Boolean(data.baseError), 10000);
   const showRoomIssue = useDelayedFlag(Boolean(data.roomError), 10000);
@@ -208,18 +231,33 @@ export function OverviewPage({ data }) {
           const verdict = getCard(cards, "Verdict", true);
           const assessment = getCard(cards, "Assessment", true);
           const plan = getCard(cards, "ResponsePlan", true);
-          const approval = getCard(cards, "StructuredApproval", true);
+          const approval = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
           const receipt = getCard(cards, "CasperExecutionReceipt", true);
+          // No presence-based success: "Authorized" requires the explicit
+          // affirmative + bound approval predicate, and "Execution complete"
+          // requires a positively verified receipt. Unknown/rejected/unbound/
+          // unverified cards never render a success cue.
+          const planAuthorized = isAuthorizedApproval(approval, activeProposal?.proposal_id, plan);
+          const approvalRejected = isDeniedApproval(approval);
+          const receiptVerified = isReceiptVerified(receipt);
           const byRole = {
             mercer: { status: assessment ? "Assessment ready" : "Standing by", tone: assessment ? "info" : "muted" },
             verity: { status: verdict ? "Review complete" : "Standing by", tone: verdict ? "success" : "muted" },
-            alden: { status: plan ? (approval ? "Authorized" : "Awaiting human") : "Standing by", tone: plan && !approval ? "warning" : plan ? "success" : "muted" },
-            locke: { status: receipt ? "Execution complete" : "Standing by", tone: receipt ? "success" : "muted" },
+            alden: {
+              status: plan ? (planAuthorized ? "Authorized" : approvalRejected ? "Authorization rejected" : "Awaiting human") : "Standing by",
+              tone: plan ? (planAuthorized ? "success" : approvalRejected ? "danger" : "warning") : "muted",
+            },
+            locke: {
+              status: receiptVerified ? "Execution complete" : receipt ? "Receipt recorded · unverified" : "Standing by",
+              tone: receiptVerified ? "success" : receipt ? "info" : "muted",
+            },
           };
           const entry = byRole[role];
           return entry ? <AgentMiniRow key={role} role={role} status={entry.status} tone={entry.tone} /> : null;
         })}</div></Panel>
-        <Panel title="Protocol health" eyebrow="Control plane"><div className="health-list"><div><span className="health-icon"><Icon name="shield" size={17} /></span><span><strong>Gateway</strong><small>Deterministic policy plane</small></span><StatusPill tone={showBaseIssue ? "muted" : "success"} compact>{showBaseIssue ? "Reconnecting" : "Operational"}</StatusPill></div><div><span className="health-icon"><Icon name="network" size={17} /></span><span><strong>Council Chambers</strong><small>Shared collaboration layer</small></span><StatusPill tone={showRoomIssue ? "muted" : "info"} compact>{showRoomIssue ? "Reconnecting" : "Connected"}</StatusPill></div><div><span className="health-icon"><Icon name="activity" size={17} /></span><span><strong>Proposal simulator</strong><small>Synthetic DAO treasury feed</small></span><StatusPill tone={activeProposal && isActiveProposal(activeProposal) ? "warning" : "success"} compact>{activeProposal && isActiveProposal(activeProposal) ? "Proposal active" : "Healthy"}</StatusPill></div><div><span className="health-icon"><Icon name="link" size={17} /></span><span><strong>Evidence chain</strong><small>Sealed and ordered cards</small></span><StatusPill tone={activeEvidence?.chain_valid === false ? "danger" : activeEvidence ? "success" : "muted"} compact>{activeEvidence ? activeEvidence.chain_valid === false ? "Invalid" : "Valid" : "Waiting"}</StatusPill></div></div></Panel>
+        <Panel title="Protocol health" eyebrow="Control plane"><div className="health-list"><div><span className="health-icon"><Icon name="shield" size={17} /></span><span><strong>Gateway</strong><small>Deterministic policy plane</small></span><StatusPill tone={showBaseIssue ? "muted" : "success"} compact>{showBaseIssue ? "Reconnecting" : "Operational"}</StatusPill></div><div><span className="health-icon"><Icon name="network" size={17} /></span><span><strong>Council Chambers</strong><small>Shared collaboration layer</small></span><StatusPill tone={showRoomIssue ? "muted" : "info"} compact>{showRoomIssue ? "Reconnecting" : "Connected"}</StatusPill></div><div><span className="health-icon"><Icon name="activity" size={17} /></span><span><strong>Proposal simulator</strong><small>Synthetic DAO treasury feed</small></span><StatusPill tone={activeProposal && isActiveProposal(activeProposal) ? "warning" : "success"} compact>{activeProposal && isActiveProposal(activeProposal) ? "Proposal active" : "Healthy"}</StatusPill></div>{/* Three-state chain validity: ONLY an explicit chain_valid === true renders
+    the green "Valid" cue; an explicit false is "Invalid"; a missing/unknown
+    value renders an honest non-green "Unverified". */}<div><span className="health-icon"><Icon name="link" size={17} /></span><span><strong>Evidence chain</strong><small>Sealed and ordered cards</small></span><StatusPill tone={activeEvidence?.chain_valid === true ? "success" : activeEvidence?.chain_valid === false ? "danger" : "muted"} compact>{activeEvidence ? activeEvidence.chain_valid === true ? "Valid" : activeEvidence.chain_valid === false ? "Invalid" : "Unverified" : "Waiting"}</StatusPill></div></div></Panel>
       </div>
     </div>
     <Panel title="Recent verified runs" eyebrow="Measured outcomes" action={<Link className="text-link" href={navHref("/runs", data.selectedId)}>Open replay library <Icon name="chevronRight" size={15} /></Link>}><RecentRunsTable runSummary={data.runSummary} proposals={data.proposals} onSelect={(id) => data.selectProposal(id)} /></Panel>

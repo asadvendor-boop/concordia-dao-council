@@ -18,6 +18,8 @@ import {
   getCardData,
   getProfile,
   humanizeCardData,
+  isAffirmativeApproval,
+  isDeniedApproval,
   isReceiptVerified,
   publicJson,
   sanitizeDisplayText,
@@ -71,7 +73,6 @@ export function EvidencePage({ data }) {
         : "unknown";
   const chainValid = chainState === "valid";
   const receipt = getCard(cards, "CasperExecutionReceipt", true);
-  const approval = getCard(cards, "StructuredApproval", true) || getCard(cards, "PolicyAuthorization", true);
   const executionVerified = run?.receipt_verified === true || isReceiptVerified(receipt);
   // Each verification check renders ONLY from its own observed field — the
   // generic chain_valid boolean proves chain integrity and nothing else.
@@ -88,7 +89,13 @@ export function EvidencePage({ data }) {
   const exactMatch = collaboration.execution_conflict_control?.exact_match;
   const evidenceHandoffs = collaboration.handoff_count ?? handoffs;
   const evidenceChallenges = collaboration.challenge_count ?? challengeCount;
-  const evidenceHumanDecisions = collaboration.human_decision_count ?? (approval ? 1 : 0);
+  // Explicit decision predicate only: a "Multisig decision" is counted from a
+  // recorded explicit human decision (affirmative or denial) on a
+  // StructuredApproval card — approval-card PRESENCE is never a decision. When
+  // the gateway reports no human_decision_count and no evidence has loaded,
+  // the value is honestly unavailable ("—"), never a substituted count.
+  const explicitMultisigDecisions = cards.filter((card) => card.card_type === "StructuredApproval" && (isAffirmativeApproval(card) || isDeniedApproval(card))).length;
+  const evidenceHumanDecisions = collaboration.human_decision_count ?? (data.evidence ? explicitMultisigDecisions : null);
   const proposalFamily = firstDefined(run?.proposal_family, data.evidence?.proposal_family);
   const signalTarget = firstDefined(run?.signal_service, data.evidence?.signal_service);
   const facts = deriveProposalFacts(proposal, data.evidence);
@@ -113,7 +120,7 @@ export function EvidencePage({ data }) {
             ["Authorization consumed once", authorizationConsumed],
             ["Receipt positively verified", executionVerified],
           ].map(([label, ok]) => <div key={label} className={cx(ok ? "pass" : "pending")}><Icon name={ok ? "check" : "clock"} size={15} /><span>{label}</span>{!ok && <em className="verification-unavailable">unavailable</em>}</div>)}</div></Panel>
-          <Panel title="Run Summary" eyebrow="Measured from sealed evidence"><div className="summary-metric-grid"><div><span>Proposal family</span><strong>{displayFamily(proposalFamily)}</strong></div><div><span>Proposal target</span><strong>{signalTarget || "—"}</strong></div><div><span>Proposal duration</span><strong>{formatDuration(run?.total_resolution_secs)}</strong></div><div><span>Handoffs</span><strong>{run?.handoffs ?? evidenceHandoffs}</strong></div><div><span>Challenges</span><strong>{run?.challenges ?? evidenceChallenges}</strong></div><div><span>Multisig decisions</span><strong>{run?.human_interventions ?? evidenceHumanDecisions}</strong></div><div className={exactMatch === true ? "summary-accent-success" : exactMatch === false ? "summary-accent-danger" : "summary-accent-muted"}><span>Execution conflict control</span><strong>{exactMatch === true ? "Exact match" : exactMatch === false ? "Mismatch blocked" : "Unavailable"}</strong></div><div className={executionVerified ? "summary-accent-success" : "summary-accent-muted"}><span>Execution verified</span><strong>{executionVerified ? "Yes" : "Unavailable"}</strong></div></div><p className="summary-footnote">Only values available from current sealed evidence are shown; no unsupported savings or ROI estimates are inferred.</p></Panel>
+          <Panel title="Run Summary" eyebrow="Measured from sealed evidence"><div className="summary-metric-grid"><div><span>Proposal family</span><strong>{displayFamily(proposalFamily)}</strong></div><div><span>Proposal target</span><strong>{signalTarget || "—"}</strong></div><div><span>Proposal duration</span><strong>{formatDuration(run?.total_resolution_secs)}</strong></div><div><span>Handoffs</span><strong>{run?.handoffs ?? evidenceHandoffs}</strong></div><div><span>Challenges</span><strong>{run?.challenges ?? evidenceChallenges}</strong></div><div><span>Multisig decisions</span><strong>{run?.human_interventions ?? evidenceHumanDecisions ?? "—"}</strong></div><div className={exactMatch === true ? "summary-accent-success" : exactMatch === false ? "summary-accent-danger" : "summary-accent-muted"}><span>Execution conflict control</span><strong>{exactMatch === true ? "Exact match" : exactMatch === false ? "Mismatch blocked" : "Unavailable"}</strong></div><div className={executionVerified ? "summary-accent-success" : "summary-accent-muted"}><span>Execution verified</span><strong>{executionVerified ? "Yes" : "Unavailable"}</strong></div></div><p className="summary-footnote">Only values available from current sealed evidence are shown; no unsupported savings or ROI estimates are inferred.</p></Panel>
         </aside>
       </div>
       {data.rules.length > 0 && <Panel title="Active suppression controls" eyebrow="Bounded false-alarm policy"><div className="suppression-list">{data.rules.map((rule) => <div key={rule.id || rule.fingerprint}><span className="suppression-icon"><Icon name="shield" size={17} /></span><span><strong className="mono">{shortHash(rule.fingerprint, 18, 8)}</strong><small>{rule.reason || "Human-reviewed false-alarm suppression"}</small></span><div><StatusPill tone="info" compact>{rule.suppression_count || 0} / {rule.max_suppressions || 3} used</StatusPill><small>{rule.expires_at ? `Expires ${formatDateTime(rule.expires_at)}` : "No expiry configured"}</small></div></div>)}</div></Panel>}

@@ -1,10 +1,12 @@
 // Approvals: exact action envelope review and the human authorization boundary.
+import { useEffect, useState } from "react";
 import {
   CARD_LABELS,
   CARD_ROLE,
   CONCORDIA_MODE,
   actionEnvelopeText,
   alteredEnvelope,
+  api,
   cardBadge,
   cardSummary,
   cardTone,
@@ -14,7 +16,7 @@ import {
   getCardData,
   getProfile,
   governancePlaybook,
-  isAffirmativeApproval,
+  isAuthorizedApproval,
   isDeniedApproval,
   isReceiptVerified,
   navHref,
@@ -39,27 +41,31 @@ export function ApprovalPage({ data }) {
   const receipt = getCard(cards, "CasperExecutionReceipt", true);
   const firstEnvelope = envelopes[0];
   const altered = alteredEnvelope(firstEnvelope);
-  // Authorization is NEVER inferred from card presence. It requires an
-  // affirmative decision, that the approval is bound to THIS proposal and the
-  // exact sealed plan/action hash, and — for one-time consumption — a
-  // positively verified Casper receipt. A rejected or unbound approval is not
-  // authorized.
-  const approvalData = getCardData(approvalCard);
-  // Explicit proposal binding: the approval must carry a proposal_id equal to
-  // THIS proposal's id. A missing proposal_id is NOT a match.
-  const approvalProposalMatches = Boolean(approvalData.proposal_id)
-    && Boolean(proposal?.proposal_id)
-    && String(approvalData.proposal_id) === String(proposal.proposal_id);
-  const approvalPlanHash = approvalData.plan_hash || approvalData.plan_hash_hex;
-  // Exact plan-hash binding: the approval must carry the sealed plan hash and
-  // it must equal the sealed ResponsePlan card hash. A missing hash is NOT
-  // bound — no card type (including PolicyAuthorization) is exempt.
-  const approvalPlanBinding = Boolean(planCard)
-    && Boolean(approvalPlanHash)
-    && String(approvalPlanHash) === String(planCard.hash);
+  // Authorization is NEVER inferred from card presence. The shared fail-closed
+  // predicate (lib.js isAuthorizedApproval) requires an affirmative decision
+  // bound to THIS proposal and the exact sealed plan hash — a missing
+  // proposal_id or plan hash is NOT a match, and no card type (including
+  // PolicyAuthorization) is exempt. One-time consumption additionally requires
+  // a positively verified Casper receipt.
   const approvalRejected = Boolean(approvalCard) && isDeniedApproval(approvalCard);
-  const approvalAuthorized = Boolean(approvalCard) && isAffirmativeApproval(approvalCard) && approvalProposalMatches && approvalPlanBinding;
+  const approvalAuthorized = isAuthorizedApproval(approvalCard, proposal?.proposal_id, planCard);
   const approvalConsumedOnce = approvalAuthorized && isReceiptVerified(receipt);
+  // Observed refusal evidence for the deterministic guard preview. The
+  // "Blocked before execution" outcome renders ONLY when the gateway reports a
+  // genuine recorded refusal artifact (adversarial safety demo with an explicit
+  // blocked status); an envelope's mere existence proves nothing was blocked.
+  const [refusalArtifact, setRefusalArtifact] = useState(null);
+  const refusalProposalId = proposal?.proposal_id || "";
+  useEffect(() => {
+    setRefusalArtifact(null);
+    if (!refusalProposalId) return undefined;
+    let cancelled = false;
+    api(`/adversarial-safety-demo/${encodeURIComponent(refusalProposalId)}`)
+      .then((value) => { if (!cancelled) setRefusalArtifact(value); })
+      .catch(() => { if (!cancelled) setRefusalArtifact(null); });
+    return () => { cancelled = true; };
+  }, [refusalProposalId]);
+  const refusalObserved = refusalArtifact?.status === "blocked";
   const approvalHistoryCards = cards.filter((card) => ["Assessment", "Verdict", "ResponsePlan", "StructuredApproval", "PolicyAuthorization", "CasperExecutionReceipt"].includes(card.card_type));
   return <>
     <PageHeader title="Review Exact Governance execution" subtitle={proposal ? `${facts.title} · ${proposal.proposal_id}` : "Human authorization is bound to an exact typed action envelope."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill></div>} actions={<ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} />} />
@@ -80,7 +86,9 @@ export function ApprovalPage({ data }) {
         ? <StatusPill tone={approvalConsumedOnce ? "success" : "warning"} icon={approvalConsumedOnce ? "check" : "clock"}>{approvalConsumedOnce ? "Authorization verified and consumed" : "Authorization recorded · execution unconfirmed"}</StatusPill>
         : approvalRejected
           ? <StatusPill tone="danger" icon="signal">Not authorized</StatusPill>
-          : (CONCORDIA_MODE === "reviewer" ? <StatusPill tone="warning" icon="lock">Protected form disabled</StatusPill> : <PrimaryButton icon="external" href={`/approve/${proposal.proposal_id}`}>Open Secure Approval</PrimaryButton>)}<div className="decision-warning"><Icon name="signal" size={17} />Approval applies only to this action, target and exact parameters.</div></div></Panel><Panel title="Deterministic guard preview" eyebrow="Why exact authorization matters">{firstEnvelope ? <div className="tamper-preview"><div className="tamper-row exact"><span>Approved exact request</span><code>{actionEnvelopeText(firstEnvelope)}</code></div><div className="tamper-row altered"><span>Any altered request</span><code>{actionEnvelopeText(altered)}</code></div><div className="tamper-result"><Icon name="lock" size={18} /><div><strong>Blocked before execution</strong><small>Canonical envelope mismatch · no side effect occurs</small></div></div></div> : <EmptyState title="No envelope available" icon="lock" />}</Panel><Panel title="Execution status" eyebrow="Certified workflow"><div className="execution-status-line">{[{ label: "Planned", done: Boolean(planCard) }, { label: "Authorized", done: approvalAuthorized }, { label: "Executed", done: isReceiptVerified(receipt) }, { label: "Receipt", done: facts.receiptVerified }].map((item, index, list) => <div key={item.label} className={cx("execution-status-step", item.done && "done")}><span>{item.done ? <Icon name="check" size={13} /> : null}</span><small>{item.label}</small>{index < list.length - 1 && <i />}</div>)}</div><div className="execution-note"><Icon name="info" size={16} />Execution starts only after the Gateway validates the consumed authorization. The Receipt step completes only on a positively verified receipt.</div></Panel></div>
+          : (CONCORDIA_MODE === "reviewer" ? <StatusPill tone="warning" icon="lock">Protected form disabled</StatusPill> : <PrimaryButton icon="external" href={`/approve/${proposal.proposal_id}`}>Open Secure Approval</PrimaryButton>)}<div className="decision-warning"><Icon name="signal" size={17} />Approval applies only to this action, target and exact parameters.</div></div></Panel><Panel title="Deterministic guard preview" eyebrow="Why exact authorization matters">{firstEnvelope ? <div className="tamper-preview"><div className="tamper-row exact"><span>Approved exact request</span><code>{actionEnvelopeText(firstEnvelope)}</code></div><div className="tamper-row altered"><span>Any altered request</span><code>{actionEnvelopeText(altered)}</code></div>{refusalObserved
+        ? <div className="tamper-result"><Icon name="lock" size={18} /><div><strong>Blocked before execution</strong><small>{refusalArtifact.locke_result === "refused_to_sign" ? "Recorded refusal artifact · Locke refused to sign the altered envelope · no side effect occurred" : "Recorded refusal artifact · canonical envelope mismatch · no side effect occurred"}</small></div></div>
+        : <div className="tamper-result tamper-unavailable" data-testid="tamper-refusal-unavailable"><Icon name="clock" size={18} /><div><strong>Refusal artifact unavailable</strong><small>No blocked-tamper outcome is asserted until the gateway reports a recorded refusal artifact for this proposal.</small></div></div>}</div> : <EmptyState title="No envelope available" icon="lock" />}</Panel><Panel title="Execution status" eyebrow="Certified workflow"><div className="execution-status-line">{[{ label: "Planned", done: Boolean(planCard) }, { label: "Authorized", done: approvalAuthorized }, { label: "Executed", done: isReceiptVerified(receipt) }, { label: "Receipt", done: facts.receiptVerified }].map((item, index, list) => <div key={item.label} className={cx("execution-status-step", item.done && "done")}><span>{item.done ? <Icon name="check" size={13} /> : null}</span><small>{item.label}</small>{index < list.length - 1 && <i />}</div>)}</div><div className="execution-note"><Icon name="info" size={16} />Execution starts only after the Gateway validates the consumed authorization. The Receipt step completes only on a positively verified receipt.</div></Panel></div>
     </div>}
   </>;
 }
