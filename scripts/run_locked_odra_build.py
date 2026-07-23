@@ -47,8 +47,11 @@ _ANSI_ESCAPE = re.compile(
     re.DOTALL,
 )
 _CARGO_FATAL = re.compile(
-    rb"(?i)\b"
-    rb"(ERROR|FATAL|thread [^\r\n]* panicked)(?:\b|[ :]|\x00)"
+    rb"("
+    rb"\b(?:ERROR|FATAL)\b"
+    rb"|(?m:^[ \t]*(?:error|fatal)(?:\[[^\]\r\n]{1,32}\])?:)"
+    rb"|(?i:\bthread [^\r\n]* panicked)\b"
+    rb")"
 )
 _EXPECTED_MANIFEST_TOOLCHAIN = {
     "cargo_odra": "0.1.7",

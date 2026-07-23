@@ -246,6 +246,13 @@ class _BuildExecutor:
             stdout = b"x" * 1024 + b" ERROR build failed but cargo-odra returned zero\n"
         elif self.mode == "fatal":
             stderr = b"fatal: cargo-odra could not produce the contract\n"
+        elif self.mode == "routine_error_crate_names":
+            stderr = (
+                b"   Compiling proc-macro-error-attr v1.0.4\n"
+                b"   Compiling proc-macro-error v1.0.4\n"
+                b"   Compiling proc-macro-error2 v2.0.1\n"
+                b"   Compiling thiserror v1.0.69\n"
+            )
         return subprocess.CompletedProcess(argv, 0, stdout, stderr)
 
 
@@ -337,6 +344,23 @@ def test_locked_odra_build_rejects_false_green_or_mutated_outputs(
     with pytest.raises(LockedOdraBuildError, match=message):
         verify_locked_odra_build(repository, executor=executor)
 
+    assert _git(repository, "status", "--short") == ""
+
+
+def test_locked_odra_build_allows_routine_dependency_names_containing_error(
+    tmp_path: Path,
+) -> None:
+    repository, lock, wasm, schema = _repository(tmp_path)
+    executor = _BuildExecutor(
+        lock=lock,
+        wasm=wasm,
+        schema=schema,
+        mode="routine_error_crate_names",
+    )
+
+    summary = verify_locked_odra_build(repository, executor=executor)
+
+    assert summary["status"] == "verified"
     assert _git(repository, "status", "--short") == ""
 
 
