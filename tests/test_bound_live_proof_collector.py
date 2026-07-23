@@ -1236,16 +1236,55 @@ def test_paid_first_release_polls_only_reconciliation_until_report_release() -> 
         },
         http_acquire=acquire,
         sleep=sleeps.append,
+        secrets_to_scan=(b"token-not-reflected",),
     )
 
     assert calls == 3
     assert len(sleeps) == 2
     assert observed["response_status"] == 200
+    assert (
+        base64.b64decode(observed["response_body_base64"], validate=True)
+        == report
+    )
     assert [item["response_status"] for item in json.loads(transcript)] == [
         503,
         503,
         200,
     ]
+
+
+def test_paid_first_release_scans_unaligned_raw_terminal_body_before_wrapping() -> None:
+    token = b"raw-token-that-must-never-enter-evidence"
+    # The five-byte prefix puts the reflected token at an alignment that does
+    # not appear as base64(token) inside base64(the whole response).
+    body = b'{"x":"' + b"a" * 5 + token + b'"}'
+    assert base64.b64encode(token) not in base64.b64encode(body)
+
+    def acquire(**kwargs: object) -> dict[str, object]:
+        return {
+            "method": "GET",
+            "url": kwargs["url"],
+            "request_body_base64": "",
+            "request_headers": {"payment-signature": "bound"},
+            "response_status": 200,
+            "response_headers": {"content-type": "application/json"},
+            "response_content_type": "application/json",
+            "response_body_base64": base64.b64encode(body).decode("ascii"),
+            "observed_at": "2026-07-23T01:00:02Z",
+        }
+
+    with pytest.raises(collector.LiveCollectorError, match="reflected"):
+        collector._poll_paid_first_release(
+            url="https://x402.concordiadao.xyz/resource/risk-report",
+            request={
+                "method": "GET",
+                "body_base64": "",
+                "headers": {"payment-signature": "bound"},
+            },
+            http_acquire=acquire,
+            sleep=lambda _seconds: None,
+            secrets_to_scan=(token,),
+        )
 
 
 def test_wcspr_readback_derives_runtime_selectors_from_status_response() -> None:

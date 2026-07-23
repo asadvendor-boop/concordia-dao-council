@@ -1348,6 +1348,7 @@ def _poll_paid_first_release(
     request: Mapping[str, Any],
     http_acquire: Callable[..., dict[str, Any]],
     sleep: Callable[[float], None],
+    secrets_to_scan: Sequence[bytes],
 ) -> tuple[dict[str, Any], bytes]:
     """Poll only reconciliation until the finalized row releases bytes.
 
@@ -1366,6 +1367,12 @@ def _poll_paid_first_release(
         body = _decode_b64(
             observed.get("response_body_base64"),
             "paid first-release response body",
+        )
+        response_headers = _canonical(observed.get("response_headers", {}))
+        _assert_no_secret_reflection(
+            body + b"\n" + response_headers,
+            secrets_to_scan=secrets_to_scan,
+            label="paid first-release response",
         )
         status = observed.get("response_status")
         attempts.append(
@@ -1995,12 +2002,17 @@ def _collect_worker(
                         authorization_secret=auth,
                     )
                 elif acquisition_id == "paid_first_release":
+                    if token is None:
+                        raise LiveCollectorError(
+                            "paid first release lacks its token reflection guard"
+                        )
                     observed, polled_response_material = (
                         _poll_paid_first_release(
                             url=url,
                             request=request,
                             http_acquire=http_acquire,
                             sleep=poll_sleep,
+                            secrets_to_scan=(token,),
                         )
                     )
                 else:
