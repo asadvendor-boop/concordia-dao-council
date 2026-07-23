@@ -29,6 +29,10 @@ from scripts.install_governance_receipt_v3 import (
 from scripts.prepare_v3_envelope import prepare_v3_envelope
 from scripts.read_v3_state import validate_verified_readback, verify_and_seal_readback_artifact
 from shared.bound_command import BoundCommandError, BoundCommandResult, _run_bound_git
+from shared.exact_casper_deploy_json import (
+    canonical_deploy_rpc_json,
+    normalize_deploy_rpc_json,
+)
 
 
 class ProofVerificationError(ValueError):
@@ -570,13 +574,7 @@ def _lower_hash(value: object, field: str) -> str:
 
 
 def _normalize_deploy_json(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_deploy_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize_deploy_json(item) for item in value]
-    if isinstance(value, str) and len(value) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", value):
-        return value.lower()
-    return value
+    return normalize_deploy_rpc_json(value)
 
 
 def _validated_deploy(
@@ -596,7 +594,7 @@ def _validated_deploy(
     try:
         deploy = serializer.from_json(dict(value), Deploy)
         canonical = serializer.to_bytes(deploy)
-        canonical_json = serializer.to_json(deploy)
+        canonical_json = canonical_deploy_rpc_json(deploy)
         body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:

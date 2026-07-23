@@ -30,6 +30,8 @@ from pycspr.types.crypto import KeyAlgorithm
 from pycspr.types.crypto.complex import PrivateKey
 from pycspr.types.node.rpc import DeployOfModuleBytes
 
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
+
 ROOT = Path(__file__).resolve().parents[1]
 HOST_ROOT = Path("/opt/apps/concordia/src")
 HOST_ENV = Path("/opt/apps/concordia/shared-host/concordia.env")
@@ -198,7 +200,7 @@ def _build_contract_install_rpc_payload(
         "jsonrpc": "2.0",
         "id": f"concordia-install-{int(time.time() * 1000)}",
         "method": "account_put_deploy",
-        "params": {"deploy": serializer.to_json(deploy)},
+        "params": {"deploy": exact_deploy_rpc_json(deploy)},
     }
 
 

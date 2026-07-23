@@ -67,6 +67,11 @@ from shared.casper_rpc_transport import (
     parse_rpc_authorization_file_args,
 )
 from shared.casper_signer_file import load_secure_casper_signer
+from shared.exact_casper_deploy_json import (
+    canonical_deploy_rpc_json,
+    exact_deploy_rpc_json,
+    normalize_deploy_rpc_json,
+)
 
 
 class LiveProofError(RuntimeError):
@@ -86,17 +91,7 @@ def _canonical_json(value: object) -> bytes:
 
 
 def _normalize_deploy_json(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_deploy_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize_deploy_json(item) for item in value]
-    if (
-        isinstance(value, str)
-        and len(value) % 2 == 0
-        and re.fullmatch(r"[0-9a-fA-F]+", value)
-    ):
-        return value.lower()
-    return value
+    return normalize_deploy_rpc_json(value)
 
 
 def _hash32(value: object, field: str) -> str:
@@ -334,7 +329,7 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
         )
     try:
         parsed_deploy = serializer.from_json(dict(deploy_json), Deploy)
-        canonical_deploy = serializer.to_json(parsed_deploy)
+        canonical_deploy = canonical_deploy_rpc_json(parsed_deploy)
         body_hash = create_digest_of_deploy_body(
             parsed_deploy.payment,
             parsed_deploy.session,
@@ -523,7 +518,7 @@ def validate_and_stage_browser_import(
     try:
         unsigned = serializer.from_json(dict(unsigned_json), Deploy)
         signed = serializer.from_json(dict(signed_json), Deploy)
-        canonical_signed = serializer.to_json(signed)
+        canonical_signed = canonical_deploy_rpc_json(signed)
         body_hash = create_digest_of_deploy_body(signed.payment, signed.session)
         deploy_hash = create_digest_of_deploy(signed.header)
     except Exception as exc:
@@ -534,7 +529,7 @@ def validate_and_stage_browser_import(
         raise LiveProofError(
             "browser signed deploy parsed fields disagree with canonical bytes"
         )
-    unsigned_without_approvals = serializer.to_json(unsigned)
+    unsigned_without_approvals = canonical_deploy_rpc_json(unsigned)
     signed_without_approvals = copy.deepcopy(canonical_signed)
     unsigned_without_approvals["approvals"] = []
     signed_without_approvals["approvals"] = []
@@ -785,7 +780,7 @@ def _build_call(
     )
     if private_key is not None:
         deploy.approve(private_key)
-    value = serializer.to_json(deploy)
+    value = exact_deploy_rpc_json(deploy)
     if private_key is None:
         value["approvals"] = []
     return value
@@ -972,7 +967,7 @@ def _validate_journal_step(
         raise LiveProofError("server journal deploy is invalid")
     try:
         deploy = serializer.from_json(dict(deploy_json), Deploy)
-        canonical = serializer.to_json(deploy)
+        canonical = canonical_deploy_rpc_json(deploy)
         body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:

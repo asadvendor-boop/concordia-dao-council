@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
+
 try:  # Optional: production deployments can install opentelemetry-sdk.
     from opentelemetry import trace
 except Exception:  # pragma: no cover - optional dependency
@@ -747,7 +749,7 @@ def build_unsigned_governance_receipt_deploy(
             call_target=call_target,
             contract_version=contract_version,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
     except Exception as exc:
         return {
@@ -807,7 +809,7 @@ def build_unsigned_odra_call_deploy(
             call_target=call_target,
             contract_version=contract_version,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
         preview = _generic_runtime_args_preview(argument_specs)
     except Exception as exc:
@@ -875,7 +877,7 @@ async def submit_odra_call_deploy(
             contract_version=contract_version,
         )
         deploy.approve(private_key)
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_hash = str(deploy_json["hash"])
         preview = _generic_runtime_args_preview(argument_specs)
     except Exception as exc:
@@ -974,7 +976,7 @@ def build_unsigned_casper_transfer_deploy(
             correlation_id=correlation_id,
             payment=payment_amount,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
     except Exception as exc:
         return {
@@ -1108,7 +1110,7 @@ async def submit_governance_receipt(request: CasperReceiptRequest) -> dict[str, 
                 contract_version=contract_version,
             )
             deploy.approve(private_key)
-            deploy_json = serializer.to_json(deploy)
+            deploy_json = exact_deploy_rpc_json(deploy)
     except Exception as exc:
         return {
             "status": "failed",

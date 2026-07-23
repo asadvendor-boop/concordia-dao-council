@@ -38,6 +38,11 @@ from shared.casper_rpc_transport import (
     validate_public_rpc_endpoints as _validate_shared_rpc_endpoints,
 )
 from shared.casper_signer_file import load_secure_casper_signer
+from shared.exact_casper_deploy_json import (
+    canonical_deploy_rpc_json,
+    exact_deploy_rpc_json,
+    normalize_deploy_rpc_json,
+)
 
 
 PACKAGE_KEY_NAME = "concordia_governance_receipt_v3"
@@ -173,7 +178,7 @@ class DurableDeployJournal:
             raise InstallValidationError("deploy journal signed bytes digest mismatch")
         try:
             parsed_deploy = serializer.from_json(dict(value["signed_deploy"]), Deploy)
-            canonical_deploy = serializer.to_json(parsed_deploy)
+            canonical_deploy = canonical_deploy_rpc_json(parsed_deploy)
             casper_bytes = serializer.to_bytes(parsed_deploy)
             body_hash = create_digest_of_deploy_body(
                 parsed_deploy.payment, parsed_deploy.session
@@ -1115,7 +1120,7 @@ def build_signed_install_payload(
     )
     deploy = create_deploy(params, payment, session)
     deploy.approve(private_key)
-    deploy_json = serializer.to_json(deploy)
+    deploy_json = exact_deploy_rpc_json(deploy)
     payload = {
         "jsonrpc": "2.0",
         "id": "concordia-v3-install",
@@ -1213,17 +1218,7 @@ def _find_named_key(value: object, name: str) -> str | None:
 
 
 def _normalize_deploy_json(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_deploy_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize_deploy_json(item) for item in value]
-    if isinstance(value, str) and len(value) % 2 == 0:
-        try:
-            bytes.fromhex(value)
-        except ValueError:
-            return value
-        return value.lower()
-    return value
+    return normalize_deploy_rpc_json(value)
 
 
 def validate_finalized_install_deploy(
@@ -1240,7 +1235,7 @@ def validate_finalized_install_deploy(
         raise InstallValidationError("install deploy JSON field set is invalid")
     try:
         deploy = serializer.from_json(dict(value), Deploy)
-        canonical_json = serializer.to_json(deploy)
+        canonical_json = canonical_deploy_rpc_json(deploy)
         body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:

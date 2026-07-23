@@ -29,6 +29,11 @@ from pycspr.types.node.rpc import (
     DeployOfStoredContractByHashVersioned,
 )
 
+from shared.exact_casper_deploy_json import (
+    canonical_deploy_rpc_json,
+    normalize_deploy_rpc_json,
+)
+
 
 SCHEMA_VERSION = "concordia.historical_odra_receipt.v1"
 INVENTORY_SCHEMA_VERSION = "concordia.historical_odra_inventory.v1"
@@ -285,17 +290,7 @@ def _public_artifact_url(value: object, proposal_id: str, suffix: str, label: st
 
 
 def _normalize_deploy_json(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): _normalize_deploy_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize_deploy_json(item) for item in value]
-    if isinstance(value, str) and len(value) % 2 == 0:
-        try:
-            bytes.fromhex(value)
-        except ValueError:
-            return value
-        return value.lower()
-    return value
+    return normalize_deploy_rpc_json(value)
 
 
 def _request_id(value: object, label: str) -> int | str:
@@ -727,7 +722,7 @@ def _verify_deploy(
     )
     try:
         deploy = serializer.from_json(dict(raw_deploy), Deploy)
-        canonical_json = serializer.to_json(deploy)
+        canonical_json = canonical_deploy_rpc_json(deploy)
     except Exception as exc:
         raise HistoricalOdraArtifactError("returned deploy is not canonical Casper JSON") from exc
     if _normalize_deploy_json(canonical_json) != _normalize_deploy_json(raw_deploy):

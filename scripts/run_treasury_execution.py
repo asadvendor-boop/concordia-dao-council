@@ -51,6 +51,7 @@ from shared.casper_state_proof import (
     VerifiedAccountBalance,
     verify_account_balance_at_block,
 )
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
 from shared.native_transfer_deploy import build_signed_native_transfer_deploy
 from shared.native_transfer_scan import (
     VerifiedNoDuplicateNativeTransfer,
@@ -741,7 +742,7 @@ class TreasuryExecutionOperator:
             remainder, deploy = serializer.from_bytes(signed_bytes, Deploy)
             if remainder or serializer.to_bytes(deploy) != signed_bytes:
                 raise OperatorError("persisted signed deploy is not canonical")
-            deploy_json = serializer.to_json(deploy)
+            deploy_json = exact_deploy_rpc_json(deploy)
             _, response = _request(
                 self.rpc,
                 self.rpc.endpoints[0],
