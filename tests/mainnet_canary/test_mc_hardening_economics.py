@@ -6,8 +6,10 @@ Requirements under test:
 - immutable integer ceilings with checked arithmetic
   ``max_total_outlay_motes = transfer_principal_motes + max_fees_motes``;
 - no zero or placeholder fee maxima;
-- every fee maximum is grounded in a finalized Testnet calibration receipt
-  OR an explicit conservative operator ceiling (CALIBRATION_RECEIPT_ABSENT);
+- every fee maximum is grounded in a fully bound v2 Testnet calibration
+  receipt; operator ceilings are NOT a permitted substitute
+  (OPERATOR_CEILING_NOT_PERMITTED), and the line set must equal the
+  plan-derived economic steps exactly (CALIBRATION_LINE_SET_MISMATCH);
 - the human authorization binds plan hash, accounts, recipient, amount,
   maxima, expiry, nonce, and chain identity; a trusted-clock expiry of zero
   or in the past refuses (AUTHORIZATION_EXPIRED);
@@ -35,23 +37,7 @@ PINNED_KEYS = frozenset({mc_support.test_authorizer_public_key_hex()})
 
 
 def _calibration_for(plan: dict[str, object]) -> dict[str, object]:
-    lines = {}
-    for step in plan["steps"]:
-        if not step["economic"]:
-            continue
-        lines[str(step["step_id"])] = {
-            "payment_motes": "5000000000",
-            "receipt": {
-                "deploy_hash": "1f" * 32,
-                "block_hash": "2e" * 32,
-                "finalized": True,
-                "chain_name": "casper-test",
-            },
-        }
-    return {
-        "schema_id": "concordia.mainnet-canary.testnet-calibration.v1",
-        "lines": lines,
-    }
+    return mc_support.make_calibration(plan)
 
 
 @pytest.fixture()
@@ -132,42 +118,46 @@ class TestManifestDerivation:
             )
         assert refusal.value.code == RefusalCode.PRINCIPAL_LINE_ABSENT
 
-    def test_uncalibrated_line_without_operator_ceiling_refuses(
+    def test_missing_calibration_line_refuses(
         self, plan: dict[str, object]
     ) -> None:
         calibration = _calibration_for(plan)
         del calibration["lines"]["B-install-rc-wasm"]
         with pytest.raises(CanaryRefusal) as refusal:
             build_economic_manifest(plan, calibration=calibration, operator_ceilings={})
-        assert refusal.value.code == RefusalCode.CALIBRATION_RECEIPT_ABSENT
+        assert refusal.value.code == RefusalCode.CALIBRATION_LINE_SET_MISMATCH
 
-    def test_explicit_operator_ceiling_substitutes_for_calibration(
+    def test_operator_ceiling_is_not_a_permitted_substitute(
+        self, plan: dict[str, object]
+    ) -> None:
+        # Finals policy: receipt-backed calibration only. Even a fully
+        # calibrated manifest refuses the moment any operator ceiling is
+        # supplied — the bypass path must not exist at all.
+        with pytest.raises(CanaryRefusal) as refusal:
+            build_economic_manifest(
+                plan,
+                calibration=_calibration_for(plan),
+                operator_ceilings={
+                    "B-install-rc-wasm": {
+                        "conservative_ceiling_motes": "400000000000",
+                        "declared_by": "asad-public-approval",
+                    }
+                },
+            )
+        assert refusal.value.code == RefusalCode.OPERATOR_CEILING_NOT_PERMITTED
+
+    def test_insufficiently_confirmed_calibration_receipt_refuses(
         self, plan: dict[str, object]
     ) -> None:
         calibration = _calibration_for(plan)
-        del calibration["lines"]["B-install-rc-wasm"]
-        manifest = build_economic_manifest(
-            plan,
-            calibration=calibration,
-            operator_ceilings={
-                "B-install-rc-wasm": {
-                    "conservative_ceiling_motes": "400000000000",
-                    "declared_by": "asad-public-approval",
-                }
-            },
-        )
-        line = next(
-            line for line in manifest["lines"] if line["step_id"] == "B-install-rc-wasm"
-        )
-        assert line["basis"] == "operator_ceiling"
-        assert line["max_payment_motes"] == "400000000000"
-
-    def test_unfinalized_calibration_receipt_refuses(self, plan: dict[str, object]) -> None:
-        calibration = _calibration_for(plan)
-        calibration["lines"]["D-propose-envelope"]["receipt"]["finalized"] = False
+        line = calibration["lines"]["D-propose-envelope"]
+        receipt = line["receipt"]
+        receipt["finality"] = {
+            "chain_tip_height": int(receipt["block_height"]) + 7
+        }
         with pytest.raises(CanaryRefusal) as refusal:
             build_economic_manifest(plan, calibration=calibration, operator_ceilings={})
-        assert refusal.value.code == RefusalCode.CALIBRATION_RECEIPT_ABSENT
+        assert refusal.value.code == RefusalCode.INSUFFICIENT_CONFIRMATIONS
 
     def test_zero_fee_line_refuses(self, plan: dict[str, object]) -> None:
         calibration = _calibration_for(plan)

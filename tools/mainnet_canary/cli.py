@@ -1,7 +1,8 @@
-"""Fail-closed six-mode CLI for the Concordia Mainnet canary preparation.
+"""Fail-closed CLI for the Concordia Mainnet canary preparation.
 
-Modes: ``inventory``, ``estimate``, ``plan``, ``stage``, ``verify``,
-``broadcast``.  Success prints deterministic JSON and exits 0.  Every refusal
+Modes: ``inventory``, ``estimate``, ``plan``, ``calibration``, ``stage``,
+``funding``, ``verify``, ``bundle``, ``broadcast``.  Success prints
+deterministic JSON and exits 0.  Every refusal
 prints ``{"refusal": {code, detail}}`` and exits 2.  No mode reads
 environment variables, no mode accepts a bypass flag, and no mode can sign
 or submit anything.
@@ -16,6 +17,10 @@ import sys
 from pathlib import Path
 
 from tools.mainnet_canary.broadcast import run_broadcast_guard
+from tools.mainnet_canary.calibration import (
+    build_calibration_from_harness,
+    validate_calibration_document,
+)
 from tools.mainnet_canary.constants import (
     BLOCKED_PENDING_LIVE_PROOF,
     LIVE_AUTHORIZATION_MOUNT_PATH,
@@ -168,6 +173,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, object]:
         parameters_path=Path(args.parameters),
         snapshot_path=Path(args.snapshot),
         status_path=Path(args.status),
+        custody_model=args.custody_model,
     )
     if args.out:
         out_path = Path(args.out)
@@ -204,6 +210,54 @@ def _cmd_stage(args: argparse.Namespace) -> dict[str, object]:
         ),
     )
     return {"mode": "stage", **report}
+
+
+def _cmd_calibration(args: argparse.Namespace) -> dict[str, object]:
+    """Convert verified Testnet harness observations, or validate a document.
+
+    ``--harness`` (repeatable) converts harness observation files into the
+    v2 calibration document, computing every digest from the plan and the
+    artifacts themselves; ``--calibration`` validates an existing document
+    against the plan.  Exactly one mode must be chosen.
+    """
+
+    plan_document = _read_json_file(Path(args.plan), context="plan-document")
+    if plan_document.get("canary_plan_sha256") != plan_document_hash(plan_document):
+        raise CanaryRefusal(
+            RefusalCode.PLAN_HASH_MISMATCH, "plan document hash does not recompute"
+        )
+    if bool(args.harness) == bool(args.calibration):
+        raise CanaryRefusal(
+            RefusalCode.PLAN_INPUT_INVALID,
+            "choose exactly one of --harness (convert) or --calibration "
+            "(validate)",
+        )
+    if args.harness:
+        harness_documents = [
+            _read_json_file(Path(path), context="testnet-harness-observation")
+            for path in args.harness
+        ]
+        document = build_calibration_from_harness(
+            plan_document, harness_documents
+        )
+        if args.out:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(document, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return {"mode": "calibration", "action": "convert", **document}
+    calibration = _read_json_file(
+        Path(args.calibration), context="testnet-calibration"
+    )
+    lines = validate_calibration_document(plan_document, calibration)
+    return {
+        "mode": "calibration",
+        "action": "validate",
+        "plan_hash": plan_document["canary_plan_sha256"],
+        "validated_steps": sorted(lines),
+    }
 
 
 def _cmd_funding(args: argparse.Namespace) -> dict[str, object]:
@@ -300,15 +354,23 @@ def _cmd_verify(args: argparse.Namespace) -> dict[str, object]:
         consensus = evaluate_dual_provider(
             bundle, step_id=step_id, expectation=expectation
         )
-        results.append(
-            {
-                "step_id": step_id,
-                "status": "observation_consistent",
-                "providers": consensus["providers"],
-                "consensus_block_hash": consensus["consensus_block_hash"],
-                "raw_response_sha256s": consensus["raw_response_sha256s"],
-            }
-        )
+        result: dict[str, object] = {
+            "step_id": step_id,
+            "status": "observation_consistent",
+            "providers": consensus["providers"],
+            "consensus_block_hash": consensus["consensus_block_hash"],
+            "raw_response_sha256s": consensus["raw_response_sha256s"],
+        }
+        # ``refusal_observed`` is DERIVED, never planned: it appears only
+        # when a refusal-probe step's dual-provider consensus matched the
+        # exact expected finalized error. The plan itself records only
+        # ``expected_refusal`` — before the receipt exists nothing has been
+        # demonstrated.
+        if expectation["type"] == "exact_refusal":
+            result["refusal_observed"] = True
+            if "refusal_scenario" in expected:
+                result["refusal_scenario"] = str(expected["refusal_scenario"])
+        results.append(result)
 
     return {
         "mode": "verify",
@@ -359,6 +421,7 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
     document = build_proof_bundle_document(
         plan_hash=str(plan_hash),
         rc_tag=str(plan_document.get("rc", {}).get("tag")),
+        custody_model=plan_document.get("custody_model"),
         economic_manifest_sha256=hashlib.sha256(
             canonical_json(manifest).encode("ascii")
         ).hexdigest(),
@@ -384,6 +447,7 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
         manifest_plan_hash=str(manifest.get("plan_hash")),
         verification_plan_hash=str(verification.get("plan_hash")),
         journal_head_hash=journal_head_hash,
+        plan_custody_model=plan_document.get("custody_model"),
     )
     policy = CanaryPathPolicy(
         Path(args.repo_root),
@@ -447,6 +511,15 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--parameters", required=True)
     plan.add_argument("--snapshot", required=True)
     plan.add_argument("--status", required=True)
+    plan.add_argument(
+        "--custody-model",
+        required=True,
+        help=(
+            "explicit custody disclosure; must equal the parameters file's "
+            "custody_model (single_operator is the only expressible value "
+            "in this release)"
+        ),
+    )
     plan.add_argument("--out", default=None)
     plan.set_defaults(handler=_cmd_plan)
 
@@ -471,6 +544,16 @@ def build_parser() -> argparse.ArgumentParser:
     stage.add_argument("--authorizer-key", action="append", required=True)
     stage.add_argument("--operator-ceilings", default=None)
     stage.set_defaults(handler=_cmd_stage)
+
+    calibration = subparsers.add_parser(
+        "calibration",
+        help="convert Testnet harness observations / validate a calibration",
+    )
+    calibration.add_argument("--plan", required=True)
+    calibration.add_argument("--harness", action="append", default=None)
+    calibration.add_argument("--calibration", default=None)
+    calibration.add_argument("--out", default=None)
+    calibration.set_defaults(handler=_cmd_calibration)
 
     funding = subparsers.add_parser(
         "funding", help="exact maximum funding required (no acquisition)"

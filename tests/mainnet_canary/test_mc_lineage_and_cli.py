@@ -209,6 +209,8 @@ def test_cli_plan_and_stage_round_trip(
             str(plan_inputs["snapshot"]),
             "--status",
             str(plan_inputs["status"]),
+            "--custody-model",
+            "single_operator",
             "--out",
             str(plan_path),
         ],

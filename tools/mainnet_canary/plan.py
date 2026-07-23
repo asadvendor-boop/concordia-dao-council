@@ -52,8 +52,16 @@ from tools.mainnet_canary.keys import (
 from tools.mainnet_canary.rc_gate import validate_rc_gate
 from tools.mainnet_canary.secret_guard import refuse_if_secret_material
 
-PLAN_SCHEMA_ID = "concordia.mainnet-canary.plan.v1"
-PARAMS_SCHEMA_ID = "concordia.mainnet-canary.parameters.v1"
+# v2: both schemas now REQUIRE the custody_model disclosure — a v1 document
+# without it is refused rather than silently defaulted (backward-incompatible
+# on purpose; custody is never inferred).
+PLAN_SCHEMA_ID = "concordia.mainnet-canary.plan.v2"
+PARAMS_SCHEMA_ID = "concordia.mainnet-canary.parameters.v2"
+
+# The only custody models this schema can express. ``independent_custodians``
+# additionally requires separate custody evidence, which this release does
+# not support — distinct accounts or key mounts are NOT custody independence.
+CUSTODY_MODELS = ("single_operator", "independent_custodians")
 SNAPSHOT_SCHEMA_ID = "concordia.mainnet-canary.treasury-snapshot-observation.v1"
 STATUS_SCHEMA_ID = "concordia.mainnet-canary.chain-status-observation.v1"
 
@@ -79,6 +87,7 @@ _PARAM_FIELDS = {
     "authorized_metadata_root",
     "max_amount_motes",
     "human_authorized_amount_motes",
+    "custody_model",
 }
 
 _SNAPSHOT_FIELDS = {
@@ -342,6 +351,39 @@ def _governance_target_args(
     ]
 
 
+def require_custody_model(parameters: dict[str, object], confirmed: object) -> str:
+    """Custody is DISCLOSED, never inferred; fail closed on any ambiguity.
+
+    The model must be declared twice — in the parameters file and again as an
+    explicit CLI/builder input — and the two must agree, mirroring the
+    human-authorized-amount double confirmation. ``independent_custodians``
+    refuses outright: this release carries no separate custody evidence, and
+    distinct accounts or key mounts do not constitute independence.
+    """
+
+    declared = parameters["custody_model"]
+    if not isinstance(declared, str) or declared not in CUSTODY_MODELS:
+        raise CanaryRefusal(
+            RefusalCode.CUSTODY_MODEL_INVALID,
+            f"custody_model must be exactly one of {list(CUSTODY_MODELS)}",
+        )
+    if confirmed != declared:
+        raise CanaryRefusal(
+            RefusalCode.CUSTODY_MODEL_INVALID,
+            "the explicitly confirmed custody model does not equal the "
+            "parameters file; custody is disclosed twice on purpose and the "
+            "two declarations must agree",
+        )
+    if declared == "independent_custodians":
+        raise CanaryRefusal(
+            RefusalCode.CUSTODY_EVIDENCE_ABSENT,
+            "independent_custodians requires separate custody evidence, "
+            "which this release does not support; single_operator is the "
+            "only expressible custody model for this canary",
+        )
+    return declared
+
+
 def build_plan(
     repo_root: Path,
     *,
@@ -350,6 +392,7 @@ def build_plan(
     parameters_path: Path,
     snapshot_path: Path,
     status_path: Path,
+    custody_model: object,
 ) -> dict[str, object]:
     """Assemble and validate the full canary plan; refuse on any gap."""
 
@@ -359,6 +402,7 @@ def build_plan(
         inventory, collect_known_testnet_account_hashes(repo_root)
     )
     parameters = load_parameters(parameters_path)
+    custody = require_custody_model(parameters, custody_model)
     snapshot = load_snapshot_observation(snapshot_path)
     status = load_status_observation(status_path)
     require_fresh_snapshot(snapshot, status)
@@ -500,25 +544,70 @@ def build_plan(
         for name in FINALIZE_NATIVE_ARG_ORDER
     ]
 
-    # Post-quorum wrong-envelope refusal proof: one hash-bearing field is
-    # deliberately flipped, so the recomputed envelope hash cannot match the
-    # approved one and the contract must refuse with EnvelopeHashMismatch.
-    _wrong_metadata_root = "".join(
-        format(int(pair, 16) ^ 0x01, "02x")
-        for pair in [
-            str(header["authorized_metadata_root"])[i : i + 2]
-            for i in range(0, 64, 2)
-        ]
+    # Post-quorum redirected-recipient refusal proof (F9): the finalizer
+    # attempts to redirect the approved payment to its own account.  The
+    # redirected envelope is INTERNALLY COHERENT — action_id and transfer_id
+    # are recomputed from the redirected action core exactly as the contract
+    # recomputes them — so the earlier per-field recomputation checks cannot
+    # catch it and the refusal can only come from the final commitment
+    # comparison: the recomputed envelope hash differs from the
+    # council-approved commitment and the contract refuses with
+    # EnvelopeHashMismatch before any state change.
+    finalizer_account = inventory.roles["finalizer"].account_hash_hex
+    redirect_header = dict(header)
+    redirect_body = dict(body)
+    redirect_body["recipient_account"] = finalizer_account
+    try:
+        redirect_core = b"".join(
+            encode_scalar(name, body_types[name], redirect_body[name])
+            for name in NATIVE_CORE_FIELD_NAMES
+        )
+        redirect_action_id = blake2b_256(
+            DOMAIN_ACTION_ID + b"\x01" + action_nonce_bytes + redirect_core
+        )
+        redirect_header["action_id"] = redirect_action_id.hex()
+        redirect_transfer_digest = blake2b_256(
+            DOMAIN_TRANSFER_ID
+            + len(proposal_ascii).to_bytes(4, "big")
+            + proposal_ascii
+            + bytes.fromhex(str(parameters["proposal_nonce"]))
+            + redirect_action_id
+        )
+        redirect_body["transfer_id"] = str(
+            int.from_bytes(redirect_transfer_digest[:8], "big")
+        )
+    except (FreshEncodingError, ValueError) as exc:
+        raise CanaryRefusal(
+            RefusalCode.ENVELOPE_INVALID,
+            f"redirected refusal-probe envelope invalid: {exc}",
+        ) from exc
+    # Coherence is proven by the same dual-implementation gate the approved
+    # envelope passes; distinctness from the approved envelope is then
+    # asserted fail-closed on every identifier that must differ.
+    redirect_material = recompute_native_identifiers(
+        redirect_header, redirect_body, chain_name=MAINNET_CHAIN_NAME
     )
+    if redirect_body["recipient_account"] == body["recipient_account"]:
+        raise CanaryRefusal(
+            RefusalCode.ENVELOPE_INVALID,
+            "refusal-probe recipient equals the approved recipient; the "
+            "probe would prove nothing",
+        )
+    if (
+        redirect_material.action_id_hex == material.action_id_hex
+        or redirect_material.transfer_id == material.transfer_id
+        or redirect_material.envelope_hash_hex == material.envelope_hash_hex
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ENVELOPE_INVALID,
+            "redirected refusal-probe identifiers collide with the approved "
+            "envelope; refusing an unprovable probe",
+        )
     wrong_envelope_args = [
         _typed_arg(
             name,
             _FINALIZE_ARG_TYPES[name],
-            (
-                _wrong_metadata_root
-                if name == "authorized_metadata_root"
-                else header.get(name, body.get(name))
-            ),
+            redirect_header.get(name, redirect_body.get(name)),
         )
         for name in FINALIZE_NATIVE_ARG_ORDER
     ]
@@ -625,6 +714,8 @@ def build_plan(
             "execution": "failure",
             "exact_error_message": rc.expected_prequorum_error_message,
             "error_name": "QuorumNotMet",
+            "expected_refusal": True,
+            "refusal_scenario": "pre_quorum_finalize",
         },
     )
     previous = "E-prequorum-finalize-refusal"
@@ -655,6 +746,13 @@ def build_plan(
             "execution": "failure",
             "exact_error_message": EXPECTED_POSTQUORUM_MUTATION_ERROR_MESSAGE,
             "error_name": "EnvelopeHashMismatch",
+            "expected_refusal": True,
+            "refusal_scenario": "post_quorum_recipient_redirect",
+            "approved_recipient": recipient.account_hash_hex,
+            "redirected_recipient": finalizer_account,
+            "redirected_action_id": redirect_material.action_id_hex,
+            "redirected_transfer_id": str(redirect_material.transfer_id),
+            "redirected_envelope_hash": redirect_material.envelope_hash_hex,
         },
     )
     add_step(
@@ -686,6 +784,8 @@ def build_plan(
             "execution": "failure",
             "exact_error_message": EXPECTED_DUPLICATE_FINALIZE_ERROR_MESSAGE,
             "error_name": "AlreadyFinalized",
+            "expected_refusal": True,
+            "refusal_scenario": "duplicate_finalize_replay",
         },
     )
     add_step(
@@ -763,6 +863,7 @@ def build_plan(
                 "the asset constants"
             ),
         },
+        "custody_model": custody,
         "identities": {
             role.role: {
                 "public_key_hex": role.public_key_hex,

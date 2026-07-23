@@ -31,6 +31,7 @@ def _plan_with(plan_inputs: dict[str, Path], **replacements: Path) -> object:
         parameters_path=arguments["parameters"],
         snapshot_path=arguments["snapshot"],
         status_path=arguments["status"],
+        custody_model=arguments.get("custody_model", "single_operator"),
     )
 
 

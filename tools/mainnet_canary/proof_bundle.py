@@ -23,7 +23,11 @@ import re
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 
 BUNDLE_LINEAGE = "concordia-mainnet-canary-v1"
-BUNDLE_SCHEMA_ID = "concordia.mainnet-canary.proof-bundle.v1"
+# v2: the bundle now REQUIRES the custody_model disclosure taken from the
+# plan — the artifact itself must say who held the keys, not the narrative.
+BUNDLE_SCHEMA_ID = "concordia.mainnet-canary.proof-bundle.v2"
+
+CUSTODY_MODELS = ("single_operator", "independent_custodians")
 
 REQUIRED_STATEMENT = (
     "Concordia v3 on Casper Mainnet enforced quorum and the exact approved "
@@ -82,6 +86,7 @@ def build_proof_bundle_document(
     *,
     plan_hash: str,
     rc_tag: str,
+    custody_model: object,
     economic_manifest_sha256: str,
     attestations: dict[str, object],
     step_verifications: dict[str, object],
@@ -90,11 +95,19 @@ def build_proof_bundle_document(
 ) -> dict[str, object]:
     """Assemble the bundle document; the claims scan runs on every field."""
 
+    if custody_model not in CUSTODY_MODELS:
+        raise CanaryRefusal(
+            RefusalCode.CUSTODY_MODEL_INVALID,
+            "the bundle must disclose its custody model as exactly one of "
+            f"{list(CUSTODY_MODELS)}; a bundle silent on custody invites the "
+            "reader to assume independence that was never established",
+        )
     document: dict[str, object] = {
         "schema_id": BUNDLE_SCHEMA_ID,
         "lineage": BUNDLE_LINEAGE,
         "required_statement": REQUIRED_STATEMENT,
         "plan_hash": plan_hash,
+        "custody_model": custody_model,
         "rc_tag": rc_tag,
         "economic_manifest_sha256": economic_manifest_sha256,
         "attestations": attestations,
@@ -113,6 +126,7 @@ def require_cross_binding(
     manifest_plan_hash: str,
     verification_plan_hash: str,
     journal_head_hash: str,
+    plan_custody_model: object,
 ) -> None:
     """Every constituent must be bound to the SAME run.
 
@@ -143,6 +157,12 @@ def require_cross_binding(
             RefusalCode.BUNDLE_CROSS_BINDING_INVALID,
             "bundle journal head does not equal the head recomputed from the "
             "journal itself",
+        )
+    if document.get("custody_model") != plan_custody_model:
+        raise CanaryRefusal(
+            RefusalCode.BUNDLE_CROSS_BINDING_INVALID,
+            "bundle custody_model does not equal the plan's declared custody "
+            "model",
         )
 
 

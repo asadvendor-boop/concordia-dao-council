@@ -246,6 +246,35 @@ def build_matrix() -> list[dict[str, object]]:
         path.write_text(json.dumps(bundle), encoding="utf-8")
         return path
 
+    # Calibration-discipline fixtures: an operator-ceiling file (which the
+    # finals policy refuses outright), a calibration with one line removed,
+    # and a calibration rebound to a different plan hash.
+    ceilings_path = tmp / "operator-ceilings.json"
+    ceilings_path.write_text(
+        json.dumps(
+            {
+                "B-install-rc-wasm": {
+                    "conservative_ceiling_motes": "400000000000",
+                    "declared_by": "asad-public-approval",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    full_calibration = mc.make_calibration(plan)
+    short_calibration = json.loads(json.dumps(full_calibration))
+    del short_calibration["lines"]["I-executor-native-transfer"]
+    short_calibration_path = tmp / "calibration-missing-line.json"
+    short_calibration_path.write_text(
+        json.dumps(short_calibration), encoding="utf-8"
+    )
+    rebound_calibration = json.loads(json.dumps(full_calibration))
+    rebound_calibration["mainnet_plan_hash"] = "0" * 64
+    rebound_calibration_path = tmp / "calibration-other-plan.json"
+    rebound_calibration_path.write_text(
+        json.dumps(rebound_calibration), encoding="utf-8"
+    )
+
     rows: list[tuple[str, str, list[str]]] = [
         ("build attestation absent", "ARTIFACT_HASH_UNBACKED",
          stage_argv("a", **{"--attestation": str(tmp / "absent.json")})),
@@ -273,6 +302,24 @@ def build_matrix() -> list[dict[str, object]]:
          stage_argv("g", **{"--authorization": str(unsigned_path)})),
         ("calibration receipts absent", "CALIBRATION_RECEIPT_ABSENT",
          stage_argv("h", **{"--calibration": str(tmp / "absent.json")})),
+        ("operator ceilings supplied (finals: receipts only)",
+         "OPERATOR_CEILING_NOT_PERMITTED",
+         stage_argv("i", **{"--operator-ceilings": str(ceilings_path)})),
+        ("calibration missing one economic line",
+         "CALIBRATION_LINE_SET_MISMATCH",
+         stage_argv("j", **{"--calibration": str(short_calibration_path)})),
+        ("calibration bound to a different plan",
+         "CALIBRATION_BINDING_INVALID",
+         stage_argv("k", **{"--calibration": str(rebound_calibration_path)})),
+        ("custody confirmation disagrees with parameters",
+         "CUSTODY_MODEL_INVALID",
+         ["--repo-root", str(repo), "plan",
+          "--rc-declaration", str(inputs["rc"]),
+          "--key-inventory", str(inputs["inventory"]),
+          "--parameters", str(inputs["parameters"]),
+          "--snapshot", str(inputs["snapshot"]),
+          "--status", str(inputs["status"]),
+          "--custody-model", "independent_custodians"]),
         ("observations without provider evidence (v1)", "OBSERVATION_MALFORMED",
          ["verify", "--plan", str(plan_path),
           "--observations", str(legacy_observations())]),

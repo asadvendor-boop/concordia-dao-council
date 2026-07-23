@@ -56,7 +56,7 @@ class TestMatrixExecution:
         # make this fail to parse.
         document = json.loads(result.stdout)
         assert document["failed"] == 0
-        assert len(document["results"]) >= 17
+        assert len(document["results"]) >= 21
         for row in document["results"]:
             assert row["pass"] is True
             assert row["exit_code"] == row["expected_exit"]
@@ -78,6 +78,10 @@ class TestMatrixExecution:
             "CALIBRATION_RECEIPT_ABSENT",
             "AUTHORIZATION_SIGNATURE_INVALID",
             "AUTHORIZATION_UNSIGNED",
+            "OPERATOR_CEILING_NOT_PERMITTED",
+            "CALIBRATION_LINE_SET_MISMATCH",
+            "CALIBRATION_BINDING_INVALID",
+            "CUSTODY_MODEL_INVALID",
             "<accepted>",
         ):
             assert code in observed, f"matrix no longer covers {code}"

@@ -10,8 +10,9 @@ Ceilings are immutable integers with checked arithmetic:
     max_total_outlay_motes = transfer_principal_motes + max_fees_motes
 
 Every fee maximum must be grounded in a FINALIZED exact-equivalent Testnet
-calibration receipt, or in an explicit conservative operator ceiling — never
-a guess, never zero.  The human authorization binds the plan hash, both
+calibration receipt (v2: plan-bound, line-set-exact, dually observed) —
+never a guess, never zero.  Operator ceilings are NOT a permitted
+substitute under finals policy; supplying any refuses.  The human authorization binds the plan hash, both
 economic accounts, the recipient, the principal, every maximum, a
 trusted-clock expiry, a nonce, and the chain identity; the executor gate
 (:func:`require_within_authorization`) makes spending above the signed
@@ -24,11 +25,11 @@ import hashlib
 import json
 import re
 
+from tools.mainnet_canary.calibration import validate_calibration_document
 from tools.mainnet_canary.constants import MAINNET_CHAIN_NAME
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 
 ECONOMIC_MANIFEST_SCHEMA_ID = "concordia.mainnet-canary.economic-manifest.v1"
-CALIBRATION_SCHEMA_ID = "concordia.mainnet-canary.testnet-calibration.v1"
 HUMAN_AUTHORIZATION_SCHEMA_ID = "concordia.mainnet-canary.human-authorization.v1"
 
 _DECIMAL = re.compile(r"(?:0|[1-9][0-9]*)\Z")
@@ -124,70 +125,28 @@ def _typed_args_digest(typed_args: object) -> str:
 
 
 def _line_maximum(
-    step_id: str,
-    calibration_lines: dict[str, object],
-    operator_ceilings: dict[str, object],
+    step_id: str, calibration_lines: dict[str, dict[str, object]]
 ) -> tuple[int, str]:
-    """One grounded fee maximum: finalized calibration or operator ceiling."""
+    """One grounded fee maximum: a fully validated v2 calibration line."""
 
     calibrated = calibration_lines.get(step_id)
-    if calibrated is not None:
-        if not isinstance(calibrated, dict):
-            raise CanaryRefusal(
-                RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-                f"calibration line for {step_id} malformed",
-            )
-        receipt = calibrated.get("receipt")
-        if (
-            not isinstance(receipt, dict)
-            or receipt.get("finalized") is not True
-            or not isinstance(receipt.get("deploy_hash"), str)
-            or _HEX64.match(str(receipt.get("deploy_hash"))) is None
-        ):
-            raise CanaryRefusal(
-                RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-                f"calibration for {step_id} lacks a finalized Testnet "
-                "receipt; measured maxima require finalized exact-equivalent "
-                "deploys",
-            )
-        maximum = _motes(
-            calibrated.get("payment_motes"), field=f"calibration.{step_id}"
+    if calibrated is None:
+        raise CanaryRefusal(
+            RefusalCode.CALIBRATION_RECEIPT_ABSENT,
+            f"economic step {step_id} has no finalized Testnet calibration "
+            "receipt",
         )
-        if maximum <= 0:
-            raise CanaryRefusal(
-                RefusalCode.CEILING_ARITHMETIC_INVALID,
-                f"calibrated maximum for {step_id} must be positive; zero or "
-                "placeholder fees are refused",
-            )
-        return maximum, f"calibrated:{receipt['deploy_hash']}"
-
-    ceiling = operator_ceilings.get(step_id)
-    if ceiling is not None:
-        if (
-            not isinstance(ceiling, dict)
-            or not isinstance(ceiling.get("declared_by"), str)
-            or not ceiling.get("declared_by")
-        ):
-            raise CanaryRefusal(
-                RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-                f"operator ceiling for {step_id} must name its declarer",
-            )
-        maximum = _motes(
-            ceiling.get("conservative_ceiling_motes"),
-            field=f"operator_ceilings.{step_id}",
-        )
-        if maximum <= 0:
-            raise CanaryRefusal(
-                RefusalCode.CEILING_ARITHMETIC_INVALID,
-                f"operator ceiling for {step_id} must be positive",
-            )
-        return maximum, "operator_ceiling"
-
-    raise CanaryRefusal(
-        RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-        f"economic step {step_id} has neither a finalized Testnet "
-        "calibration receipt nor an explicit conservative operator ceiling",
+    maximum = _motes(
+        calibrated.get("payment_motes"), field=f"calibration.{step_id}"
     )
+    if maximum <= 0:
+        raise CanaryRefusal(
+            RefusalCode.CEILING_ARITHMETIC_INVALID,
+            f"calibrated maximum for {step_id} must be positive; zero or "
+            "placeholder fees are refused",
+        )
+    receipt = calibrated["receipt"]
+    return maximum, f"calibrated:{receipt['deploy_hash']}"
 
 
 def build_economic_manifest(
@@ -196,18 +155,24 @@ def build_economic_manifest(
     calibration: dict[str, object],
     operator_ceilings: dict[str, object],
 ) -> dict[str, object]:
-    """Derive the manifest from the plan; refuse anything ungrounded."""
+    """Derive the manifest from the plan; refuse anything ungrounded.
 
-    if (
-        not isinstance(calibration, dict)
-        or calibration.get("schema_id") != CALIBRATION_SCHEMA_ID
-        or not isinstance(calibration.get("lines"), dict)
-    ):
+    Finals policy grounds EVERY fee maximum in a finalized exact-equivalent
+    Testnet calibration receipt (v2, plan-bound, line-set-exact).  Operator
+    ceilings are not a permitted substitute: supplying any refuses.
+    """
+
+    if operator_ceilings:
         raise CanaryRefusal(
-            RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-            "calibration document does not match the frozen schema",
+            RefusalCode.OPERATOR_CEILING_NOT_PERMITTED,
+            "finals policy grounds every fee maximum in a finalized Testnet "
+            "calibration receipt; operator ceilings cannot substitute for "
+            "missing receipts",
         )
-    calibration_lines = calibration["lines"]
+    # Full v2 validation: plan-hash binding, exact line-set equality against
+    # the plan-derived economic steps, per-line typed-args/target/finality/
+    # dual-observation binding.
+    calibration_lines = validate_calibration_document(plan, calibration)
 
     steps = plan.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -229,7 +194,7 @@ def build_economic_manifest(
         if not step.get("economic"):
             continue
         step_id = str(step["step_id"])
-        maximum, basis = _line_maximum(step_id, calibration_lines, operator_ceilings)
+        maximum, basis = _line_maximum(step_id, calibration_lines)
         kind = str(step["kind"])
         if kind == "contract_install":
             max_install += maximum

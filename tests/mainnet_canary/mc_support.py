@@ -153,7 +153,8 @@ def make_key_inventory(**overrides: object) -> dict[str, object]:
 
 def make_parameters(**overrides: object) -> dict[str, object]:
     document: dict[str, object] = {
-        "schema_id": "concordia.mainnet-canary.parameters.v1",
+        "schema_id": "concordia.mainnet-canary.parameters.v2",
+        "custody_model": "single_operator",
         "proposal_id": "MAINNET-CANARY-001",
         "proposal_nonce": "10" * 32,
         "decision_code": 2,
@@ -270,23 +271,92 @@ def make_attestation(**overrides: object) -> dict[str, object]:
 
 
 def make_calibration(plan: dict[str, object], **overrides: object) -> dict[str, object]:
-    """Finalized Testnet calibration receipts for every economic plan step."""
+    """Fully bound v2 Testnet calibration receipts for every economic step.
 
+    Every binding the validator demands is computed from the plan itself:
+    the Mainnet typed-args digest, a DIFFERENT Testnet-args digest whose
+    only value changes are on reviewed translation fields, the RC target
+    pins, an execution result matching the step's expected outcome (refusal
+    probes calibrate their refusals), sufficient finality depth, and two
+    disjoint RPC observations.
+    """
+
+    from tools.mainnet_canary.calibration import (
+        REVIEWED_TRANSLATION_FIELDS,
+        typed_args_sha256,
+    )
+
+    rc = plan["rc"]
     lines: dict[str, object] = {}
-    for step in plan["steps"]:
+    for index, step in enumerate(plan["steps"]):
         if not step["economic"]:
             continue
-        lines[str(step["step_id"])] = {
+        step_id = str(step["step_id"])
+        plan_args = step.get("typed_args") or []
+        testnet_args = []
+        translated: list[str] = []
+        for arg in plan_args:
+            entry = dict(arg)
+            if not translated and entry["name"] in REVIEWED_TRANSLATION_FIELDS:
+                entry["value"] = (
+                    "casper-test"
+                    if entry["name"] == "casper_chain_name"
+                    else "74" * 32
+                )
+                translated.append(str(entry["name"]))
+            testnet_args.append(entry)
+        expected = step.get("expected_outcome", {})
+        if expected.get("execution") == "failure":
+            execution = {
+                "success": False,
+                "error_message": expected["exact_error_message"],
+            }
+        else:
+            execution = {"success": True, "error_message": None}
+        deploy_hash = hashlib.sha256(
+            f"testnet-calibration-{step_id}".encode("ascii")
+        ).hexdigest()
+        lines[step_id] = {
+            "mainnet_step_id": step_id,
+            "mainnet_typed_args_sha256": typed_args_sha256(plan_args),
+            "testnet_deploy_args_sha256": typed_args_sha256(testnet_args),
+            "network_profile_translation": {"translated_fields": translated},
+            "signer_public_key_hex": "01" + "aa" * 32,
+            "target": {
+                "entry_point": step.get("entry_point"),
+                "wasm_sha256": (
+                    rc["testnet_wasm_sha256"]
+                    if step["kind"] == "contract_install"
+                    else None
+                ),
+                "source_commit": rc["peeled_commit_sha"],
+            },
             "payment_motes": "5000000000",
             "receipt": {
-                "deploy_hash": "1f" * 32,
+                "deploy_hash": deploy_hash,
                 "block_hash": "2e" * 32,
-                "finalized": True,
-                "chain_name": "casper-test",
+                "block_height": 100 + index,
+                "execution": execution,
+                "finality": {"chain_tip_height": 100 + index + 8},
+                "observations": [
+                    {
+                        "provider_id": "provider-a",
+                        "endpoint_host": "node-a.example",
+                        "response_sha256": "aa" * 32,
+                    },
+                    {
+                        "provider_id": "provider-b",
+                        "endpoint_host": "node-b.example",
+                        "response_sha256": "bb" * 32,
+                    },
+                ],
             },
+            "harness_artifact_sha256": "cc" * 32,
         }
     document: dict[str, object] = {
-        "schema_id": "concordia.mainnet-canary.testnet-calibration.v1",
+        "schema_id": "concordia.mainnet-canary.testnet-calibration.v2",
+        "mainnet_plan_hash": plan["canary_plan_sha256"],
+        "testnet_chain_name": "casper-test",
         "lines": lines,
     }
     document.update(overrides)
@@ -463,6 +533,7 @@ def build_valid_plan(plan_inputs: dict[str, Path]) -> dict[str, object]:
         parameters_path=plan_inputs["parameters"],
         snapshot_path=plan_inputs["snapshot"],
         status_path=plan_inputs["status"],
+        custody_model=plan_inputs.get("custody_model", "single_operator"),
     )
 
 

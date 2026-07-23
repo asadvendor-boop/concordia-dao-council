@@ -191,6 +191,7 @@ class TestProofBundle:
         return build_proof_bundle_document(
             plan_hash="ab" * 32,
             rc_tag="rc-tag-v1",
+            custody_model="single_operator",
             economic_manifest_sha256="cd" * 32,
             attestations={"testnet_wasm_sha256": "11" * 32, "mainnet_wasm_sha256": "22" * 32},
             step_verifications={"G-finalize-exact-envelope": {"consensus_block_hash": "6f" * 32}},
