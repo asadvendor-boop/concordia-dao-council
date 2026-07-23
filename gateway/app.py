@@ -268,6 +268,34 @@ def _safepay_proxy_headers(request: Request) -> dict[str, str] | None:
     }
 
 
+async def _read_safepay_v2_request_body(request: Request) -> bytes | None:
+    """Read no more than the frozen public-body limit plus one sentinel byte."""
+
+    content_lengths = request.headers.getlist("content-length")
+    if content_lengths:
+        if (
+            len(content_lengths) != 1
+            or not content_lengths[0].isascii()
+            or not content_lengths[0].isdigit()
+        ):
+            return None
+        if int(content_lengths[0]) > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
+            return None
+
+    body = bytearray()
+    async for chunk in request.stream():
+        remaining = SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES + 1 - len(body)
+        if remaining <= 0:
+            return None
+        body.extend(chunk[:remaining])
+        if (
+            len(chunk) > remaining
+            or len(body) > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES
+        ):
+            return None
+    return bytes(body)
+
+
 def _safepay_u512_cl_bytes(value: int) -> str:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("SafePay U512 value is invalid")
@@ -901,14 +929,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     async def _strict_safepay_json(request: Request) -> dict[str, Any] | None:
         try:
-            chunks: list[bytes] = []
-            size = 0
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
-                    return None
-                chunks.append(chunk)
-            body = parse_safepay_v2_strict_json(b"".join(chunks))
+            raw_body = await _read_safepay_v2_request_body(request)
+            if raw_body is None:
+                return None
+            body = parse_safepay_v2_strict_json(raw_body)
         except (TypeError, ValueError, RecursionError, RuntimeError):
             return None
         return body if isinstance(body, dict) else None

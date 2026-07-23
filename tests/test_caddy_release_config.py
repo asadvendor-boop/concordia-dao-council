@@ -96,6 +96,25 @@ def test_safepay_gateway_route_overwrites_client_identity_and_attestation() -> N
     assert "{$SAFEPAY_PROXY_SECRET}" not in route
 
 
+def test_safepay_request_body_is_limited_at_both_public_caddy_edges() -> None:
+    config = _config()
+
+    gateway_start = config.index("handle /x402/v2/*")
+    gateway_end = config.index("\n\thandle ", gateway_start + 1)
+    gateway_route = config[gateway_start:gateway_end]
+
+    provider_host = config.index("{$X402_PROVIDER_HOSTNAME}")
+    provider_start = config.index("handle /x402/*", provider_host)
+    provider_end = config.index("\n\thandle ", provider_start + 1)
+    provider_route = config[provider_start:provider_end]
+
+    for route in (gateway_route, provider_route):
+        assert "request_body {" in route
+        assert "max_size 64KB" in route
+        assert route.index("request_body {") < route.index("reverse_proxy")
+    assert config.count("max_size 64KB") == 2
+
+
 def test_shared_caddy_secret_has_an_explicit_runtime_preflight() -> None:
     """Shared Caddy is external to Compose, so release must probe its mount."""
 

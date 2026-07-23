@@ -56,6 +56,9 @@
 	}
 
 	handle /x402/v2/* {
+		request_body {
+			max_size 64KB
+		}
 		reverse_proxy concordia-gateway:8000 {
 			# Preserve one real client quota identity through the trusted chain.
 			# Setting these values overwrites every caller-supplied instance.
@@ -123,6 +126,9 @@
 	}
 
 	handle /x402/* {
+		request_body {
+			max_size 64KB
+		}
 		reverse_proxy concordia-x402-provider:8000 {
 			# The provider trusts these values only from this ingress peer.
 			# Setting them here overwrites every caller-supplied instance.

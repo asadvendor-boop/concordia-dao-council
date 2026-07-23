@@ -19,7 +19,9 @@ import uuid
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+import x402_provider.app as provider_app
 from shared.x402_payments import (
     SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
     SAFEPAY_V2_NETWORK,
@@ -924,6 +926,73 @@ def test_provider_v2_rejects_oversized_public_request_before_business_logic(
         )
     assert_error_body(response, 400, "invalid_request", False, "not_attempted")
     assert observer.calls == 0
+
+
+def _provider_request_with_messages(
+    *,
+    content_length: int | None,
+    chunks: list[bytes],
+) -> tuple[Request, list[int]]:
+    headers = []
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode("ascii")))
+    messages = [
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": index < len(chunks) - 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    receive_calls: list[int] = []
+
+    async def receive() -> dict:
+        receive_calls.append(1)
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/x402/v2/redemptions",
+        "raw_path": b"/x402/v2/redemptions",
+        "query_string": b"",
+        "headers": headers,
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 443),
+    }
+    return Request(scope, receive), receive_calls
+
+
+async def test_provider_content_length_over_limit_rejects_without_receiving_body() -> None:
+    request, receive_calls = _provider_request_with_messages(
+        content_length=SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES + 1,
+        chunks=[b"must-not-be-read"],
+    )
+
+    assert await provider_app._read_safepay_v2_request_body(request) is None
+    assert receive_calls == []
+
+
+@pytest.mark.parametrize(
+    "content_length",
+    [None, 8],
+    ids=["chunked-without-length", "lying-content-length"],
+)
+async def test_provider_streaming_body_cap_stops_at_first_oversized_chunk(
+    content_length: int | None,
+) -> None:
+    request, receive_calls = _provider_request_with_messages(
+        content_length=content_length,
+        chunks=[b"a" * 40_000, b"b" * 30_000, b"must-not-be-read"],
+    )
+
+    assert await provider_app._read_safepay_v2_request_body(request) is None
+    assert len(receive_calls) == 2
 
 
 def _provider_proxy_headers(client_ip: str, **extra: str) -> dict[str, str]:

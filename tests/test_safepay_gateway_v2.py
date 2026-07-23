@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import gateway.app as gateway_app
 import shared.x402_payments as safepay_module
@@ -17,6 +18,7 @@ from gateway.app import create_app
 from gateway.rate_limit import SafePayAdmissionLimiter
 from shared.x402_payments import (
     SAFEPAY_V2_BINDING_CHECK_FIELDS,
+    SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
     SAFEPAY_V2_PROVIDER_ORIGIN,
     SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
     SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
@@ -1525,6 +1527,7 @@ def test_safepay_admission_bucket_table_is_strictly_bounded() -> None:
         quote_requests_per_window=2,
         payment_intent_requests_per_window=2,
         redemption_requests_per_window=2,
+        global_requests_per_window=10,
         window_seconds=60,
         max_buckets=2,
         clock=lambda: now[0],
@@ -1538,6 +1541,141 @@ def test_safepay_admission_bucket_table_is_strictly_bounded() -> None:
     now[0] = 180.0
     assert limiter.admit("quotes", "198.51.100.3")
     assert len(limiter._buckets) == 1
+
+
+def test_safepay_global_admission_aggregates_distinct_attested_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    calls = 0
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "10")
+    monkeypatch.setenv("SAFEPAY_GATEWAY_GLOBAL_REQUESTS_PER_WINDOW", "2")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _provider_response(402, _quote_issue_body(quote))
+
+    with _client(handler, client_host="10.1.2.3") as client:
+        responses = []
+        for index in range(3):
+            responses.append(
+                client.post(
+                    "/x402/v2/quotes",
+                    json={
+                        "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                        "proposal_id": PROPOSAL_ID,
+                        "resource_id": RESOURCE_ID,
+                    },
+                    headers={
+                        "X-Concordia-Client-IP": f"198.51.100.{index + 1}",
+                        "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+                        "Authorization": f"Bearer caller-{index}",
+                        "X-Forwarded-For": f"203.0.113.{index + 1}",
+                    },
+                )
+            )
+
+    assert [response.status_code for response in responses] == [402, 402, 429]
+    assert responses[-1].json() == safepay_v2_error_body(
+        "quote_rate_limited", True, "not_attempted"
+    )
+    assert calls == 2
+
+
+def test_safepay_global_admission_is_shared_across_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quote = _quote()
+    provider_calls: list[str] = []
+    monkeypatch.setenv("SAFEPAY_GATEWAY_QUOTE_REQUESTS_PER_WINDOW", "10")
+    monkeypatch.setenv(
+        "SAFEPAY_GATEWAY_PAYMENT_INTENT_REQUESTS_PER_WINDOW", "10"
+    )
+    monkeypatch.setenv("SAFEPAY_GATEWAY_REDEMPTION_REQUESTS_PER_WINDOW", "10")
+    monkeypatch.setenv("SAFEPAY_GATEWAY_GLOBAL_REQUESTS_PER_WINDOW", "2")
+    monkeypatch.setattr(
+        gateway_app,
+        "build_unsigned_casper_transfer_deploy",
+        lambda **kwargs: _valid_unsigned_transfer(**kwargs),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        provider_calls.append(request.url.path)
+        if request.url.path.endswith("/quotes"):
+            return _provider_response(402, _quote_issue_body(quote))
+        return _provider_response(200, _success_body(quote))
+
+    headers = {
+        "X-Concordia-Client-IP": "198.51.100.50",
+        "X-Concordia-SafePay-Proxy": PROXY_SECRET,
+    }
+    with _client(handler, client_host="10.1.2.3") as client:
+        issued = client.post(
+            "/x402/v2/quotes",
+            json={
+                "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+                "proposal_id": PROPOSAL_ID,
+                "resource_id": RESOURCE_ID,
+            },
+            headers=headers,
+        )
+        intent = client.post(
+            "/x402/v2/payment-intent",
+            json={
+                "schema_version": SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+                "quote": quote,
+                "quote_capability": _quote_capability(quote),
+                "signer_public_key": SIGNER_PUBLIC_KEY,
+            },
+            headers={
+                **headers,
+                "Authorization": "Bearer changed",
+                "X-Forwarded-For": "203.0.113.99",
+            },
+        )
+        redemption = client.post(
+            "/x402/v2/redemptions",
+            json={
+                "schema_version": SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
+                "quote": quote,
+                "payment_hash": PAYMENT_HASH,
+            },
+            headers={
+                **headers,
+                "Authorization": "Basic changed-again",
+                "X-Forwarded-For": "192.0.2.99",
+            },
+        )
+
+    assert issued.status_code == 402
+    assert intent.status_code == 200
+    assert redemption.status_code == 503
+    assert redemption.json() == safepay_v2_error_body(
+        "provider_unavailable", True, "verification_pending"
+    )
+    assert provider_calls == ["/x402/v2/quotes"]
+
+
+def test_safepay_global_admission_resets_only_at_window_boundary() -> None:
+    now = [120.0]
+    limiter = SafePayAdmissionLimiter(
+        quote_requests_per_window=10,
+        payment_intent_requests_per_window=10,
+        redemption_requests_per_window=10,
+        global_requests_per_window=2,
+        window_seconds=60,
+        max_buckets=10,
+        clock=lambda: now[0],
+    )
+
+    assert limiter.admit("quotes", "client-a")
+    assert limiter.admit("payment_intents", "client-b")
+    assert not limiter.admit("redemptions", "client-c")
+    now[0] = 179.999
+    assert not limiter.admit("redemptions", "client-c")
+    now[0] = 180.0
+    assert limiter.admit("redemptions", "client-c")
 
 
 @pytest.mark.parametrize(
@@ -1736,6 +1874,75 @@ def test_public_safepay_request_body_is_bounded_before_provider_io() -> None:
 
     assert response.status_code == 400
     assert calls == 0
+
+
+def _request_with_messages(
+    *,
+    content_length: int | None,
+    chunks: list[bytes],
+) -> tuple[Request, list[int]]:
+    headers = []
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode("ascii")))
+    messages = [
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": index < len(chunks) - 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    receive_calls: list[int] = []
+
+    async def receive() -> dict[str, Any]:
+        receive_calls.append(1)
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/x402/v2/quotes",
+        "raw_path": b"/x402/v2/quotes",
+        "query_string": b"",
+        "headers": headers,
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 443),
+    }
+    return Request(scope, receive), receive_calls
+
+
+async def test_gateway_content_length_over_limit_rejects_without_receiving_body() -> None:
+    request, receive_calls = _request_with_messages(
+        content_length=SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES + 1,
+        chunks=[b"must-not-be-read"],
+    )
+
+    assert await gateway_app._read_safepay_v2_request_body(request) is None
+    assert receive_calls == []
+
+
+@pytest.mark.parametrize(
+    "content_length",
+    [None, 8],
+    ids=["chunked-without-length", "lying-content-length"],
+)
+async def test_gateway_streaming_body_cap_stops_at_first_oversized_chunk(
+    content_length: int | None,
+) -> None:
+    first = b"a" * 40_000
+    second = b"b" * 30_000
+    request, receive_calls = _request_with_messages(
+        content_length=content_length,
+        chunks=[first, second, b"must-not-be-read"],
+    )
+
+    assert await gateway_app._read_safepay_v2_request_body(request) is None
+    assert len(receive_calls) == 2
 
 
 @pytest.mark.parametrize(

@@ -328,13 +328,15 @@ def _log_sanitized_failure(endpoint_id: str, exc: BaseException) -> None:
 
 async def _read_safepay_v2_request_body(request: Request) -> bytes | None:
     """Read no more than the frozen public-body limit plus one sentinel byte."""
-    raw_content_length = request.headers.get("content-length")
-    if raw_content_length is not None:
-        try:
-            content_length = int(raw_content_length)
-        except ValueError:
+    content_lengths = request.headers.getlist("content-length")
+    if content_lengths:
+        if (
+            len(content_lengths) != 1
+            or not content_lengths[0].isascii()
+            or not content_lengths[0].isdigit()
+        ):
             return None
-        if content_length < 0 or content_length > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
+        if int(content_lengths[0]) > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
             return None
 
     body = bytearray()

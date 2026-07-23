@@ -45,8 +45,9 @@ class SafePayAdmissionLimiter:
 
     The caller supplies only the client identity already resolved through the
     Caddy attestation boundary. Authorization and forwarding headers never
-    participate in the key. A full live bucket table fails closed for a new
-    identity rather than growing memory without bound.
+    participate in the key. Per-operation/per-client limits sit beneath one
+    aggregate budget shared by every operation and identity. A full live
+    bucket table or exhausted aggregate budget fails closed.
     """
 
     def __init__(
@@ -55,6 +56,7 @@ class SafePayAdmissionLimiter:
         quote_requests_per_window: int | None = None,
         payment_intent_requests_per_window: int | None = None,
         redemption_requests_per_window: int | None = None,
+        global_requests_per_window: int | None = None,
         window_seconds: int | None = None,
         max_buckets: int | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -80,6 +82,13 @@ class SafePayAdmissionLimiter:
                 "SAFEPAY_GATEWAY_PAYMENT_INTENT_REQUESTS_PER_WINDOW", 24
             )
         )
+        self.global_requests_per_window = (
+            global_requests_per_window
+            if global_requests_per_window is not None
+            else _positive_int_env(
+                "SAFEPAY_GATEWAY_GLOBAL_REQUESTS_PER_WINDOW", 600
+            )
+        )
         self.window_seconds = (
             window_seconds
             if window_seconds is not None
@@ -94,6 +103,7 @@ class SafePayAdmissionLimiter:
             self.quote_requests_per_window <= 0
             or self.payment_intent_requests_per_window <= 0
             or self.redemption_requests_per_window <= 0
+            or self.global_requests_per_window <= 0
             or self.window_seconds <= 0
             or self.max_buckets <= 0
         ):
@@ -102,6 +112,8 @@ class SafePayAdmissionLimiter:
         self._buckets: OrderedDict[tuple[str, str], tuple[int, int]] = (
             OrderedDict()
         )
+        self._global_window = -1
+        self._global_count = 0
         self._lock = threading.Lock()
 
     def admit(self, operation: str, client_identity: str) -> bool:
@@ -119,11 +131,18 @@ class SafePayAdmissionLimiter:
         current_window = int(self._clock() // self.window_seconds)
         bucket_key = (operation, client_identity)
         with self._lock:
+            if self._global_window != current_window:
+                self._global_window = current_window
+                self._global_count = 0
             existing = self._buckets.get(bucket_key)
             if existing is not None and existing[0] == current_window:
-                if existing[1] >= limit:
+                if (
+                    existing[1] >= limit
+                    or self._global_count >= self.global_requests_per_window
+                ):
                     return False
                 self._buckets[bucket_key] = (current_window, existing[1] + 1)
+                self._global_count += 1
                 return True
             if existing is not None:
                 del self._buckets[bucket_key]
@@ -138,7 +157,10 @@ class SafePayAdmissionLimiter:
                     del self._buckets[key]
             if len(self._buckets) >= self.max_buckets:
                 return False
+            if self._global_count >= self.global_requests_per_window:
+                return False
             self._buckets[bucket_key] = (current_window, 1)
+            self._global_count += 1
             return True
 
 
