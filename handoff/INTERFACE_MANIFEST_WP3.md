@@ -1,10 +1,18 @@
 # INTERFACE MANIFEST — WP3 (approval boundary, demo capability, room identity)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `d096403`
+- Producer commit: `73279a1` (corrections for CODEX_REVIEW_CLAUDE_WP2_WP3, on top of `d096403`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 (Approval boundary v1 / Demo capability v1 / Room identity v1), §14
-- Status of my lane: 59 new AU/DM/RM tests green (x3 stable runs); freeze suite 16/16.
+- Status of my lane: 103 tests green x3 stable (approval + demo + room + freeze), ruff + `git diff --check` clean.
+
+## Correction pass (post NO-GO review) — what changed at `73279a1`
+- **Durable capability lifecycle**: `demo_capabilities.state` column (`ISSUED → RUNNING → SUCCEEDED|FAILED`), claim/limits/transition in ONE `BEGIN IMMEDIATE` compare-and-swap; RUNNING retry → honest 202 with the same `demo_run_id`; terminal retry replays the exact stored status/body; stale RUNNING past its 180s lease → terminal FAILED with no re-run. The empty-`{}` 200 path no longer exists.
+- **Identity is preallocated + provenance-first**: exact `DAO-DEMO-*` id allocated before any mutation and enforced-equal on simulator + prepared results; `demo_runs` provenance reserved before the first durable write and kept on partial failure.
+- **Cleanup**: selection+deletion in one `BEGIN IMMEDIATE`; strict prefix + exact one-run ownership; COMPLETE canonical set hardcoded-protected (`DAO-PROP-6CB25C`, `DAO-PROP-DYN-002`, `DAO-PROP-RWA-001`).
+- **Issuance admission**: durable `demo_capability_issue_counters` fixed-window table (12/client, 120/global per 600s), outstanding/retained caps, bounded GC of expired unconsumed rows only.
+- **Room identity (SUPERSEDES the old accept-on-match deviation below)**: in PRODUCTION (`APP_ENV=production/prod`, no `CONCORDIA_TEST_MODE`) every caller-supplied `sender_id`/`sender_role`/`sender_type`/participant `role` is rejected 400 even when it exactly matches. Non-production keeps a flagged exact-match compat gate ONLY because Codex-owned `shared/proposal_room.py` still transmits these fields. **Codex: (1) migrate `shared/proposal_room.py` post_message/add_participant call sites to stop sending identity fields so production strictness holds for the recorder pipeline; (2) ensure compose sets `APP_ENV=production` on the gateway or the strict gate never engages.**
+- Duplicate agent-id principals: sorted-order role resolution, collided ids fail closed as `ambiguous_principal`/`ambiguous_participant`. Startup duplicate-key rejection remains Codex-owned in `gateway/auth.py`.
 
 All items below are changes in **Codex-owned files** that I cannot edit. My lane
 is committed and self-consistent; these are what Codex must apply for full
@@ -13,8 +21,9 @@ integration. Grouped by file.
 ## gateway/database.py — fold demo ledger DDL into init_db()
 Currently created lazily + idempotently by `gateway/routes/demo_cleanup.py::ensure_demo_tables`
 on the shared routes connection (CREATE TABLE IF NOT EXISTS). Please fold into `init_db()`:
-- `demo_capabilities(capability_id PK, scenario_id, client_binding_hash, nonce_hash, issued_at, expires_at, demo_run_id, consumed_at, response_status, response_json)`
+- `demo_capabilities(capability_id PK, scenario_id, client_binding_hash, nonce_hash, issued_at, expires_at, demo_run_id, consumed_at, response_status, response_json, state)` — `state` added at `73279a1`
 - `demo_runs(demo_run_id, proposal_id, scenario_id, is_demo, created_at, PK(demo_run_id, proposal_id))`
+- `demo_capability_issue_counters(window_start, client_binding_hash, count)` — durable issuance fixed-window admission, added at `73279a1`
 - Optional later: `is_demo` / `demo_run_id` columns on `proposals` (today provenance lives in `demo_runs` keyed by proposal_id, which the spec permits).
 
 ## gateway/app.py
