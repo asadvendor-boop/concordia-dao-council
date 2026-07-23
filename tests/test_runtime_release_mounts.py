@@ -15,6 +15,7 @@ DOCKERFILE = ROOT / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
 ENTRYPOINT = ROOT / "docker/entrypoint.sh"
 COMPOSE = ROOT / "deploy/shared-host/compose.prod.yml"
+RUNBOOK = ROOT / "deploy/shared-host/README.md"
 
 
 def _compose() -> dict[str, object]:
@@ -144,6 +145,77 @@ def test_gateway_entrypoint_validates_mounts_before_starting_uvicorn() -> None:
 
     assert validation in entrypoint
     assert entrypoint.index(validation) < entrypoint.index(uvicorn)
+
+
+def test_shared_host_runbook_anchors_release_commands_to_exact_checkout() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+
+    assert 'RELEASE_COMMIT="${RELEASE_COMMIT:?' in runbook
+    assert (
+        'COMPOSE_FILE="${RELEASE_SOURCE}/deploy/shared-host/compose.prod.yml"'
+        in runbook
+    )
+    assert 'ENV_FILE="${RELEASE_ROOT}/env/concordia.env"' in runbook
+    assert (
+        'STAGING_ENV_FILE="${RELEASE_ROOT}/env/concordia-staging.env"'
+        in runbook
+    )
+    assert (
+        'test "$(git -C "${RELEASE_SOURCE}" rev-parse HEAD)" '
+        '= "${RELEASE_COMMIT}"'
+    ) in runbook
+    assert (
+        'test -z "$(git -C "${RELEASE_SOURCE}" status '
+        '--porcelain=v1 --untracked-files=all)"'
+    ) in runbook
+    assert '--env-file "${ENV_FILE}" -f "${COMPOSE_FILE}"' in runbook
+    assert '--env-file "${STAGING_ENV_FILE}" -f "${COMPOSE_FILE}"' in runbook
+    assert (
+        '"${RELEASE_SOURCE}/scripts/generate_x402_governance_v3_config.py"'
+        in runbook
+    )
+    assert (
+        '"${RELEASE_SOURCE}/scripts/stage_official_x402_governance.py"'
+        in runbook
+    )
+    assert "-f compose.prod.yml" not in runbook
+    assert "--env-file concordia.env" not in runbook
+    assert 'RELEASE_COMMIT="$(git rev-parse HEAD)"' not in runbook
+    assert "./scripts/" not in runbook
+
+
+def test_shared_host_runbook_uses_sequential_concordia_only_cutovers() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+
+    assert "## One-time shared proxy bootstrap (not a release step)" in runbook
+    assert "up -d --build" not in runbook
+    assert "build gateway" in runbook
+    assert "build x402-official" in runbook
+    assert "build dashboard" in runbook
+    for service in (
+        "simulator",
+        "x402-provider",
+        "rowan",
+        "mercer",
+        "verity",
+        "alden",
+        "locke",
+        "wells",
+        "recorder-heartbeat",
+        "gateway",
+        "x402-official",
+        "dashboard",
+    ):
+        assert (
+            "up -d --no-deps --no-build --force-recreate "
+            f"{service}"
+        ) in runbook
+    switch = runbook.split(
+        "## Isolated official-x402 registry switch", 1
+    )[1].split("## One-time shared proxy bootstrap", 1)[0]
+    assert "docker network" not in switch
+    assert "caddy adapt" not in switch.lower()
+    assert "caddy reload" not in switch.lower()
 
 
 def test_runtime_mount_validator_accepts_one_consistent_selected_registry(
