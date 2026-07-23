@@ -195,7 +195,7 @@ print(json.dumps({
   const target = generation === "v1" ? CONTRACT_HASH : PACKAGE_HASH;
   return JSON.parse(execFileSync(
     "uv",
-    ["run", "--frozen", "python", "-c", script, PROPOSAL_ID, finalCardHash, target, generation],
+    ["run", "--frozen", "--python", "python3.12", "python", "-c", script, PROPOSAL_ID, finalCardHash, target, generation],
     { cwd: REPOSITORY, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
   ));
 }

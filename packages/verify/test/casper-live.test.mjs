@@ -89,7 +89,7 @@ before(() => {
     "proof, _, _ = _bound_v3_proof()",
     "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
   ].join("\n");
-  const text = execFileSync("uv", ["run", "--frozen", "python", "-c", script], {
+  const text = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", script], {
     cwd: REPOSITORY,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,

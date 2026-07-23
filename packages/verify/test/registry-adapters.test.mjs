@@ -73,7 +73,7 @@ function generateExactProofScript(useTreasuryDocument = false) {
 }
 
 function generateExactProof(useTreasuryDocument = false) {
-  const raw = execFileSync("uv", ["run", "--frozen", "python", "-c", generateExactProofScript(useTreasuryDocument)], {
+  const raw = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", generateExactProofScript(useTreasuryDocument)], {
     cwd: REPOSITORY,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
