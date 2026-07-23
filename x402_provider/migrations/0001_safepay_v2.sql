@@ -81,7 +81,15 @@ CREATE TABLE IF NOT EXISTS safepay_redemption_observations (
   payment_hash TEXT NOT NULL,
   quote_id TEXT NOT NULL,
   resource_id TEXT NOT NULL,
-  observed_at INTEGER NOT NULL
+  observed_at INTEGER NOT NULL,
+  -- Binding to the response actually served: for consumption/replay kinds both
+  -- fields carry the frozen fulfillment response_hash; for
+  -- cross_binding_rejected, response_digest is the canonical digest of the
+  -- exact 409 error body and consumed_response_hash is the response_hash of
+  -- the consumption that blocked the attempt. A bare kind/status row without
+  -- these bindings can never satisfy the evidence summary.
+  response_digest TEXT NOT NULL CHECK(length(response_digest) = 64),
+  consumed_response_hash TEXT NOT NULL CHECK(length(consumed_response_hash) = 64)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_safepay_redemption_observations_unique

@@ -53,6 +53,8 @@ from shared.x402_payments import (
     evaluate_safepay_v2_observation,
     observe_safepay_v2_payment,
     payment_required_headers,
+    safepay_v2_body_digest,
+    safepay_v2_error_body,
     safepay_v2_quote_hash,
     validate_safepay_v2_observation,
     validate_safepay_v2_quote,
@@ -209,15 +211,20 @@ def _is_lower_hex64(value: Any) -> bool:
 
 
 def _v2_error(status_code: int, code: str, retryable: bool, replay_disposition: str) -> JSONResponse:
+    # The body comes from the shared frozen builder so the ledger's evidence
+    # digest recomputation can never drift from the body actually served.
     return JSONResponse(
-        {
-            "schema_version": SAFEPAY_V2_SCHEMA_VERSION,
-            "error": {"code": code, "retryable": retryable},
-            "delivery": {"replay_disposition": replay_disposition},
-        },
+        safepay_v2_error_body(code, retryable, replay_disposition),
         status_code=status_code,
         headers=dict(_V2_HEADERS),
     )
+
+
+# Canonical digest of the exact 409 cross-binding body this app serves; recorded
+# on every cross_binding_rejected observation and revalidated by the summary.
+_CROSS_BINDING_409_DIGEST = safepay_v2_body_digest(
+    safepay_v2_error_body("payment_already_consumed_for_other_binding", False, "cross_binding_rejected")
+)
 
 
 def _log_sanitized_failure(endpoint_id: str, exc: BaseException) -> None:
@@ -487,6 +494,8 @@ def create_app(
                     quote_id=quote_id,
                     resource_id=resource_id,
                     now=now,
+                    response_digest=existing["response_hash"],
+                    consumed_response_hash=existing["response_hash"],
                 )
                 return _v2_success(json.loads(existing["fulfillment_json"]), "idempotent_replay")
             store.record_redemption_observation(
@@ -497,6 +506,8 @@ def create_app(
                 quote_id=quote_id,
                 resource_id=resource_id,
                 now=now,
+                response_digest=_CROSS_BINDING_409_DIGEST,
+                consumed_response_hash=existing["response_hash"],
             )
             return _v2_error(409, "payment_already_consumed_for_other_binding", False, "cross_binding_rejected")
         consumed_by_other_payment = store.find_consumption_for_quote(quote_id)
@@ -509,6 +520,8 @@ def create_app(
                 quote_id=quote_id,
                 resource_id=resource_id,
                 now=now,
+                response_digest=_CROSS_BINDING_409_DIGEST,
+                consumed_response_hash=consumed_by_other_payment["response_hash"],
             )
             return _v2_error(409, "payment_already_consumed_for_other_binding", False, "cross_binding_rejected")
 
@@ -611,26 +624,37 @@ def create_app(
         except QuoteBindingInvalid:
             return _v2_error(422, "quote_binding_invalid", False, "not_attempted")
         except CrossBindingRejected:
-            store.record_redemption_observation(
-                kind="cross_binding_rejected",
-                http_status=409,
-                network=network,
-                payment_hash=payment_hash,
-                quote_id=quote_id,
-                resource_id=resource_id,
-                now=now,
-            )
+            # Bind the observation to the consumption that actually blocked the
+            # claim; if it cannot be loaded the 409 still goes out but no
+            # unbound evidence row is fabricated (fail closed on evidence).
+            blocking = store.find_consumption(network, payment_hash)
+            if blocking is not None:
+                store.record_redemption_observation(
+                    kind="cross_binding_rejected",
+                    http_status=409,
+                    network=network,
+                    payment_hash=payment_hash,
+                    quote_id=quote_id,
+                    resource_id=resource_id,
+                    now=now,
+                    response_digest=_CROSS_BINDING_409_DIGEST,
+                    consumed_response_hash=blocking["response_hash"],
+                )
             return _v2_error(409, "payment_already_consumed_for_other_binding", False, "cross_binding_rejected")
         if disposition == "idempotent_replay":
-            store.record_redemption_observation(
-                kind="idempotent_replay",
-                http_status=200,
-                network=network,
-                payment_hash=payment_hash,
-                quote_id=quote_id,
-                resource_id=resource_id,
-                now=now,
-            )
+            replayed = store.find_consumption(network, payment_hash)
+            if replayed is not None:
+                store.record_redemption_observation(
+                    kind="idempotent_replay",
+                    http_status=200,
+                    network=network,
+                    payment_hash=payment_hash,
+                    quote_id=quote_id,
+                    resource_id=resource_id,
+                    now=now,
+                    response_digest=replayed["response_hash"],
+                    consumed_response_hash=replayed["response_hash"],
+                )
         return _v2_success(fulfillment, disposition)
 
     def _v2_success(fulfillment: dict[str, Any], disposition: str) -> JSONResponse:

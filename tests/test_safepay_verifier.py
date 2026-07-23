@@ -26,7 +26,9 @@ from shared.x402_payments import (
     evaluate_safepay_v2_observation,
     observe_safepay_v2_payment,
     redeem_provider_x402_with_retry,
+    safepay_v2_body_digest,
     safepay_v2_correlation_id,
+    safepay_v2_error_body,
     safepay_v2_quote_hash,
     safepay_v2_response_hash,
     settle_x402_payment_with_retry,
@@ -1040,6 +1042,13 @@ def test_app_real_observer_missing_initiator_fails_closed(tmp_path, monkeypatch)
 # =====================================================================
 
 
+# Canonical digest of the exact frozen 409 cross-binding body the provider
+# serves; every genuine cross_binding_rejected observation is bound to it.
+CROSS_409_DIGEST = safepay_v2_body_digest(
+    safepay_v2_error_body("payment_already_consumed_for_other_binding", False, "cross_binding_rejected")
+)
+
+
 def _consumed_quote(tmp_path, monkeypatch):
     clock = FakeClock()
     observer = FakeObserver()
@@ -1050,11 +1059,12 @@ def _consumed_quote(tmp_path, monkeypatch):
     observer.by_hash[payment_hash] = make_observation(quote, payment_hash)
     assert redeem(client, quote, payment_hash).status_code == 200
     ledger = SafePayLedger(str(tmp_path / "safepay.db"), SafePayCaps())
-    return ledger, quote, payment_hash
+    consumption = ledger.find_consumption(SAFEPAY_V2_NETWORK, payment_hash)
+    return ledger, quote, payment_hash, consumption["response_hash"]
 
 
 def test_summary_true_only_for_genuine_different_binding_409(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     ledger.record_redemption_observation(
         kind="cross_binding_rejected",
         http_status=409,
@@ -1063,6 +1073,8 @@ def test_summary_true_only_for_genuine_different_binding_409(tmp_path, monkeypat
         quote_id="7f000000-0000-4000-8000-000000000002",
         resource_id="resource-b",
         now=START + 50,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["consumption_recorded"] is True
@@ -1070,8 +1082,53 @@ def test_summary_true_only_for_genuine_different_binding_409(tmp_path, monkeypat
     assert summary["duplicate_proof_rejected"] is True
 
 
+def test_summary_forged_direct_insert_row_is_insufficient(tmp_path, monkeypatch):
+    """Codex re-review regression: a directly inserted
+    kind='cross_binding_rejected', http_status=409 row must NOT be sufficient.
+    The observation must be BOUND to the response actually served (canonical
+    409-body digest) AND to the actually consumed fulfillment (its stored
+    response_hash); every unbound/forged combination stays false.
+    """
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
+    conn = sqlite3.connect(str(tmp_path / "safepay.db"))
+    forged_rows = [
+        # (quote_id suffix, response_digest, consumed_response_hash)
+        ("7f000000-0000-4000-8000-00000000f001", "ab" * 32, "cd" * 32),  # fully unbound
+        ("7f000000-0000-4000-8000-00000000f002", "ab" * 32, response_hash),  # copied hash, wrong digest
+        ("7f000000-0000-4000-8000-00000000f003", CROSS_409_DIGEST, "cd" * 32),  # right digest, unbound hash
+    ]
+    for forged_quote_id, digest, consumed_hash in forged_rows:
+        conn.execute(
+            "INSERT INTO safepay_redemption_observations("
+            "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at, "
+            "response_digest, consumed_response_hash) "
+            "VALUES('cross_binding_rejected', 409, ?, ?, ?, 'resource-b', ?, ?, ?)",
+            (SAFEPAY_V2_NETWORK, payment_hash, forged_quote_id, START + 50, digest, consumed_hash),
+        )
+    conn.commit()
+    conn.close()
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["consumption_recorded"] is True
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+    # The rule remains achievable ONLY via a fully bound observation.
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=409,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id="7f000000-0000-4000-8000-00000000f004",
+        resource_id="resource-b",
+        now=START + 60,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["duplicate_proof_rejected"] is True
+
+
 def test_summary_false_for_non_409_http_status(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     # A "cross_binding_rejected" row whose ACTUAL observed HTTP result was 200.
     ledger.record_redemption_observation(
         kind="cross_binding_rejected",
@@ -1081,6 +1138,8 @@ def test_summary_false_for_non_409_http_status(tmp_path, monkeypatch):
         quote_id="7f000000-0000-4000-8000-000000000002",
         resource_id="resource-b",
         now=START + 50,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["cross_binding_rejected_observed"] is False
@@ -1088,7 +1147,7 @@ def test_summary_false_for_non_409_http_status(tmp_path, monkeypatch):
 
 
 def test_summary_false_for_same_binding_observation(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     # Same quote AND same resource as the canonical consumption: not a genuinely
     # different binding, even at http 409.
     ledger.record_redemption_observation(
@@ -1099,6 +1158,8 @@ def test_summary_false_for_same_binding_observation(tmp_path, monkeypatch):
         quote_id=quote["quote_id"],
         resource_id="resource-a",
         now=START + 50,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["cross_binding_rejected_observed"] is False
@@ -1106,7 +1167,7 @@ def test_summary_false_for_same_binding_observation(tmp_path, monkeypatch):
 
 
 def test_summary_false_for_unrelated_payment_observation(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     # 409 against a DIFFERENT (network, payment_hash) than the canonical consumption.
     ledger.record_redemption_observation(
         kind="cross_binding_rejected",
@@ -1116,6 +1177,8 @@ def test_summary_false_for_unrelated_payment_observation(tmp_path, monkeypatch):
         quote_id="7f000000-0000-4000-8000-000000000002",
         resource_id="resource-b",
         now=START + 50,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["cross_binding_rejected_observed"] is False
@@ -1123,7 +1186,7 @@ def test_summary_false_for_unrelated_payment_observation(tmp_path, monkeypatch):
 
 
 def test_summary_false_when_409_precedes_consumption(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     # Chronology: a 409 observed BEFORE the canonical consumption cannot evidence
     # rejection of a duplicate of that consumption.
     ledger.record_redemption_observation(
@@ -1134,6 +1197,8 @@ def test_summary_false_when_409_precedes_consumption(tmp_path, monkeypatch):
         quote_id="7f000000-0000-4000-8000-000000000002",
         resource_id="resource-b",
         now=START - 100,
+        response_digest=CROSS_409_DIGEST,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["cross_binding_rejected_observed"] is False
@@ -1141,7 +1206,7 @@ def test_summary_false_when_409_precedes_consumption(tmp_path, monkeypatch):
 
 
 def test_summary_idempotent_replay_does_not_imply_duplicate_rejected(tmp_path, monkeypatch):
-    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     ledger.record_redemption_observation(
         kind="idempotent_replay",
         http_status=200,
@@ -1150,6 +1215,8 @@ def test_summary_idempotent_replay_does_not_imply_duplicate_rejected(tmp_path, m
         quote_id=quote["quote_id"],
         resource_id="resource-a",
         now=START + 50,
+        response_digest=response_hash,
+        consumed_response_hash=response_hash,
     )
     summary = ledger.summarize_quote_evidence(quote["quote_id"])
     assert summary["idempotent_replay_observed"] is True

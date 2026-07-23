@@ -214,6 +214,30 @@ def safepay_v2_response_hash(
     return hashlib.sha256(preimage).hexdigest()
 
 
+def safepay_v2_error_body(code: str, retryable: bool, replay_disposition: str) -> dict[str, Any]:
+    """The exact frozen SafePay v2 error wire body.
+
+    Single source of truth shared by the provider's HTTP responses AND the
+    ledger's evidence-digest recomputation, so the recorded observation digest
+    can never drift from the body actually served.
+    """
+    return {
+        "schema_version": SAFEPAY_V2_SCHEMA_VERSION,
+        "error": {"code": code, "retryable": retryable},
+        "delivery": {"replay_disposition": replay_disposition},
+    }
+
+
+def safepay_v2_body_digest(body: Mapping[str, Any]) -> str:
+    """Canonical BLAKE2b-256 digest of an exact HTTP response body.
+
+    Canonical JSON encoding: sorted keys, compact separators, UTF-8. Used to
+    bind append-only redemption observations to the response actually served.
+    """
+    encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.blake2b(encoded, digest_size=32).hexdigest()
+
+
 def _is_printable_ascii(value: str) -> bool:
     return all(0x20 <= ord(char) <= 0x7E for char in value)
 

@@ -32,7 +32,9 @@ from shared.x402_payments import (
     SAFEPAY_V2_REPORT_MEDIA_TYPE,
     SAFEPAY_V2_REPORT_VERSION,
     SAFEPAY_V2_SCHEMA_VERSION,
+    safepay_v2_body_digest,
     safepay_v2_correlation_id,
+    safepay_v2_error_body,
     safepay_v2_quote_hash,
     safepay_v2_response_hash,
 )
@@ -573,9 +575,18 @@ class SafePayLedger:
             )
             conn.execute(
                 "INSERT OR IGNORE INTO safepay_redemption_observations("
-                "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at) "
-                "VALUES('first_consumption', 200, ?, ?, ?, ?, ?)",
-                (network, payment_hash, quote_id, quote_row["resource_id"], now),
+                "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at, "
+                "response_digest, consumed_response_hash) "
+                "VALUES('first_consumption', 200, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    network,
+                    payment_hash,
+                    quote_id,
+                    quote_row["resource_id"],
+                    now,
+                    response_hash,
+                    response_hash,
+                ),
             )
             conn.execute("COMMIT")
             return fulfillment, "first_consumption"
@@ -607,16 +618,38 @@ class SafePayLedger:
         quote_id: str,
         resource_id: str,
         now: int,
+        response_digest: str,
+        consumed_response_hash: str,
     ) -> None:
-        """Append-only observation powering honest artifact derivation."""
+        """Append-only observation powering honest artifact derivation.
+
+        Every observation is BOUND to the response actually served:
+        ``response_digest`` is the canonical digest of the exact HTTP body
+        (for consumption/replay kinds, the frozen fulfillment
+        ``response_hash``); ``consumed_response_hash`` is the ``response_hash``
+        of the canonical consumption this observation evidences. The summary
+        validates both against independently stored rows, so a bare
+        kind/status row can never power ``duplicate_proof_rejected``.
+        """
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT OR IGNORE INTO safepay_redemption_observations("
-                "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (kind, http_status, network, payment_hash, quote_id, resource_id, int(now)),
+                "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at, "
+                "response_digest, consumed_response_hash) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    kind,
+                    http_status,
+                    network,
+                    payment_hash,
+                    quote_id,
+                    resource_id,
+                    int(now),
+                    response_digest,
+                    consumed_response_hash,
+                ),
             )
             conn.execute("COMMIT")
         finally:
@@ -641,18 +674,31 @@ class SafePayLedger:
         3. that observation is on the SAME ``(network, payment_hash)`` as the
            canonical consumption;
         4. it evidences a genuinely DIFFERENT binding — a different quote and/or
-           resource than the consumed one (never a same-binding "replay"); and
+           resource than the consumed one (never a same-binding "replay");
         5. it was observed at or after the canonical consumption (chronology):
-           a 409 predating the consumption cannot evidence a duplicate of it.
+           a 409 predating the consumption cannot evidence a duplicate of it;
+        6. its ``consumed_response_hash`` equals the canonical consumption's
+           independently stored ``response_hash`` (the observation is bound to
+           the actual consumed fulfillment); and
+        7. its ``response_digest`` equals the recomputed canonical digest of
+           the exact frozen 409 error body the provider serves for a
+           cross-binding conflict (the observation is bound to the response
+           actually served — a directly inserted kind/status row without this
+           binding can never qualify).
 
-        HTTP 200, same-binding, unrelated-payment, and pre-consumption
-        observations therefore never contribute.
+        HTTP 200, same-binding, unrelated-payment, pre-consumption, and
+        unbound/forged observations therefore never contribute.
         """
         del claimed_artifact  # never trusted, never read
+        expected_409_digest = safepay_v2_body_digest(
+            safepay_v2_error_body(
+                "payment_already_consumed_for_other_binding", False, "cross_binding_rejected"
+            )
+        )
         conn = self._connect()
         try:
             consumptions = conn.execute(
-                "SELECT network, payment_hash, resource_id, consumed_at "
+                "SELECT network, payment_hash, resource_id, consumed_at, response_hash "
                 "FROM payment_consumptions WHERE quote_id = ?",
                 (quote_id,),
             ).fetchall()
@@ -674,13 +720,17 @@ class SafePayLedger:
                         "AND o.network = ? "
                         "AND o.payment_hash = ? "
                         "AND (o.quote_id != ? OR o.resource_id != ?) "
-                        "AND o.observed_at >= ?",
+                        "AND o.observed_at >= ? "
+                        "AND o.consumed_response_hash = ? "
+                        "AND o.response_digest = ?",
                         (
                             consumption["network"],
                             consumption["payment_hash"],
                             quote_id,
                             consumption["resource_id"],
                             int(consumption["consumed_at"]),
+                            consumption["response_hash"],
+                            expected_409_digest,
                         ),
                     ).fetchone()[0]
                     >= 1
