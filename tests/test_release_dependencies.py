@@ -31,6 +31,13 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
     package_lock = json.loads(
         (integration / "package-lock.json").read_text(encoding="utf-8")
     )
+    dashboard = ROOT / "dashboard"
+    dashboard_package = json.loads(
+        (dashboard / "package.json").read_text(encoding="utf-8")
+    )
+    dashboard_lock = json.loads(
+        (dashboard / "package-lock.json").read_text(encoding="utf-8")
+    )
 
     assert "pillow==12.3.0" in project["tool"]["uv"]["constraint-dependencies"]
     pillows = [
@@ -43,3 +50,12 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
     assert package["overrides"]["brace-expansion"] == "1.1.16"
     brace = package_lock["packages"]["node_modules/brace-expansion"]
     assert brace["version"] == "1.1.16"
+
+    assert dashboard_package["dependencies"]["next"] == "16.2.11"
+    assert dashboard_package["overrides"]["sharp"] == "0.35.3"
+    assert dashboard_lock["packages"]["node_modules/next"]["version"] == "16.2.11"
+    assert dashboard_lock["packages"]["node_modules/sharp"]["version"] == "0.35.3"
+    assert (
+        dashboard_lock["packages"]["node_modules/brace-expansion"]["version"]
+        == "1.1.16"
+    )
