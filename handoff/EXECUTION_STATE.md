@@ -17,6 +17,40 @@ every handoff or live mutation. Claims require the evidence listed here.
 - Never invoke the current public demo reset or activation during read-only QA.
 - Keep sslip submission links live; protect the other judged apps on the VM.
 
+## Latest active checkpoint — 2026-07-23
+
+- Codex remains the sole merger, integration, live-Testnet, VM, Caddy, DNS,
+  Pages, npm, artifact-publication, and release operator. Claude remains
+  isolated on `claude/finals-product-security`.
+- The Codex core branch is at `7668fa4` after fail-closed proof-truth
+  corrections. Fresh gates at that head: 912 Python tests passed, the verifier
+  package passed 149 tests plus TypeScript lint and npm audit with zero
+  vulnerabilities, and changed-file Ruff/diff checks passed. The repository-
+  wide Ruff invocation still reports pre-existing compatibility/import debt
+  outside this correction; it is not being relabelled green.
+- The disposable integration preview is clean at `a1462b5` and contains the
+  three proof-truth corrections. Its focused integration recheck passed 171
+  Python tests.
+- The Codex official-x402 chain observer is isolated at `e7404bd`. It passed
+  293 service tests, typecheck, production build, npm audit with zero
+  vulnerabilities, and a read-only public Casper Testnet check resolving WCSPR
+  package v8 plus an unused-nonce finalized state-root observation. Independent
+  adversarial review remains active before integration.
+- Claude has committed the WP5 paid-resource response-boundary correction at
+  `2179eb0` with manifest `6fdf594`; however, its proxy-unaware throttle still
+  collapses all Caddy clients into one quota. The required trusted,
+  Caddy-overwritten client identity, shared resource/settle budget, bounded
+  eviction, and adversarial tests remain a merge blocker.
+- Claude's WP7 truth correction and exact Next 16.2.11 pin are actively
+  uncommitted in its isolated worktree. No partial WP7 state may be merged.
+- The hardened command-gate runner is finishing its canonical bound-command
+  API for staged Node package trees and independently bound data inputs. The
+  replacement release-manifest collector remains deliberately uncommitted
+  until it consumes that accepted API and passes re-review.
+- No production, VM, Caddy, DNS, Casper Testnet transaction, npm publication,
+  GitHub Pages setting, canonical artifact, or `main` mutation has occurred
+  during this checkpoint.
+
 ## Current operational checkpoint
 
 - `handoff/FINALS_SCOPE_CONTROL.json` is the machine-checked authority for the
