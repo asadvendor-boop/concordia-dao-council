@@ -547,6 +547,15 @@ def test_snapshot_capture_rejects_any_two_node_state_disagreement(
     assert all(allow_submit is False for _, _, allow_submit in rpc.calls)
 
 
+def test_offline_snapshot_rejects_raw_ip_observer_identity() -> None:
+    proof = _temporally_valid_v3_proof()
+    snapshot = _snapshot_artifact(proof)
+    snapshot["observations"][0]["node_url"] = "https://8.8.8.8/rpc"
+
+    with pytest.raises(OperatorError, match="DNS hostname"):
+        verify_native_authorization_artifacts(proof, snapshot)
+
+
 def test_unactivated_recipient_fails_before_signing_or_broadcast(
     tmp_path: Path,
 ) -> None:
@@ -637,6 +646,31 @@ def test_cli_defaults_to_verification_only_without_signer_journal_or_rpc(
     assert output["mode"] == "verification-only"
     assert output["network_mutation_performed"] is False
     assert output["local_file_written"] is False
+
+
+@pytest.mark.parametrize("constant", ("NaN", "Infinity", "-Infinity"))
+def test_cli_rejects_nonfinite_json_before_artifact_verification(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    constant: str,
+) -> None:
+    proof_path = tmp_path / "v3-proof.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    proof_path.write_text(f'{{"poison":{constant}}}', encoding="ascii")
+    snapshot_path.write_text("{}", encoding="ascii")
+
+    assert (
+        main(
+            [
+                "--v3-proof",
+                str(proof_path),
+                "--treasury-snapshot",
+                str(snapshot_path),
+            ]
+        )
+        == 1
+    )
+    assert "v3 proof could not be read safely" in capsys.readouterr().out
     assert list(tmp_path.glob("*.sqlite*")) == []
 
 
@@ -1046,6 +1080,46 @@ def test_posthoc_release_manifest_verifies_exact_committed_artifact_bytes(
 
     artifact.write_bytes(payload + b" ")
     with pytest.raises(OperatorError, match="differs"):
+        build_posthoc_release_manifest(
+            artifact_path=artifact,
+            artifact_commit=artifact_commit,
+            repository_root=repository,
+        )
+
+
+def test_posthoc_release_manifest_rejects_nonfinite_committed_json(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "nonfinite-release-repo"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "release@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Release Test"],
+        cwd=repository,
+        check=True,
+    )
+    artifact = repository / "artifact.json"
+    artifact.write_bytes(
+        b'{"schema_version":"concordia.native_treasury_execution.v1","poison":NaN}'
+    )
+    subprocess.run(["git", "add", "artifact.json"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "nonfinite artifact"], cwd=repository, check=True
+    )
+    artifact_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    with pytest.raises(OperatorError, match="invalid JSON"):
         build_posthoc_release_manifest(
             artifact_path=artifact,
             artifact_commit=artifact_commit,

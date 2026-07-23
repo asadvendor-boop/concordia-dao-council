@@ -134,6 +134,21 @@ def _canonical_json_bytes(value: object) -> bytes:
         raise OperatorError("artifact is not canonical JSON") from exc
 
 
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(_: str) -> object:
+    raise ValueError("non-finite JSON number")
+
+
 def _snapshot_node_origin(value: object) -> tuple[str, int]:
     if type(value) is not str or not value:
         raise OperatorError("treasury snapshot node URL is invalid")
@@ -158,21 +173,20 @@ def _snapshot_node_origin(value: object) -> tuple[str, int]:
     if not normalized or not normalized.isascii():
         raise OperatorError("treasury snapshot node hostname is invalid")
     try:
-        address = ipaddress.ip_address(normalized.strip("[]"))
+        ipaddress.ip_address(normalized.strip("[]"))
     except ValueError:
-        if "." not in normalized or normalized.endswith(".local"):
-            raise OperatorError("treasury snapshot node hostname is not public")
+        pass
     else:
-        if not (
-            address.is_global
-            and not address.is_multicast
-            and not address.is_reserved
-            and not address.is_unspecified
-            and not address.is_loopback
-            and not address.is_link_local
-            and not address.is_private
-        ):
-            raise OperatorError("treasury snapshot node address is not public")
+        raise OperatorError("treasury snapshot node must use a DNS hostname")
+    if (
+        "." not in normalized
+        or normalized.endswith(".local")
+        or normalized in {"localhost", "localhost.localdomain"}
+        or value != f"https://{normalized}/rpc"
+    ):
+        raise OperatorError(
+            "treasury snapshot node hostname is not canonical public DNS"
+        )
     return normalized, 443
 
 
@@ -189,14 +203,6 @@ def _snapshot_capture_time(value: object) -> str:
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
-    def reject_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate key")
-            result[key] = value
-        return result
-
     try:
         if (
             path.is_symlink()
@@ -206,7 +212,8 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
             raise OSError("unsafe input")
         decoded = json.loads(
             path.read_text(encoding="utf-8"),
-            object_pairs_hook=reject_pairs,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_nonfinite_json_constant,
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise OperatorError(f"{label} could not be read safely") from exc
@@ -572,8 +579,15 @@ def build_posthoc_release_manifest(
     if committed != current:
         raise OperatorError("working artifact differs from artifact commit bytes")
     try:
-        artifact = _object(json.loads(current), "native treasury artifact")
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        artifact = _object(
+            json.loads(
+                current,
+                object_pairs_hook=_reject_duplicate_json_pairs,
+                parse_constant=_reject_nonfinite_json_constant,
+            ),
+            "native treasury artifact",
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise OperatorError("native treasury artifact is invalid JSON") from exc
     if _canonical_json_bytes(artifact) != current:
         raise OperatorError("native treasury artifact is not canonical JSON")
