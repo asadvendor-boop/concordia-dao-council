@@ -71,7 +71,7 @@ from shared.official_x402_release_adapter import (
     _journal_root,
     _verify_casper_eip712_signature,
 )
-from shared.atomic_private_file import write_private_file_once
+from shared.atomic_private_file import AtomicPrivateFileError, write_private_file_once
 from shared.release_proof_adapters import (
     ReleaseProofAdapterError,
     verify_official_x402_artifact,
@@ -166,8 +166,25 @@ class CaptureError(Exception):
     """A fail-closed refusal with a stable, secret-free message."""
 
 
+class _DuplicateJsonKey(ValueError):
+    pass
+
+
 def _fail(message: str) -> "CaptureError":
     return CaptureError(message)
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKey("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant {value!r}")
 
 
 def _read_json(path: Path, *, context: str) -> Any:
@@ -621,9 +638,18 @@ def _bundle_bytes(
 
 def _strict_json_bytes(raw: bytes, *, context: str) -> Any:
     try:
-        return json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        raise _fail(f"{context} is not valid UTF-8 JSON") from exc
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _DuplicateJsonKey,
+        ValueError,
+    ) as exc:
+        raise _fail(f"{context} is not strict UTF-8 JSON: {exc}") from exc
 
 
 def _resource_id_from_url(url: str) -> str:
@@ -1644,7 +1670,10 @@ def _emit(document: Mapping[str, Any], out: str | None) -> int:
     payload = _canonical(document)
     if out is None or not Path(out).is_absolute():
         raise _fail("output path must be absolute and explicitly provided")
-    write_private_file_once(Path(out), payload)
+    try:
+        write_private_file_once(Path(out), payload)
+    except AtomicPrivateFileError as exc:
+        raise _fail(f"output could not be written safely: {exc}") from exc
     sys.stdout.write(
         json.dumps(
             {

@@ -620,16 +620,30 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     first_request = redemption_requests["first_consumption"]
     _require_keys(
         first_request,
-        {"network", "payment_hash", "quote_id", "resource_id"},
+        {"schema_version", "quote", "payment_hash"},
         "first redemption request",
     )
-    network = _text(first_request["network"], "first redemption network")
+    if first_request["schema_version"] != "safepay-redemption-v2":
+        raise SafePayV2CaptureError("first redemption schema version differs")
+    first_submitted_quote = _obj(
+        first_request["quote"], "first redemption submitted quote"
+    )
+    _require_keys(
+        first_submitted_quote,
+        set(SAFEPAY_V2_QUOTE_FIELDS),
+        "first redemption submitted quote",
+    )
+    network = _text(
+        first_submitted_quote["network"], "first redemption network"
+    )
     if network != NETWORK:
         raise SafePayV2CaptureError("first redemption network is not casper:casper-test")
     payment_hash = _text(
         first_request["payment_hash"], "first redemption payment_hash"
     )
-    quote_id = _text(first_request["quote_id"], "first redemption quote_id")
+    quote_id = _text(
+        first_submitted_quote["quote_id"], "first redemption quote_id"
+    )
 
     # -- chain evidence: parse the raw two-node transcripts ------------------
     chain_input = _obj(bundle["chain"], "chain")
@@ -663,7 +677,7 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     )
     stage_specs = (
         ("after_first_consumption", 1, before_instance_id),
-        ("after_exact_retry", 2, before_instance_id),
+        ("after_exact_retry", 2, after_instance_id),
         ("after_cross_binding_reuse", 3, after_instance_id),
     )
     _require_keys(
@@ -760,6 +774,73 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     if set(quote) != set(SAFEPAY_V2_QUOTE_FIELDS):
         raise SafePayV2CaptureError(
             "persisted quote fields differ from the frozen schema"
+        )
+    if first_submitted_quote != quote:
+        raise SafePayV2CaptureError(
+            "first redemption submitted quote differs from the persisted quote"
+        )
+    if (
+        redemption_requests["exact_retry"] != first_request
+        or redemption_exchanges["exact_retry"]["request_body_base64"]
+        != redemption_exchanges["first_consumption"]["request_body_base64"]
+    ):
+        raise SafePayV2CaptureError(
+            "exact retry request is not byte-equivalent canonical redemption input"
+        )
+    cross_request = redemption_requests["cross_binding_reuse"]
+    _require_keys(
+        cross_request,
+        {"schema_version", "quote", "payment_hash"},
+        "cross-binding redemption request",
+    )
+    cross_quote = _obj(
+        cross_request["quote"], "cross-binding redemption submitted quote"
+    )
+    _require_keys(
+        cross_quote,
+        set(SAFEPAY_V2_QUOTE_FIELDS),
+        "cross-binding redemption submitted quote",
+    )
+    try:
+        cross_nonce = bytes.fromhex(
+            _text(cross_quote["quote_nonce"], "cross-binding quote_nonce")
+        )
+        cross_correlation_id = safepay_v2_correlation_id(
+            cross_quote["quote_id"],
+            cross_quote["proposal_id"],
+            cross_quote["resource_id"],
+            cross_nonce,
+        )
+        cross_quote_hash = safepay_v2_quote_hash(
+            quote_id=cross_quote["quote_id"],
+            proposal_id=cross_quote["proposal_id"],
+            resource_id=cross_quote["resource_id"],
+            network=cross_quote["network"],
+            payee_account_hash=cross_quote["payee_account_hash"],
+            amount_motes=cross_quote["amount_motes"],
+            correlation_id=cross_correlation_id,
+            report_version=cross_quote["report_version"],
+            report_hash=cross_quote["report_hash"],
+            expires_at=cross_quote["expires_at"],
+            quote_nonce=cross_nonce,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SafePayV2CaptureError(
+            f"cross-binding quote preimage is invalid: {exc}"
+        ) from exc
+    if (
+        cross_request["schema_version"] != "safepay-redemption-v2"
+        or cross_request["payment_hash"] != payment_hash
+        or cross_quote["network"] != network
+        or cross_quote["correlation_id"] != str(cross_correlation_id)
+        or cross_quote["quote_hash"] != cross_quote_hash
+        or (
+            cross_quote["quote_id"] == quote["quote_id"]
+            and cross_quote["resource_id"] == quote["resource_id"]
+        )
+    ):
+        raise SafePayV2CaptureError(
+            "cross-binding redemption request is not a valid distinct quote reuse"
         )
 
     # -- persisted fulfillment and protected report -------------------------

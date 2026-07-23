@@ -266,14 +266,19 @@ def _provider(
     }
 
 
-def _runtime_identity(container_id: str, started_at: str, observed_at: str) -> dict[str, Any]:
+def _runtime_identity(
+    container_id: str,
+    started_at: str,
+    observed_at: str,
+    restart_count: int = 0,
+) -> dict[str, Any]:
     return {
         "container_id": container_id,
         "deployment_id": PROVIDER_DEPLOYMENT_ID,
         "image_digest": PROVIDER_IMAGE_DIGEST,
         "started_at": started_at,
         "observed_at": observed_at,
-        "restart_count": 0,
+        "restart_count": restart_count,
     }
 
 
@@ -434,11 +439,54 @@ def test_capture_derives_hashes_rather_than_trusting_inputs() -> None:
     ledger = document["ledger_evidence"]
     assert (
         ledger["after_first_consumption"]["provider_instance_id"]
-        == ledger["after_exact_retry"]["provider_instance_id"]
         == instances["before_restart"]["instance_id"]
     )
     assert (
-        ledger["after_cross_binding_reuse"]["provider_instance_id"]
+        ledger["after_exact_retry"]["provider_instance_id"]
+        == ledger["after_cross_binding_reuse"]["provider_instance_id"]
+        == instances["after_restart"]["instance_id"]
+    )
+
+
+def test_capture_binds_retry_snapshots_to_the_restarted_service_instance() -> None:
+    bundle = base_bundle()
+    before = bundle["provider"]["instances"]["before_restart"]
+    bundle["provider"]["instances"]["after_restart"] = _runtime_identity(
+        before["container_id"],
+        "2026-07-23T01:04:00Z",
+        "2026-07-23T01:04:05Z",
+        restart_count=before["restart_count"] + 1,
+    )
+    bundle["redemptions"]["first_consumption"]["exchange"]["observed_at"] = (
+        "2026-07-23T01:03:57Z"
+    )
+    bundle["redemptions"]["exact_retry"]["exchange"]["observed_at"] = (
+        "2026-07-23T01:04:10Z"
+    )
+    bundle["redemptions"]["cross_binding_reuse"]["exchange"]["observed_at"] = (
+        "2026-07-23T01:04:25Z"
+    )
+    bundle["ledger_snapshots_observed"]["after_first_consumption"]["observed_at"] = (
+        "2026-07-23T01:03:59Z"
+    )
+    bundle["ledger_snapshots_observed"]["after_exact_retry"]["observed_at"] = (
+        "2026-07-23T01:04:20Z"
+    )
+    bundle["ledger_snapshots_observed"]["after_cross_binding_reuse"]["observed_at"] = (
+        "2026-07-23T01:04:30Z"
+    )
+
+    document = build_safepay_v2_artifact(bundle)
+    instances = document["capture_identity"]["provider_instances"]
+    ledger = document["ledger_evidence"]
+
+    assert (
+        ledger["after_first_consumption"]["provider_instance_id"]
+        == instances["before_restart"]["instance_id"]
+    )
+    assert (
+        ledger["after_exact_retry"]["provider_instance_id"]
+        == ledger["after_cross_binding_reuse"]["provider_instance_id"]
         == instances["after_restart"]["instance_id"]
     )
 
@@ -660,7 +708,7 @@ def _mutate_mixed_generation(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_forged_restart(bundle: dict[str, Any]) -> None:
-    bundle["provider"]["instances"]["after_restart"]["container_id"] = "90" * 32
+    bundle["provider"]["instances"]["after_restart"]["container_id"] = "91" * 32
 
 
 def _mutate_cross_binding_same_quote(bundle: dict[str, Any]) -> None:

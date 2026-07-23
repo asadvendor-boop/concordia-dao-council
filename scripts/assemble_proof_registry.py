@@ -37,6 +37,22 @@ from shared.historical_odra_artifact import (
     verify_historical_odra_artifact,
 )
 from shared import release_proof_adapters
+from shared.bound_command import (
+    BoundCommandError,
+    _bind_command_package,
+    _bind_data,
+    _identity_from_authority,
+    _run_bound_git,
+)
+from shared.live_collector_provenance import (
+    COLLECTOR_RUNNER_PATH,
+    CollectorProvenanceError,
+    LIVE_COLLECTOR_ARTIFACT_PATHS,
+    LIVE_COLLECTOR_PLAN_PATHS,
+    LIVE_COLLECTOR_RAW_PATHS,
+    LIVE_COLLECTOR_RECEIPT_PATHS,
+    validate_collector_receipt,
+)
 from shared.proof_registry import (
     ProofRegistryRepository,
     REQUIRED_CHECKS_BY_PROOF_TYPE,
@@ -64,6 +80,15 @@ _RELEASE_ARTIFACT_PATHS = {
     "native_treasury": "artifacts/live/treasury-execution-v3.json",
     "safepay_v2": "artifacts/live/safepay-lite-replaysafe-v2.json",
     "official_x402": "artifacts/live/official-x402-settlement-v1.json",
+}
+_RELEASE_COLLECTOR_PATHS = {
+    proof_id: {
+        "receipt": LIVE_COLLECTOR_RECEIPT_PATHS[proof_id],
+        "raw_bundle": LIVE_COLLECTOR_RAW_PATHS[proof_id],
+        "artifact_candidate": LIVE_COLLECTOR_ARTIFACT_PATHS[proof_id],
+        "plan": LIVE_COLLECTOR_PLAN_PATHS[proof_id],
+    }
+    for proof_id in LIVE_COLLECTOR_RECEIPT_PATHS
 }
 _EXACT_CHECK_STEP = {
     "pre_quorum_finalize_reverted_with_code_8": "finalize_pre_quorum",
@@ -1188,6 +1213,291 @@ def _git_commit_exists(repository_root: Path, commit: str) -> bool:
     return result.returncode == 0
 
 
+def _git_path_commit(
+    repository_root: Path,
+    relative_path: str,
+    *,
+    first: bool,
+) -> str:
+    arguments = ["log", "--format=%H"]
+    if first:
+        arguments.append("--reverse")
+    arguments.extend(["--", relative_path])
+    try:
+        result = _run_bound_git(repository_root, tuple(arguments))
+        rows = result.stdout.decode("ascii", errors="strict").splitlines()
+    except (BoundCommandError, UnicodeDecodeError) as exc:
+        raise AssemblyError(
+            f"{relative_path} committed provenance is unavailable"
+        ) from exc
+    if not rows:
+        raise AssemblyError(f"{relative_path} has no committed provenance")
+    return _git40(rows[0], f"{relative_path} commit")
+
+
+def _git_blob(
+    repository_root: Path,
+    commit: str,
+    relative_path: str,
+    *,
+    limit: int = MAX_ARTIFACT_BYTES,
+) -> bytes:
+    try:
+        result = _run_bound_git(
+            repository_root,
+            ("show", f"{commit}:{relative_path}"),
+            stdout_limit=limit + 1,
+        )
+    except BoundCommandError as exc:
+        raise AssemblyError(
+            f"{relative_path} committed bytes are unavailable"
+        ) from exc
+    if len(result.stdout) > limit:
+        raise AssemblyError(f"{relative_path} committed bytes are unavailable")
+    return result.stdout
+
+
+def _read_regular_bytes(path: Path, *, limit: int, label: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise AssemblyError(f"{label} is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise AssemblyError(f"{label} is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            len(raw) > limit
+            or len(raw) != before.st_size
+            or _stat_identity(before) != _stat_identity(after)
+        ):
+            raise AssemblyError(f"{label} changed while being read")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _immutable_collector_input(
+    repository_root: Path,
+    path: Path,
+    *,
+    expected_relative: str,
+    label: str,
+) -> tuple[bytes, str]:
+    try:
+        resolved = path.resolve(strict=True)
+        expected = (repository_root / expected_relative).resolve(strict=True)
+    except OSError as exc:
+        raise AssemblyError(f"{label} is unavailable") from exc
+    if resolved != expected:
+        raise AssemblyError(f"{label} must use the fixed release path")
+    raw = _read_regular_bytes(resolved, limit=MAX_ARTIFACT_BYTES, label=label)
+    first = _git_path_commit(repository_root, expected_relative, first=True)
+    latest = _git_path_commit(repository_root, expected_relative, first=False)
+    committed = _git_blob(repository_root, first, expected_relative)
+    if first != latest or raw != committed:
+        raise AssemblyError(f"{label} is not an immutable first-add artifact")
+    return raw, first
+
+
+def _verify_live_collector_admission(
+    *,
+    repository_root: Path,
+    proof_id: str,
+    artifact: _Artifact,
+    receipt_path: str | Path | None,
+    raw_bundle_path: str | Path | None,
+    release: bool,
+) -> dict[str, object]:
+    """Bind a payment artifact to bytes obtained by the fixed live collector."""
+
+    if receipt_path is None or raw_bundle_path is None:
+        raise AssemblyError(
+            f"{proof_id} cannot be verified without collector provenance"
+        )
+    expected = _RELEASE_COLLECTOR_PATHS[proof_id]
+    if release:
+        receipt_raw, receipt_commit = _immutable_collector_input(
+            repository_root,
+            Path(receipt_path),
+            expected_relative=expected["receipt"],
+            label=f"{proof_id} collector receipt",
+        )
+        bundle_raw, bundle_commit = _immutable_collector_input(
+            repository_root,
+            Path(raw_bundle_path),
+            expected_relative=expected["raw_bundle"],
+            label=f"{proof_id} raw collector bundle",
+        )
+        artifact_candidate_raw, candidate_commit = _immutable_collector_input(
+            repository_root,
+            repository_root / expected["artifact_candidate"],
+            expected_relative=expected["artifact_candidate"],
+            label=f"{proof_id} collector artifact candidate",
+        )
+        plan_raw, plan_commit = _immutable_collector_input(
+            repository_root,
+            repository_root / expected["plan"],
+            expected_relative=expected["plan"],
+            label=f"{proof_id} immutable collector plan",
+        )
+        if (
+            len({receipt_commit, bundle_commit, candidate_commit}) != 1
+            or artifact_candidate_raw != artifact.raw
+        ):
+            raise AssemblyError(
+                f"{proof_id} collector batch is not one atomic artifact lineage"
+            )
+    else:
+        receipt_raw = _read_regular_bytes(
+            Path(receipt_path).absolute(),
+            limit=MAX_ARTIFACT_BYTES,
+            label=f"{proof_id} collector receipt",
+        )
+        bundle_raw = _read_regular_bytes(
+            Path(raw_bundle_path).absolute(),
+            limit=MAX_ARTIFACT_BYTES,
+            label=f"{proof_id} raw collector bundle",
+        )
+        artifact_candidate_raw = artifact.raw
+        plan_path_value = repository_root / expected["plan"]
+        plan_raw = _read_regular_bytes(
+            plan_path_value,
+            limit=MAX_ARTIFACT_BYTES,
+            label=f"{proof_id} collector plan",
+        )
+        plan_commit = _git_path_commit(
+            repository_root, expected["plan"], first=True
+        )
+
+    receipt = _strict_json_bytes(
+        receipt_raw,
+        label=f"{proof_id} collector receipt",
+        limit=MAX_ARTIFACT_BYTES,
+    )
+    if receipt_raw != _canonical_json_bytes(receipt):
+        raise AssemblyError(f"{proof_id} collector receipt is not canonical JSON")
+
+    runner_commit = _git_path_commit(
+        repository_root, COLLECTOR_RUNNER_PATH, first=False
+    )
+    runner_raw = _git_blob(
+        repository_root,
+        runner_commit,
+        COLLECTOR_RUNNER_PATH,
+        limit=MAX_ARTIFACT_BYTES,
+    )
+    current_runner = _read_regular_bytes(
+        repository_root / COLLECTOR_RUNNER_PATH,
+        limit=MAX_ARTIFACT_BYTES,
+        label="bound live collector runner",
+    )
+    if current_runner != runner_raw:
+        raise AssemblyError("bound live collector runner differs from Git")
+    runner_sha256 = hashlib.sha256(runner_raw).hexdigest()
+
+    try:
+        from shared.release_manifest import (
+            _host_toolchain_binding,
+            _verifier_source_tree_sha256,
+            _verifier_tool_commit,
+        )
+
+        authority, host_bound, _host_projection = _host_toolchain_binding(
+            repository_root
+        )
+        tool_identity = dict(
+            _identity_from_authority(authority, tool_id="python")
+        )
+        command_package = dict(
+            _bind_command_package(
+                asset_root=repository_root / "scripts",
+                entrypoint_argument=(
+                    repository_root / COLLECTOR_RUNNER_PATH
+                ).as_posix(),
+                tool_id="python",
+            )[2]
+        )
+        plan_asset = dict(_bind_data(repository_root / expected["plan"]).safe_identity)
+        command_assets = [command_package, plan_asset]
+        assembler_commit = _verifier_tool_commit(repository_root)
+        assembler_tree_sha256 = _verifier_source_tree_sha256(
+            repository_root, assembler_commit
+        )
+    except (BoundCommandError, ValueError, OSError) as exc:
+        raise AssemblyError(
+            f"{proof_id} independent collector authority is unavailable"
+        ) from exc
+
+    try:
+        projection = validate_collector_receipt(
+            receipt,
+            expected_proof_id=proof_id,
+            expected_runner_path=COLLECTOR_RUNNER_PATH,
+            expected_runner_commit=runner_commit,
+            expected_runner_sha256=runner_sha256,
+            expected_plan_path=expected["plan"],
+            expected_plan_commit=plan_commit,
+            expected_plan_sha256=hashlib.sha256(plan_raw).hexdigest(),
+            expected_assembler_commit=assembler_commit,
+            expected_assembler_source_tree_sha256=assembler_tree_sha256,
+            expected_host_authority_sha256=host_bound.sha256,
+            expected_tool_identity=tool_identity,
+            expected_command_assets=command_assets,
+            raw_bundle_path=expected["raw_bundle"],
+            raw_bundle_bytes=bundle_raw,
+            artifact_path=expected["artifact_candidate"],
+            artifact_bytes=artifact_candidate_raw,
+        )
+    except CollectorProvenanceError as exc:
+        raise AssemblyError(
+            f"{proof_id} collector provenance was rejected: {exc}"
+        ) from exc
+
+    bundle = _strict_json_bytes(
+        bundle_raw,
+        label=f"{proof_id} raw collector bundle",
+        limit=MAX_ARTIFACT_BYTES,
+    )
+    try:
+        if proof_id == "safepay_v2":
+            from scripts.safepay_v2_capture import (
+                build_safepay_v2_artifact,
+                canonical_artifact_bytes,
+            )
+
+            rebuilt = canonical_artifact_bytes(build_safepay_v2_artifact(bundle))
+        elif proof_id == "official_x402_settlement_v1":
+            from scripts.official_x402_capture import build_official_x402_artifact
+            from shared.official_x402_release_adapter import _canonical
+
+            rebuilt = _canonical(build_official_x402_artifact(bundle))
+        else:  # pragma: no cover - fixed inventory is checked above
+            raise AssemblyError("collector proof identity is unsupported")
+    except Exception as exc:
+        if isinstance(exc, AssemblyError):
+            raise
+        raise AssemblyError(
+            f"{proof_id} raw collector bundle could not reproduce the artifact"
+        ) from exc
+    if rebuilt != artifact.raw:
+        raise AssemblyError(
+            f"{proof_id} collector bundle does not reproduce the artifact"
+        )
+    return projection
+
+
 def _is_within(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -1313,7 +1623,11 @@ def assemble_proof_registry(
     historical_v1_path: str | Path | None = None,
     card_chain_roots_path: str | Path | None = None,
     safepay_v2_path: str | Path | None = None,
+    safepay_collector_receipt_path: str | Path | None = None,
+    safepay_raw_bundle_path: str | Path | None = None,
     official_x402_path: str | Path | None = None,
+    official_x402_collector_receipt_path: str | Path | None = None,
+    official_x402_raw_bundle_path: str | Path | None = None,
     generated_at: str | None = None,
     release: bool = False,
 ) -> dict[str, Any]:
@@ -1441,6 +1755,25 @@ def assemble_proof_registry(
             "producer inputs must have distinct artifact SHA-256 values"
         )
 
+    if safepay is not None:
+        _verify_live_collector_admission(
+            repository_root=root,
+            proof_id="safepay_v2",
+            artifact=safepay,
+            receipt_path=safepay_collector_receipt_path,
+            raw_bundle_path=safepay_raw_bundle_path,
+            release=release,
+        )
+    if official is not None:
+        _verify_live_collector_admission(
+            repository_root=root,
+            proof_id="official_x402_settlement_v1",
+            artifact=official,
+            receipt_path=official_x402_collector_receipt_path,
+            raw_bundle_path=official_x402_raw_bundle_path,
+            release=release,
+        )
+
     exact_item, exact_facts = _exact_item(
         exact, verification_observed_at=generated_at
     )
@@ -1521,7 +1854,6 @@ def assemble_proof_registry(
         if not proof_item_is_green(item):
             raise AssemblyError(f"Python proof registry rejected {item['proof_id']}")
 
-    proposal_id = exact_item["proposal_id"]
     proposal_ids = sorted({str(item["proposal_id"]) for item in public_items})
     expected_public_counts: dict[str, int] = {}
     for selected_proposal_id in proposal_ids:
@@ -1633,7 +1965,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exact-v3", type=Path, required=True)
     parser.add_argument("--native-treasury", type=Path, required=True)
     parser.add_argument("--safepay-v2", type=Path)
+    parser.add_argument("--safepay-collector-receipt", type=Path)
+    parser.add_argument("--safepay-raw-bundle", type=Path)
     parser.add_argument("--official-x402", type=Path)
+    parser.add_argument("--official-x402-collector-receipt", type=Path)
+    parser.add_argument("--official-x402-raw-bundle", type=Path)
     parser.add_argument("--generated-at")
     parser.add_argument("--release", action="store_true")
     return parser
@@ -1656,7 +1992,13 @@ def main() -> int:
             exact_v3_path=args.exact_v3,
             native_treasury_path=args.native_treasury,
             safepay_v2_path=args.safepay_v2,
+            safepay_collector_receipt_path=args.safepay_collector_receipt,
+            safepay_raw_bundle_path=args.safepay_raw_bundle,
             official_x402_path=args.official_x402,
+            official_x402_collector_receipt_path=(
+                args.official_x402_collector_receipt
+            ),
+            official_x402_raw_bundle_path=args.official_x402_raw_bundle,
             generated_at=args.generated_at,
             release=args.release,
         )

@@ -76,6 +76,7 @@ def _provider_runtime_identity(
     container_id: str,
     started_at: str,
     observed_at: str,
+    restart_count: int = 0,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "container_id": container_id,
@@ -83,7 +84,7 @@ def _provider_runtime_identity(
         "image_digest": PROVIDER_IMAGE_DIGEST,
         "started_at": started_at,
         "observed_at": observed_at,
-        "restart_count": 0,
+        "restart_count": restart_count,
     }
     payload["instance_id"] = hashlib.sha256(
         b"CONCORDIA_SAFEPAY_PROVIDER_INSTANCE_V1\x00" + _canonical(payload)
@@ -94,12 +95,13 @@ def _provider_runtime_identity(
 BEFORE_RUNTIME_IDENTITY = _provider_runtime_identity(
     container_id="90" * 32,
     started_at="2026-07-23T00:50:00Z",
-    observed_at="2026-07-23T01:03:55Z",
+    observed_at="2026-07-23T01:03:00Z",
 )
 AFTER_RUNTIME_IDENTITY = _provider_runtime_identity(
-    container_id="91" * 32,
+    container_id="90" * 32,
     started_at="2026-07-23T01:04:00Z",
     observed_at="2026-07-23T01:04:50Z",
+    restart_count=1,
 )
 BEFORE_INSTANCE_ID = str(BEFORE_RUNTIME_IDENTITY["instance_id"])
 AFTER_INSTANCE_ID = str(AFTER_RUNTIME_IDENTITY["instance_id"])
@@ -115,6 +117,7 @@ def _exchange(
     request: object,
     response: object,
     status: int,
+    observed_at: str = UTC,
 ) -> dict[str, object]:
     request_bytes = _canonical(request)
     response_bytes = _canonical(response)
@@ -127,7 +130,7 @@ def _exchange(
         "response_content_type": "application/json",
         "response_body_base64": _b64(response_bytes),
         "response_body_sha256": hashlib.sha256(response_bytes).hexdigest(),
-        "observed_at": UTC,
+        "observed_at": observed_at,
     }
 
 
@@ -427,13 +430,13 @@ def _ledger_evidence(
         ),
         "after_exact_retry": _ledger_snapshot(
             after_retry,
-            BEFORE_INSTANCE_ID,
-            "2026-07-23T01:03:20Z",
+            AFTER_INSTANCE_ID,
+            "2026-07-23T01:04:55Z",
         ),
         "after_cross_binding_reuse": _ledger_snapshot(
             after_cross,
             AFTER_INSTANCE_ID,
-            "2026-07-23T01:04:30Z",
+            "2026-07-23T01:04:58Z",
         ),
     }
 
@@ -479,6 +482,35 @@ def safepay_artifact() -> dict[str, Any]:
         "expires_at": EXPIRES_AT,
         "quote_nonce": QUOTE_NONCE.hex(),
         "quote_hash": quote_hash,
+    }
+    cross_quote_nonce = bytes.fromhex("cc" * 32)
+    cross_quote_id = "223e4567-e89b-42d3-a456-426614174000"
+    cross_resource_id = "risk-report:other"
+    cross_correlation_id = safepay_v2_correlation_id(
+        cross_quote_id,
+        PROPOSAL_ID,
+        cross_resource_id,
+        cross_quote_nonce,
+    )
+    cross_quote = {
+        **quote,
+        "quote_id": cross_quote_id,
+        "resource_id": cross_resource_id,
+        "correlation_id": str(cross_correlation_id),
+        "quote_nonce": cross_quote_nonce.hex(),
+        "quote_hash": safepay_v2_quote_hash(
+            quote_id=cross_quote_id,
+            proposal_id=PROPOSAL_ID,
+            resource_id=cross_resource_id,
+            network="casper:casper-test",
+            payee_account_hash=PAYEE_ACCOUNT,
+            amount_motes=AMOUNT_MOTES,
+            correlation_id=cross_correlation_id,
+            report_version="safepay-report-v2",
+            report_hash=report_hash,
+            expires_at=EXPIRES_AT,
+            quote_nonce=cross_quote_nonce,
+        ),
     }
     quote_row = {key: value for key, value in quote.items() if key != "schema_version"}
     quote_row["issued_at"] = ISSUED_AT
@@ -605,25 +637,24 @@ def safepay_artifact() -> dict[str, Any]:
     def redemption(
         *,
         kind: str,
-        quote_id: str,
-        resource_id: str,
+        submitted_quote: dict[str, Any],
         status: int,
         response_digest: str,
         body: dict[str, Any],
         observed_at: int,
+        exchange_observed_at: str,
     ) -> dict[str, Any]:
         request = {
-            "network": "casper:casper-test",
+            "schema_version": "safepay-redemption-v2",
+            "quote": copy.deepcopy(submitted_quote),
             "payment_hash": PAYMENT_HASH,
-            "quote_id": quote_id,
-            "resource_id": resource_id,
         }
         return {
             "kind": kind,
             "network": "casper:casper-test",
             "payment_hash": PAYMENT_HASH,
-            "quote_id": quote_id,
-            "resource_id": resource_id,
+            "quote_id": submitted_quote["quote_id"],
+            "resource_id": submitted_quote["resource_id"],
             "http_status": status,
             "observed_at": observed_at,
             "response_digest": response_digest,
@@ -633,6 +664,7 @@ def safepay_artifact() -> dict[str, Any]:
                 request=request,
                 response=body,
                 status=status,
+                observed_at=exchange_observed_at,
             ),
         }
 
@@ -662,7 +694,7 @@ def safepay_artifact() -> dict[str, Any]:
             "after_restart": {
                 "row": copy.deepcopy(quote_row),
                 "row_canonical_json_sha256": quote_row_hash,
-                "observed_at": "2026-07-23T01:04:40Z",
+                "observed_at": "2026-07-23T01:04:55Z",
                 "provider_instance_id": AFTER_INSTANCE_ID,
             },
         },
@@ -693,37 +725,37 @@ def safepay_artifact() -> dict[str, Any]:
             "after_restart": {
                 "row": copy.deepcopy(consumption_row),
                 "row_canonical_json_sha256": consumption_row_hash,
-                "observed_at": "2026-07-23T01:04:40Z",
+                "observed_at": "2026-07-23T01:04:55Z",
                 "provider_instance_id": AFTER_INSTANCE_ID,
             },
         },
         "redemption_observations": {
             "first_consumption": redemption(
                 kind="first_consumption",
-                quote_id=QUOTE_ID,
-                resource_id=RESOURCE_ID,
+                submitted_quote=quote,
                 status=200,
                 response_digest=response_hash,
                 body=first_body,
                 observed_at=CONSUMED_AT + 1,
+                exchange_observed_at="2026-07-23T01:03:40Z",
             ),
             "exact_retry": redemption(
                 kind="idempotent_replay",
-                quote_id=QUOTE_ID,
-                resource_id=RESOURCE_ID,
+                submitted_quote=quote,
                 status=200,
                 response_digest=response_hash,
                 body=retry_body,
                 observed_at=CONSUMED_AT + 2,
+                exchange_observed_at="2026-07-23T01:04:52Z",
             ),
             "cross_binding_reuse": redemption(
                 kind="cross_binding_rejected",
-                quote_id="223e4567-e89b-42d3-a456-426614174000",
-                resource_id="risk-report:other",
+                submitted_quote=cross_quote,
                 status=409,
                 response_digest=safepay_v2_body_digest(cross_body),
                 body=cross_body,
                 observed_at=CONSUMED_AT + 70,
+                exchange_observed_at="2026-07-23T01:04:59Z",
             ),
         },
         "protected_report": {
@@ -776,6 +808,57 @@ def test_safepay_adapter_recomputes_all_eleven_checks() -> None:
         "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
         "cross_binding_reuse_returned_terminal_409",
     ]
+    assert all(check["passed"] is True for check in result["checks"])
+
+
+def test_safepay_adapter_accepts_same_container_restart_with_post_restart_retry() -> None:
+    artifact = safepay_artifact()
+    before = artifact["capture_identity"]["provider_instances"]["before_restart"]
+    after = _provider_runtime_identity(
+        container_id=before["container_id"],
+        started_at="2026-07-23T01:04:00Z",
+        observed_at="2026-07-23T01:04:05Z",
+        restart_count=before["restart_count"] + 1,
+    )
+    after_id = after["instance_id"]
+    artifact["capture_identity"]["provider_instances"]["after_restart"] = after
+    artifact["issued_quote_rows"]["before_restart"]["observed_at"] = (
+        "2026-07-23T01:03:58Z"
+    )
+    artifact["issued_quote_rows"]["after_restart"].update(
+        observed_at="2026-07-23T01:04:40Z",
+        provider_instance_id=after_id,
+    )
+    artifact["consumption_rows"]["before_restart"]["observed_at"] = (
+        "2026-07-23T01:03:58Z"
+    )
+    artifact["consumption_rows"]["after_restart"].update(
+        observed_at="2026-07-23T01:04:40Z",
+        provider_instance_id=after_id,
+    )
+    artifact["ledger_evidence"]["after_first_consumption"]["observed_at"] = (
+        "2026-07-23T01:03:59Z"
+    )
+    artifact["ledger_evidence"]["after_exact_retry"].update(
+        observed_at="2026-07-23T01:04:20Z",
+        provider_instance_id=after_id,
+    )
+    artifact["ledger_evidence"]["after_cross_binding_reuse"].update(
+        observed_at="2026-07-23T01:04:30Z",
+        provider_instance_id=after_id,
+    )
+    artifact["redemption_observations"]["first_consumption"]["exchange"][
+        "observed_at"
+    ] = "2026-07-23T01:03:57Z"
+    artifact["redemption_observations"]["exact_retry"]["exchange"]["observed_at"] = (
+        "2026-07-23T01:04:10Z"
+    )
+    artifact["redemption_observations"]["cross_binding_reuse"]["exchange"][
+        "observed_at"
+    ] = "2026-07-23T01:04:25Z"
+
+    result = verify_safepay_v2_artifact(artifact, _canonical(artifact))
+
     assert all(check["passed"] is True for check in result["checks"])
 
 

@@ -300,6 +300,52 @@ def test_control_json_reader_accepts_only_descriptor_safe_private_files(
         _read_json(link, context="control")
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"value":1,"value":2}',
+        b'{"value":NaN}',
+        b'{"value":Infinity}',
+        b'{"value":-Infinity}',
+    ],
+)
+def test_every_official_x402_json_path_rejects_ambiguous_json(raw: bytes) -> None:
+    from scripts.official_x402_capture import _strict_json_bytes
+
+    with pytest.raises(CaptureError, match="JSON|duplicate|finite"):
+        _strict_json_bytes(raw, context="raw control")
+
+
+def test_cli_bounds_atomic_write_refusal_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.official_x402_capture import main
+
+    request = tmp_path / "prepare-request.json"
+    request.write_bytes(_canonical(_prepare_request(_ed25519_payer())))
+    request.chmod(0o600)
+    output = tmp_path / "existing.json"
+    output.write_text("existing", encoding="utf-8")
+    output.chmod(0o600)
+
+    result = main(
+        [
+            "prepare",
+            "--request",
+            str(request),
+            "--out",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert json.loads(captured.err)["refusal"]
+    assert output.read_text(encoding="utf-8") == "existing"
+
+
 # ==========================================================================
 # capture
 # ==========================================================================

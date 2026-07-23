@@ -56,6 +56,11 @@ from shared.bound_command import (
     run_bound_command,
 )
 from shared.proof_registry import validate_release_registry_document
+from shared.live_collector_provenance import (
+    LIVE_COLLECTOR_ARTIFACT_PATHS,
+    LIVE_COLLECTOR_RAW_PATHS,
+    LIVE_COLLECTOR_RECEIPT_PATHS,
+)
 from shared.release_gate_contract import (
     BOUND_GIT_CONFIG_OVERRIDES,
     BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
@@ -7266,12 +7271,24 @@ def _recover_capture_publication(root: Path) -> str:
     ):
         raise ReleaseManifestError("capture publication journal identity differs")
     payloads = _mapping(document.get("payloads"), "capture journal payloads")
-    expected_paths = {
-        *RECEIPT_PATHS.values(),
-        *PROOF_RECEIPT_PATHS.values(),
-        NPM_CAPTURE_PATH,
+    standard_paths = frozenset(
+        {
+            *RECEIPT_PATHS.values(),
+            *PROOF_RECEIPT_PATHS.values(),
+            NPM_CAPTURE_PATH,
+        }
+    )
+    collector_paths = {
+        frozenset(
+            {
+                LIVE_COLLECTOR_RAW_PATHS[proof_id],
+                LIVE_COLLECTOR_ARTIFACT_PATHS[proof_id],
+                LIVE_COLLECTOR_RECEIPT_PATHS[proof_id],
+            }
+        )
+        for proof_id in LIVE_COLLECTOR_RECEIPT_PATHS
     }
-    if set(payloads) != expected_paths:
+    if frozenset(payloads) not in {standard_paths, *collector_paths}:
         raise ReleaseManifestError("capture publication payload inventory differs")
     for relative, digest in payloads.items():
         _validate_relative_path(relative)
@@ -7361,7 +7378,27 @@ def _create_capture_batch_once(
 ) -> tuple[Path, ...]:
     """Publish the complete capture tree through a durable recoverable swap."""
 
-    if any(not relative.startswith("release/") for relative in payloads):
+    standard_paths = frozenset(
+        {
+            *RECEIPT_PATHS.values(),
+            *PROOF_RECEIPT_PATHS.values(),
+            NPM_CAPTURE_PATH,
+        }
+    )
+    collector_paths = {
+        frozenset(
+            {
+                LIVE_COLLECTOR_RAW_PATHS[proof_id],
+                LIVE_COLLECTOR_ARTIFACT_PATHS[proof_id],
+                LIVE_COLLECTOR_RECEIPT_PATHS[proof_id],
+            }
+        )
+        for proof_id in LIVE_COLLECTOR_RECEIPT_PATHS
+    }
+    if (
+        frozenset(payloads) not in {standard_paths, *collector_paths}
+        or any(not relative.startswith("release/") for relative in payloads)
+    ):
         raise ReleaseManifestError("capture output escaped the fixed release tree")
     transaction_id = secrets.token_hex(16)
     staging_name = f".release.capture.{transaction_id}"

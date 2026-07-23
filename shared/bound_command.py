@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import fcntl
 import hashlib
 import json
 import os
@@ -1518,6 +1519,7 @@ def _run_bounded_process_once(
     timeout_s: int,
     tracker: _DescendantTracker,
     inherited_descriptor: int,
+    inherited_private_descriptor: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     with tempfile.TemporaryFile(mode="w+b") as stdout_file:
         with tempfile.TemporaryFile(mode="w+b") as stderr_file:
@@ -1531,7 +1533,11 @@ def _run_bounded_process_once(
                     stdout=stdout_file,
                     stderr=stderr_file,
                     start_new_session=True,
-                    pass_fds=(inherited_descriptor,),
+                    pass_fds=(
+                        (inherited_descriptor,)
+                        if inherited_private_descriptor is None
+                        else (inherited_descriptor, inherited_private_descriptor)
+                    ),
                 )
             except OSError as exc:
                 raise BoundCommandError("bound command could not start") from exc
@@ -1593,6 +1599,7 @@ def run_bounded_process(
     stdout_limit: int,
     stderr_limit: int,
     timeout_s: int,
+    inherited_private_descriptor: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Capture live-capped output and contain inherited trusted descendants."""
 
@@ -1605,6 +1612,34 @@ def run_bounded_process(
         or _BOUND_PROCESS_NONCE_ENV in env
     ):
         raise BoundCommandError("bounded command parameters are invalid")
+    if inherited_private_descriptor is not None:
+        if (
+            type(inherited_private_descriptor) is not int
+            or inherited_private_descriptor <= 2
+        ):
+            raise BoundCommandError("private inherited descriptor is invalid")
+        try:
+            descriptor_status = os.fstat(inherited_private_descriptor)
+            descriptor_flags = fcntl.fcntl(
+                inherited_private_descriptor,
+                fcntl.F_GETFL,
+            )
+            descriptor_fd_flags = fcntl.fcntl(
+                inherited_private_descriptor,
+                fcntl.F_GETFD,
+            )
+        except OSError as exc:
+            raise BoundCommandError(
+                "private inherited descriptor is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISFIFO(descriptor_status.st_mode)
+            or descriptor_flags & os.O_ACCMODE != os.O_RDONLY
+            or descriptor_fd_flags & fcntl.FD_CLOEXEC == 0
+        ):
+            raise BoundCommandError(
+                "private inherited descriptor is not a read-only CLOEXEC FIFO"
+            )
     maximum_stream = int(BOUND_TOOL_POLICY["maximum_stream_bytes"])
     if stdout_limit > maximum_stream or stderr_limit > maximum_stream:
         raise BoundCommandError("bounded command output limit is invalid")
@@ -1630,6 +1665,7 @@ def run_bounded_process(
                 timeout_s=timeout_s,
                 tracker=tracker,
                 inherited_descriptor=marker.fileno(),
+                inherited_private_descriptor=inherited_private_descriptor,
             )
         finally:
             marker.close()
@@ -2462,6 +2498,7 @@ def run_bound_command(
     command_asset_root: Path | None = None,
     bound_data_inputs: Sequence[Path] = (),
     private_output_specs: Sequence[PrivateOutputSpec] = (),
+    inherited_private_descriptor: int | None = None,
 ) -> BoundCommandResult:
     """Run one exact logical tool without shell or caller-controlled resolution."""
 
@@ -2662,6 +2699,7 @@ def run_bound_command(
                 stdout_limit=stdout_limit,
                 stderr_limit=stderr_limit,
                 timeout_s=timeout_s,
+                inherited_private_descriptor=inherited_private_descriptor,
             )
             if check and process_result.returncode != 0:
                 raise BoundCommandError("bound command returned a nonzero status")

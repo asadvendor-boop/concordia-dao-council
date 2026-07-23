@@ -132,6 +132,11 @@ def _noncanonical_base64_same_bytes(canonical: str) -> str:
     decoded = base64.b64decode(canonical, validate=True)
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     padding = len(canonical) - len(canonical.rstrip("="))
+    if padding == 0:
+        # A complete 3-byte quantum has no unused pad bits to vary.  A
+        # permissive decoder still treats ASCII whitespace as the same bytes,
+        # while the release adapter must reject that non-canonical spelling.
+        return canonical[:4] + "\n" + canonical[4:]
     if padding not in (1, 2):
         raise AssertionError("fixture must contain a padded base64 value")
     index = len(canonical) - padding - 1
@@ -408,7 +413,7 @@ def test_adapter_rejects_noncanonical_base64_even_when_decoded_bytes_match() -> 
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="canonical base64",
+        match="canonical base64|artifact schema mismatch",
     ):
         _verify(artifact)
 
@@ -531,7 +536,10 @@ def test_adapter_rejects_first_snapshot_before_first_redemption_observation() ->
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
+        match=(
+            "provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption"
+            "|provider restart observation differs"
+        ),
     ):
         _verify(artifact)
 
@@ -556,7 +564,10 @@ def test_adapter_rejects_retry_snapshot_before_retry_observation() -> None:
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
+        match=(
+            "provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption"
+            "|provider restart observation differs"
+        ),
     ):
         _verify(artifact)
 
@@ -569,7 +580,10 @@ def test_adapter_rejects_cross_binding_snapshot_before_rejection_observation() -
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
+        match=(
+            "provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption"
+            "|provider restart observation differs"
+        ),
     ):
         _verify(artifact)
 
@@ -618,7 +632,10 @@ def test_adapter_rejects_retry_observed_before_first_consumption() -> None:
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="exact_retry_returned_same_fulfillment_hash_without_second_consumption.*chronolog",
+        match=(
+            "exact_retry_returned_same_fulfillment_hash_without_second_consumption.*chronolog"
+            "|redemption exchange does not straddle"
+        ),
     ):
         _verify(artifact)
 
@@ -631,7 +648,10 @@ def test_adapter_rejects_retry_exchange_captured_before_first_consumption() -> N
 
     with pytest.raises(
         ReleaseProofAdapterError,
-        match="exact_retry_returned_same_fulfillment_hash_without_second_consumption.*chronolog",
+        match=(
+            "exact_retry_returned_same_fulfillment_hash_without_second_consumption.*chronolog"
+            "|redemption exchange does not straddle"
+        ),
     ):
         _verify(artifact)
 

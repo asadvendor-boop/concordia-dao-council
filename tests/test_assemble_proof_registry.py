@@ -1080,6 +1080,14 @@ def _release_assembly_case(
         "validate_internal_record",
         lambda record: copy.deepcopy(record),
     )
+    monkeypatch.setattr(
+        registry_assembler,
+        "_verify_live_collector_admission",
+        lambda **kwargs: {
+            "proof_id": kwargs["proof_id"],
+            "capture_mode": "direct_fixed_io",
+        },
+    )
     monkeypatch.setattr(registry_assembler, "_git_commit_exists", lambda *_args: True)
 
     validated_documents: list[dict[str, object]] = []

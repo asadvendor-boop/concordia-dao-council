@@ -290,9 +290,14 @@ def _verify_provider_restart_identity(
         instances["after_restart"],
         label="provider runtime identity after restart",
     )
+    before_restart_count = before.get("restart_count")
+    after_restart_count = after.get("restart_count")
     if (
         before_id == after_id
-        or before.get("container_id") == after.get("container_id")
+        or before.get("container_id") != after.get("container_id")
+        or type(before_restart_count) is not int
+        or type(after_restart_count) is not int
+        or after_restart_count != before_restart_count + 1
         or before.get("deployment_id") != capture.get("provider_deployment_id")
         or after.get("deployment_id") != capture.get("provider_deployment_id")
         or before.get("image_digest") != capture.get("provider_image_digest")
@@ -310,46 +315,53 @@ def _verify_provider_restart_identity(
             document["issued_quote_rows"]["before_restart"],
             before_id,
             before_observed,
-            None,
+            after_started,
+            False,
         ),
         (
             document["consumption_rows"]["before_restart"],
             before_id,
             before_observed,
-            None,
+            after_started,
+            False,
         ),
         (
             document["ledger_evidence"]["after_first_consumption"],
             before_id,
             before_observed,
-            None,
+            after_started,
+            False,
         ),
         (
             document["ledger_evidence"]["after_exact_retry"],
-            before_id,
-            before_observed,
-            None,
+            after_id,
+            after_observed,
+            captured_at,
+            True,
         ),
         (
             document["issued_quote_rows"]["after_restart"],
             after_id,
             after_observed,
-            after_started,
+            captured_at,
+            True,
         ),
         (
             document["consumption_rows"]["after_restart"],
             after_id,
             after_observed,
-            after_started,
+            captured_at,
+            True,
         ),
         (
             document["ledger_evidence"]["after_cross_binding_reuse"],
             after_id,
             after_observed,
-            after_started,
+            captured_at,
+            True,
         ),
     )
-    for raw, expected_id, upper_bound, lower_bound in observations:
+    for raw, expected_id, lower_bound, upper_bound, upper_inclusive in observations:
         observation = _mapping(raw, "provider restart-bound observation")
         observed = _timestamp(
             observation.get("observed_at"),
@@ -357,12 +369,52 @@ def _verify_provider_restart_identity(
         )
         if (
             observation.get("provider_instance_id") != expected_id
-            or observed > upper_bound
-            or (lower_bound is None and observed >= after_started)
-            or (lower_bound is not None and observed < lower_bound)
+            or observed < lower_bound
+            or (observed > upper_bound if upper_inclusive else observed >= upper_bound)
         ):
             raise ReleaseProofAdapterError(
                 "provider restart observation differs from its runtime identity"
+            )
+    redemptions = _mapping(
+        document.get("redemption_observations"),
+        "provider restart redemption observations",
+    )
+    phase_exchanges = (
+        (
+            redemptions.get("first_consumption"),
+            before_observed,
+            after_started,
+            False,
+        ),
+        (
+            redemptions.get("exact_retry"),
+            after_observed,
+            captured_at,
+            True,
+        ),
+        (
+            redemptions.get("cross_binding_reuse"),
+            after_observed,
+            captured_at,
+            True,
+        ),
+    )
+    for raw, lower_bound, upper_bound, upper_inclusive in phase_exchanges:
+        redemption = _mapping(raw, "restart-bound redemption")
+        exchange = _mapping(
+            redemption.get("exchange"),
+            "restart-bound redemption exchange",
+        )
+        observed = _timestamp(
+            exchange.get("observed_at"),
+            "restart-bound redemption exchange observed_at",
+        )
+        if (
+            observed < lower_bound
+            or (observed > upper_bound if upper_inclusive else observed >= upper_bound)
+        ):
+            raise ReleaseProofAdapterError(
+                "redemption exchange does not straddle the provider restart"
             )
     return before_id, after_id
 
@@ -1062,11 +1114,11 @@ def _verify_safepay_ledger(
         finally:
             connection.close()
     if (
-        instance_ids[0] != instance_ids[1]
-        or instance_ids[2] == instance_ids[0]
+        instance_ids[0] == instance_ids[1]
+        or instance_ids[1] != instance_ids[2]
         or instance_ids[0]
         != document["consumption_rows"]["before_restart"]["provider_instance_id"]
-        or instance_ids[2]
+        or instance_ids[1]
         != document["consumption_rows"]["after_restart"]["provider_instance_id"]
     ):
         _fail(check, "ledger snapshots do not prove a distinct provider restart")
@@ -1429,10 +1481,9 @@ def verify_safepay_v2_artifact(
         captured_at=captured_at_instant,
     )
     expected_first_request = {
-        "network": quote["network"],
+        "schema_version": "safepay-redemption-v2",
+        "quote": quote,
         "payment_hash": parsed_transfer["payment_hash"],
-        "quote_id": quote["quote_id"],
-        "resource_id": quote["resource_id"],
     }
     if (
         first_request != expected_first_request
@@ -1456,6 +1507,10 @@ def verify_safepay_v2_artifact(
     )
     if (
         retry_request != expected_first_request
+        or retry["exchange"].get("request_body_base64")
+        != first["exchange"].get("request_body_base64")
+        or retry["exchange"].get("request_body_sha256")
+        != first["exchange"].get("request_body_sha256")
         or retry.get("network") != quote["network"]
         or retry.get("payment_hash") != parsed_transfer["payment_hash"]
         or retry.get("quote_id") != quote["quote_id"]
@@ -1479,11 +1534,37 @@ def verify_safepay_v2_artifact(
         False,
         "cross_binding_rejected",
     )
+    cross_quote = _mapping(
+        cross_request.get("quote"), "cross-binding submitted quote"
+    )
+    try:
+        cross_nonce = bytes.fromhex(str(cross_quote["quote_nonce"]))
+        cross_correlation_id = safepay_v2_correlation_id(
+            cross_quote["quote_id"],
+            cross_quote["proposal_id"],
+            cross_quote["resource_id"],
+            cross_nonce,
+        )
+        cross_quote_hash = safepay_v2_quote_hash(
+            quote_id=cross_quote["quote_id"],
+            proposal_id=cross_quote["proposal_id"],
+            resource_id=cross_quote["resource_id"],
+            network=cross_quote["network"],
+            payee_account_hash=cross_quote["payee_account_hash"],
+            amount_motes=cross_quote["amount_motes"],
+            correlation_id=cross_correlation_id,
+            report_version=cross_quote["report_version"],
+            report_hash=cross_quote["report_hash"],
+            expires_at=cross_quote["expires_at"],
+            quote_nonce=cross_nonce,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail(_SAFEPAY_CHECKS[10], "cross-binding quote preimage is invalid")
+        raise AssertionError from exc
     expected_cross_request = {
-        "network": cross.get("network"),
-        "payment_hash": cross.get("payment_hash"),
-        "quote_id": cross.get("quote_id"),
-        "resource_id": cross.get("resource_id"),
+        "schema_version": "safepay-redemption-v2",
+        "quote": cross_quote,
+        "payment_hash": parsed_transfer["payment_hash"],
     }
     if (
         cross.get("http_status") != 409
@@ -1492,9 +1573,13 @@ def verify_safepay_v2_artifact(
         or cross.get("consumed_response_hash") != expected_response_hash
         or cross.get("response_digest") != safepay_v2_body_digest(expected_cross_body)
         or cross_response != expected_cross_body
-        or cross_request.get("network") != quote["network"]
-        or cross_request.get("payment_hash") != parsed_transfer["payment_hash"]
         or cross_request != expected_cross_request
+        or set(cross_quote) != set(quote)
+        or cross_quote.get("network") != quote["network"]
+        or cross_quote.get("quote_id") != cross.get("quote_id")
+        or cross_quote.get("resource_id") != cross.get("resource_id")
+        or cross_quote.get("correlation_id") != str(cross_correlation_id)
+        or cross_quote.get("quote_hash") != cross_quote_hash
         or (
             cross.get("quote_id") == quote["quote_id"]
             and cross.get("resource_id") == quote["resource_id"]
