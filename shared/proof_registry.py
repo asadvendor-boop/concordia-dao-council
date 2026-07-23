@@ -282,9 +282,23 @@ INTERNAL_REQUIRED_FIELDS = (
     "report_hash",
     "payment_requirements_hash",
     "signed_payment_payload_hash",
+    "settlement_transaction",
     "verification_status",
     "observed_at",
     "checks",
+)
+
+RELEASE_PUBLIC_PROOF_TYPES = frozenset(
+    {
+        "historical_odra_receipt_v2",
+        "exact_envelope_v3",
+        "native_treasury_execution_v1",
+        "safepay_v2",
+        "official_x402_settlement_v1",
+    }
+)
+RELEASE_INTERNAL_ACTION_KINDS = frozenset(
+    {"NativeTransferV1", "OfficialX402SettlementV1"}
 )
 
 
@@ -373,6 +387,8 @@ def _public_item_errors(item: Any) -> list[str]:
     if not isinstance(item, dict):
         return ["item_not_object"]
     errors: list[str] = []
+    if set(item) != set(PUBLIC_ITEM_REQUIRED_FIELDS):
+        errors.append("public_item_field_set_not_exact")
     for field in PUBLIC_ITEM_REQUIRED_FIELDS:
         if field not in item:
             errors.append(f"field_missing:{field}")
@@ -612,12 +628,13 @@ def _internal_record_errors(record: Any) -> list[str]:
         "report_hash",
         "payment_requirements_hash",
         "signed_payment_payload_hash",
+        "settlement_transaction",
     ):
         if record.get(field) is not None and not _is_hex32(record[field]):
             errors.append(f"{field}_invalid")
     if record.get("action_kind") not in {"NativeTransferV1", "OfficialX402SettlementV1"}:
         errors.append("action_kind_invalid")
-    if not isinstance(record.get("action_version"), int) or isinstance(record.get("action_version"), bool):
+    if record.get("action_version") != 1:
         errors.append("action_version_invalid")
     if record.get("network") != "casper:casper-test":
         errors.append("network_invalid")
@@ -628,12 +645,28 @@ def _internal_record_errors(record: Any) -> list[str]:
     if record.get("finalized_at") is not None and not _is_rfc3339_utc(record["finalized_at"]):
         errors.append("finalized_at_invalid")
     errors.extend(_check_errors(record.get("checks"), REQUIRED_CHECKS_BY_PROOF_TYPE["exact_envelope_v3"]))
+    observed_at = _parse_rfc3339_utc(record.get("observed_at"))
+    finalized_at = _parse_rfc3339_utc(record.get("finalized_at"))
+    if (
+        observed_at is not None
+        and finalized_at is not None
+        and finalized_at > observed_at
+    ):
+        errors.append("finalized_after_observation")
+    if observed_at is not None and isinstance(record.get("checks"), list):
+        for check in record["checks"]:
+            if not isinstance(check, dict):
+                continue
+            check_time = _parse_rfc3339_utc(check.get("observed_at"))
+            if check_time is not None and check_time > observed_at:
+                errors.append("check_observed_after_record")
     if record.get("action_kind") == "OfficialX402SettlementV1":
         for field in (
             "resource_url_hash",
             "report_hash",
             "payment_requirements_hash",
             "signed_payment_payload_hash",
+            "settlement_transaction",
         ):
             if record.get(field) is None:
                 errors.append(f"x402_field_missing:{field}")
@@ -643,6 +676,7 @@ def _internal_record_errors(record: Any) -> list[str]:
             "report_hash",
             "payment_requirements_hash",
             "signed_payment_payload_hash",
+            "settlement_transaction",
         ):
             if record.get(field) is not None:
                 errors.append(f"native_x402_field_present:{field}")
@@ -675,6 +709,151 @@ def validate_internal_record(record: dict[str, Any]) -> dict[str, Any]:
         and validated.get("finalization_transaction")
         and validated.get("finalized_at")
     )
+    return validated
+
+
+def validate_registry_document(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate one complete committed registry, including private bindings."""
+
+    if not isinstance(value, dict):
+        raise ValueError("proof registry must be an object")
+    required_fields = {"schema_version", "public_items", "internal_records"}
+    if set(value) not in {
+        frozenset(required_fields),
+        frozenset(required_fields | {"card_chain_roots"}),
+    }:
+        raise ValueError("proof registry has unknown or missing fields")
+    if value.get("schema_version") != 1:
+        raise ValueError("proof registry schema mismatch")
+    public_items = value.get("public_items")
+    internal_records = value.get("internal_records")
+    if not isinstance(public_items, list) or not isinstance(internal_records, list):
+        raise ValueError("proof registry arrays are invalid")
+
+    proof_ids: set[str] = set()
+    proof_types: set[str] = set()
+    for item in public_items:
+        errors = _public_item_errors(item)
+        if errors:
+            raise ValueError(f"invalid public proof item: {errors[0]}")
+        assert isinstance(item, dict)
+        proof_id = item["proof_id"]
+        proof_type = item["proof_type"]
+        if proof_id in proof_ids or proof_type in proof_types:
+            raise ValueError("proof registry public identity is duplicated")
+        if item.get("verification_status") == "verified" and not proof_item_is_green(
+            item
+        ):
+            raise ValueError("verified public proof item is not green")
+        proof_ids.add(proof_id)
+        proof_types.add(proof_type)
+
+    action_ids: set[str] = set()
+    signed_payload_hashes: set[str] = set()
+    internal_by_action: dict[str, dict[str, Any]] = {}
+    for record in internal_records:
+        if not isinstance(record, dict):
+            raise ValueError("proof registry internal record is not an object")
+        validated = validate_internal_record(record)
+        if (
+            validated.get("verification_status") != "verified"
+            or validated.get("v3_finalized_exact") is not True
+            or validated != record
+        ):
+            raise ValueError("proof registry internal record is invalid")
+        action_id = record["action_id"]
+        if action_id in action_ids:
+            raise ValueError("proof registry action binding is ambiguous")
+        action_ids.add(action_id)
+        internal_by_action[action_id] = record
+        signed_hash = record.get("signed_payment_payload_hash")
+        if signed_hash is not None:
+            if signed_hash in signed_payload_hashes:
+                raise ValueError("proof registry payment binding is ambiguous")
+            signed_payload_hashes.add(signed_hash)
+
+    for item in public_items:
+        if not isinstance(item, dict):
+            raise ValueError("proof registry public item is invalid")
+        if item.get("proof_type") not in {
+            "exact_envelope_v3",
+            "native_treasury_execution_v1",
+            "official_x402_settlement_v1",
+        }:
+            continue
+        record = internal_by_action.get(item.get("action_id"))
+        if record is None:
+            raise ValueError("public proof lacks an exact internal action binding")
+        for field in (
+            "proposal_id",
+            "action_id",
+            "envelope_hash",
+            "network",
+            "package_hash",
+            "contract_hash",
+            "deployment_domain",
+        ):
+            if item.get(field) != record.get(field):
+                raise ValueError(f"public/internal proof binding differs: {field}")
+        if item.get("proof_type") == "official_x402_settlement_v1":
+            for field in (
+                "payment_requirements_hash",
+                "signed_payment_payload_hash",
+                "report_hash",
+                "settlement_transaction",
+            ):
+                if item.get(field) != record.get(field):
+                    raise ValueError(
+                        f"public/internal x402 binding differs: {field}"
+                    )
+
+    if "card_chain_roots" in value:
+        roots = value["card_chain_roots"]
+        if (
+            not isinstance(roots, dict)
+            or set(roots) != {"artifact_path", "artifact_sha256"}
+            or roots.get("artifact_path")
+            != "artifacts/live/card-chain-roots-v1.json"
+            or not _is_hex32(roots.get("artifact_sha256"))
+        ):
+            raise ValueError("proof registry card-chain roots identity is invalid")
+    return copy.deepcopy(value)
+
+
+def validate_release_registry_document(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate the exact finals release registry, including its cardinality.
+
+    The general repository format intentionally permits partial registries for
+    honest unavailable/degraded views. A release receipt has a stricter
+    contract: every committed proof adapter must be present exactly once and
+    both typed v3 action bindings must exist.
+    """
+
+    validated = validate_registry_document(value)
+    public_items = validated["public_items"]
+    internal_records = validated["internal_records"]
+    public_types = [item["proof_type"] for item in public_items]
+    action_kinds = [record["action_kind"] for record in internal_records]
+    if (
+        len(public_types) != len(RELEASE_PUBLIC_PROOF_TYPES)
+        or set(public_types) != RELEASE_PUBLIC_PROOF_TYPES
+    ):
+        raise ValueError("release registry does not contain the exact public proof set")
+    if (
+        len(action_kinds) != len(RELEASE_INTERNAL_ACTION_KINDS)
+        or set(action_kinds) != RELEASE_INTERNAL_ACTION_KINDS
+    ):
+        raise ValueError(
+            "release registry does not contain the exact internal action set"
+        )
+    if "card_chain_roots" not in validated:
+        raise ValueError("release registry lacks the exact card-chain root binding")
+    for item in public_items:
+        if not proof_item_is_green(item):
+            raise ValueError(
+                f"release registry proof is not independently green: "
+                f"{item['proof_type']}"
+            )
     return validated
 
 

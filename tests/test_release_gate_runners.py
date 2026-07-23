@@ -29,7 +29,7 @@ from shared.release_gate_contract import (
 
 
 FROZEN_COLLECTOR_CONTRACT_SHA256 = (
-    "a5371ba186c6f663a59066adaafbe03d5f486129dc3303d42bff44ddaa7d3010"
+    "1d7a7a38ff0cf103783a27269fa1d4347237fd873a154c1f9f509397acb710a0"
 )
 NOW = "2026-07-23T00:00:00Z"
 OTHER = "2026-07-23T00:00:01Z"
@@ -482,6 +482,7 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
     )
     allowed_environment = {
         "CARGO_HOME",
+        "CARGO_TARGET_DIR",
         "CI",
         "HOME",
         "LANG",
@@ -490,7 +491,6 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
         "NPM_CONFIG_CACHE",
         "NPM_CONFIG_USERCONFIG",
         "PATH",
-        "PLAYWRIGHT_BROWSERS_PATH",
         "RUSTUP_HOME",
         "TMPDIR",
         "UV_CACHE_DIR",
@@ -503,6 +503,15 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
         set(environment) <= allowed_environment
         for _, _, environment, _ in executor.calls
     )
+    cargo_environment = next(
+        environment
+        for argv, _, environment, _ in executor.calls
+        if argv == ("cargo", "test", "--locked")
+    )
+    assert cargo_environment["CARGO_TARGET_DIR"] != str(
+        repository / "contracts/odra-governance-receipt-v3/target"
+    )
+    assert str(repository) not in cargo_environment["CARGO_TARGET_DIR"]
 
 
 @pytest.mark.parametrize("runtime", sorted(EXPECTED_RUNTIME_VERSIONS))
@@ -1152,7 +1161,7 @@ def test_native_architecture_detects_rosetta_and_preserves_true_intel() -> None:
 
 def test_secret_canaries_include_common_reversible_representations() -> None:
     raw = b"Ab?/9+"
-    variants = set(release_gate_runner._canary_variants(raw))
+    variants = set(release_gate_runner.secret_variants(raw))
     standard = base64.b64encode(raw)
     urlsafe = base64.urlsafe_b64encode(raw)
     percent_encoded = b"".join(f"%{value:02X}".encode() for value in raw)

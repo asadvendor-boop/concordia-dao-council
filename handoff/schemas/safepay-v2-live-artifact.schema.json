@@ -1,0 +1,742 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://concordiadao.xyz/schemas/safepay-v2-live-artifact.schema.json",
+  "title": "Concordia SafePay v2 live evidence artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "captured_at",
+    "source_commit",
+    "deployment_commit",
+    "capture_identity",
+    "quote",
+    "issued_quote_rows",
+    "chain_evidence",
+    "consumption_rows",
+    "redemption_observations",
+    "protected_report"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "safepay-v2"
+    },
+    "captured_at": {
+      "$ref": "#/$defs/utc"
+    },
+    "source_commit": {
+      "$ref": "#/$defs/git_sha"
+    },
+    "deployment_commit": {
+      "$ref": "#/$defs/git_sha"
+    },
+    "capture_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_url",
+        "provider_deployment_id",
+        "provider_image_digest",
+        "capture_tool_commit"
+      ],
+      "properties": {
+        "provider_url": {
+          "$ref": "#/$defs/https_url"
+        },
+        "provider_deployment_id": {
+          "$ref": "#/$defs/bounded_text"
+        },
+        "provider_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "capture_tool_commit": {
+          "$ref": "#/$defs/git_sha"
+        }
+      }
+    },
+    "quote": {
+      "$ref": "#/$defs/quote"
+    },
+    "issued_quote_rows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_restart",
+        "after_restart"
+      ],
+      "properties": {
+        "before_restart": {
+          "$ref": "#/$defs/quote_row_observation"
+        },
+        "after_restart": {
+          "$ref": "#/$defs/quote_row_observation"
+        }
+      }
+    },
+    "chain_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "payment_hash",
+        "providers",
+        "parsed_transfer"
+      ],
+      "properties": {
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "payment_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "providers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/rpc_provider_observation"
+          }
+        },
+        "parsed_transfer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "network",
+            "payment_hash",
+            "block_hash",
+            "block_height",
+            "state_root_hash",
+            "block_timestamp",
+            "execution_status",
+            "finality_status",
+            "execution_error",
+            "native_transfer_count",
+            "source_account_hash",
+            "payee_account_hash",
+            "amount_motes",
+            "transfer_id"
+          ],
+          "properties": {
+            "network": {
+              "const": "casper:casper-test"
+            },
+            "payment_hash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "block_hash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "block_height": {
+              "$ref": "#/$defs/u64_integer"
+            },
+            "state_root_hash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "block_timestamp": {
+              "$ref": "#/$defs/utc"
+            },
+            "execution_status": {
+              "const": "processed"
+            },
+            "finality_status": {
+              "const": "finalized"
+            },
+            "execution_error": {
+              "type": "null"
+            },
+            "native_transfer_count": {
+              "const": 1
+            },
+            "source_account_hash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "payee_account_hash": {
+              "$ref": "#/$defs/hex32"
+            },
+            "amount_motes": {
+              "$ref": "#/$defs/unsigned_decimal"
+            },
+            "transfer_id": {
+              "$ref": "#/$defs/u64_decimal"
+            }
+          }
+        }
+      }
+    },
+    "consumption_rows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_restart",
+        "after_restart",
+        "exact_count"
+      ],
+      "properties": {
+        "before_restart": {
+          "$ref": "#/$defs/consumption_row_observation"
+        },
+        "after_restart": {
+          "$ref": "#/$defs/consumption_row_observation"
+        },
+        "exact_count": {
+          "const": 1
+        }
+      }
+    },
+    "redemption_observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_consumption",
+        "exact_retry",
+        "cross_binding_reuse"
+      ],
+      "properties": {
+        "first_consumption": {
+          "$ref": "#/$defs/redemption_first"
+        },
+        "exact_retry": {
+          "$ref": "#/$defs/redemption_retry"
+        },
+        "cross_binding_reuse": {
+          "$ref": "#/$defs/redemption_cross_binding"
+        }
+      }
+    },
+    "protected_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_version",
+        "proposal_id",
+        "resource_id",
+        "correlation_id",
+        "media_type",
+        "content_base64",
+        "decoded_length",
+        "report_hash",
+        "response_hash",
+        "persisted_at",
+        "released_at"
+      ],
+      "properties": {
+        "report_version": {
+          "const": "safepay-report-v2"
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/resource_id"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/u64_decimal"
+        },
+        "media_type": {
+          "const": "application/json"
+        },
+        "content_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "decoded_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "response_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "persisted_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "released_at": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    },
+    "https_url": {
+      "type": "string",
+      "pattern": "^https://[^\\s?#]+(?:\\?[^\\s#]*)?$",
+      "maxLength": 2048
+    },
+    "bounded_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+      "maxLength": 1398104
+    },
+    "proposal_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9-]{1,64}$"
+    },
+    "resource_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[\\x20-\\x7e]+$"
+    },
+    "unsigned_decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 155
+    },
+    "positive_decimal": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$",
+      "maxLength": 155
+    },
+    "u64_decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "u64_integer": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "quote_id",
+        "proposal_id",
+        "resource_id",
+        "network",
+        "payee_account_hash",
+        "amount_motes",
+        "correlation_id",
+        "report_version",
+        "report_hash",
+        "expires_at",
+        "quote_nonce",
+        "quote_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "safepay-v2"
+        },
+        "quote_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/resource_id"
+        },
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "payee_account_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "amount_motes": {
+          "$ref": "#/$defs/positive_decimal"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/u64_decimal"
+        },
+        "report_version": {
+          "const": "safepay-report-v2"
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/u64_integer"
+        },
+        "quote_nonce": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+        },
+        "quote_hash": {
+          "$ref": "#/$defs/hex32"
+        }
+      }
+    },
+    "quote_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quote_id",
+        "proposal_id",
+        "resource_id",
+        "network",
+        "payee_account_hash",
+        "amount_motes",
+        "correlation_id",
+        "report_version",
+        "report_hash",
+        "issued_at",
+        "expires_at",
+        "quote_nonce",
+        "quote_hash"
+      ],
+      "properties": {
+        "quote_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/resource_id"
+        },
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "payee_account_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "amount_motes": {
+          "$ref": "#/$defs/positive_decimal"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/u64_decimal"
+        },
+        "report_version": {
+          "const": "safepay-report-v2"
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/u64_integer"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/u64_integer"
+        },
+        "quote_nonce": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+        },
+        "quote_hash": {
+          "$ref": "#/$defs/hex32"
+        }
+      }
+    },
+    "quote_row_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row",
+        "row_canonical_json_sha256",
+        "observed_at",
+        "provider_instance_id"
+      ],
+      "properties": {
+        "row": {
+          "$ref": "#/$defs/quote_row"
+        },
+        "row_canonical_json_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "provider_instance_id": {
+          "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "rpc_exchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_body_base64",
+        "request_body_sha256",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "response_body_sha256",
+        "observed_at"
+      ],
+      "properties": {
+        "request_body_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "request_body_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "response_status": {
+          "const": 200
+        },
+        "response_content_type": {
+          "const": "application/json"
+        },
+        "response_body_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "response_body_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    },
+    "rpc_provider_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_id",
+        "origin",
+        "info_get_deploy",
+        "chain_get_block"
+      ],
+      "properties": {
+        "endpoint_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,64}$"
+        },
+        "origin": {
+          "$ref": "#/$defs/https_url"
+        },
+        "info_get_deploy": {
+          "$ref": "#/$defs/rpc_exchange"
+        },
+        "chain_get_block": {
+          "$ref": "#/$defs/rpc_exchange"
+        }
+      }
+    },
+    "consumption_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "payment_hash",
+        "quote_id",
+        "proposal_id",
+        "resource_id",
+        "quote_hash",
+        "report_hash",
+        "correlation_id",
+        "fulfillment_json",
+        "response_hash",
+        "consumed_at"
+      ],
+      "properties": {
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "payment_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "quote_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/resource_id"
+        },
+        "quote_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/u64_decimal"
+        },
+        "fulfillment_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 1048576
+        },
+        "response_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "consumed_at": {
+          "$ref": "#/$defs/u64_integer"
+        }
+      }
+    },
+    "consumption_row_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row",
+        "row_canonical_json_sha256",
+        "observed_at",
+        "provider_instance_id"
+      ],
+      "properties": {
+        "row": {
+          "$ref": "#/$defs/consumption_row"
+        },
+        "row_canonical_json_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "provider_instance_id": {
+          "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "http_exchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "url",
+        "request_body_base64",
+        "request_body_sha256",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "response_body_sha256",
+        "observed_at"
+      ],
+      "properties": {
+        "method": {
+          "const": "POST"
+        },
+        "url": {
+          "$ref": "#/$defs/https_url"
+        },
+        "request_body_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "request_body_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "response_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "response_content_type": {
+          "const": "application/json"
+        },
+        "response_body_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "response_body_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    },
+    "redemption_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "network",
+        "payment_hash",
+        "quote_id",
+        "resource_id",
+        "http_status",
+        "observed_at",
+        "response_digest",
+        "consumed_response_hash",
+        "exchange"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "first_consumption",
+            "idempotent_replay",
+            "cross_binding_rejected"
+          ]
+        },
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "payment_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "quote_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/resource_id"
+        },
+        "http_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "observed_at": {
+          "$ref": "#/$defs/u64_integer"
+        },
+        "response_digest": {
+          "$ref": "#/$defs/hex32"
+        },
+        "consumed_response_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "exchange": {
+          "$ref": "#/$defs/http_exchange"
+        }
+      }
+    },
+    "redemption_first": {
+      "$ref": "#/$defs/redemption_observation",
+      "properties": {
+        "kind": {
+          "const": "first_consumption"
+        },
+        "http_status": {
+          "const": 200
+        }
+      }
+    },
+    "redemption_retry": {
+      "$ref": "#/$defs/redemption_observation",
+      "properties": {
+        "kind": {
+          "const": "idempotent_replay"
+        },
+        "http_status": {
+          "const": 200
+        }
+      }
+    },
+    "redemption_cross_binding": {
+      "$ref": "#/$defs/redemption_observation",
+      "properties": {
+        "kind": {
+          "const": "cross_binding_rejected"
+        },
+        "http_status": {
+          "const": 409
+        }
+      }
+    }
+  }
+}

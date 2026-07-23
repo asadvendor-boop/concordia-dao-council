@@ -395,7 +395,8 @@ def test_assembler_emits_only_independently_verified_available_proofs(
         matched_bundle["generated_at"]
     )
     assert internal["finalized_at"] == finality["finalized_at"]
-    assert internal["observed_at"] == finality["observed_at"]
+    assert internal["observed_at"] == matched_bundle["generated_at"]
+    assert internal["observed_at"] >= finality["observed_at"]
 
 
 def test_assembler_rejects_any_step_observed_after_registry_generation(

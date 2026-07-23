@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -49,6 +49,7 @@ from shared.release_gate_contract import (
     G1_FREEZE_TAG,
     G1_FREEZE_TAG_OBJECT,
 )
+from shared.secret_variants import normalize_sensitive_key, secret_variants
 
 
 _MAX_LOG_BYTES = int(COMMAND_GATE_EXECUTION_POLICY["maximum_output_stream_bytes"])
@@ -136,10 +137,6 @@ def _canonical_json(value: object) -> bytes:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _normalized_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def _read_descriptor_file(
@@ -365,12 +362,12 @@ def _load_canaries(
     def add_canary(raw: bytes) -> None:
         # The release DLP boundary covers common reversible text
         # representations. Arbitrary encryption is intentionally out of scope.
-        for variant in _canary_variants(raw):
+        for variant in secret_variants(raw):
             if variant not in values:
                 values.append(variant)
 
     for key, value in environment.items():
-        normalized = _normalized_key(key)
+        normalized = normalize_sensitive_key(key)
         if any(part in normalized for part in _SENSITIVE_ENV_PARTS) and len(value) >= 4:
             encoded = value.encode("utf-8", errors="ignore")
             if encoded:
@@ -397,26 +394,6 @@ def _load_canaries(
         for raw in _directory_secret_values(directory, optional=True):
             add_canary(raw)
     return tuple(values)
-
-
-def _canary_variants(raw: bytes) -> tuple[bytes, ...]:
-    """Return bounded common reversible encodings of one credential value."""
-
-    if not raw:
-        return ()
-    standard = base64.b64encode(raw)
-    urlsafe = base64.urlsafe_b64encode(raw)
-    candidates = (
-        raw,
-        standard,
-        standard.rstrip(b"="),
-        urlsafe,
-        urlsafe.rstrip(b"="),
-        raw.hex().encode("ascii"),
-        raw.hex().upper().encode("ascii"),
-        b"".join(f"%{value:02X}".encode("ascii") for value in raw),
-    )
-    return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def _assert_safe_bytes(raw: bytes, canaries: Sequence[bytes], label: str) -> None:
@@ -518,11 +495,21 @@ def _sanitized_environment(temporary_root: Path) -> dict[str, str]:
     config = temporary_root / "config"
     cache = temporary_root / "cache"
     cargo_home = temporary_root / "cargo"
+    cargo_target = temporary_root / "cargo-target"
     npm_cache = temporary_root / "npm-cache"
-    for path in (home, tmp, config, cache, cargo_home, npm_cache):
+    for path in (
+        home,
+        tmp,
+        config,
+        cache,
+        cargo_home,
+        cargo_target,
+        npm_cache,
+    ):
         path.mkdir(mode=0o700)
     environment = {
         "CARGO_HOME": str(cargo_home),
+        "CARGO_TARGET_DIR": str(cargo_target),
         "CI": "1",
         "HOME": str(home),
         "LANG": "C.UTF-8",
@@ -542,9 +529,6 @@ def _sanitized_environment(temporary_root: Path) -> dict[str, str]:
     rustup_home = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".rustup"
     if rustup_home.is_dir():
         environment["RUSTUP_HOME"] = str(rustup_home)
-    playwright = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if playwright and Path(playwright).is_absolute():
-        environment["PLAYWRIGHT_BROWSERS_PATH"] = playwright
     return environment
 
 
@@ -1824,7 +1808,50 @@ def _assert_final_repository_identity(
         raise GateRunError("untracked worktree state changed before receipt commit")
 
 
-def run_gate(
+def _repository_gate_lock(root: Path) -> int:
+    """Acquire the same repository-wide lock used by manifest publication."""
+
+    common_raw = _git_text(root, "rev-parse", "--git-common-dir").strip()
+    common = Path(common_raw)
+    if not common.is_absolute():
+        common = root / common
+    try:
+        common = common.resolve(strict=True)
+    except OSError as exc:
+        raise GateRunError("Git common directory is unavailable") from exc
+    lock_path = common / "concordia-release-manifest.lock"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+        ):
+            raise GateRunError("repository release lock is unsafe")
+        os.fchmod(descriptor, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise GateRunError(
+                "another release operation holds the repository lock"
+            ) from exc
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+
+
+def _run_gate_locked(
     gate_id: str,
     *,
     repository_root: str | Path,
@@ -1966,3 +1993,24 @@ def run_gate(
         receipt_path=COMMAND_GATE_RECEIPT_PATHS[gate_id],
         receipt_sha256=hashlib.sha256(receipt_raw).hexdigest(),
     )
+
+
+def run_gate(
+    gate_id: str,
+    *,
+    repository_root: str | Path,
+    executor: Executor = _execute_command,
+) -> GateRunResult:
+    """Serialize a fixed gate with every manifest/capture operation."""
+
+    root = Path(repository_root).absolute()
+    lock_descriptor = _repository_gate_lock(root)
+    try:
+        return _run_gate_locked(
+            gate_id,
+            repository_root=root,
+            executor=executor,
+        )
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)

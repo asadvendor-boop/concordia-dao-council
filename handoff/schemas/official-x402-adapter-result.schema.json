@@ -1,0 +1,736 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://concordiadao.xyz/schemas/official-x402-adapter-result.schema.json",
+  "title": "Concordia official x402 independent adapter result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "proof_type",
+    "artifact_sha256",
+    "derived_facts",
+    "internal_record",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "concordia.official_x402_adapter_result.v1"
+    },
+    "proof_type": {
+      "const": "official_x402_settlement_v1"
+    },
+    "artifact_sha256": {
+      "$ref": "#/$defs/hex32"
+    },
+    "derived_facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "proposal_hash",
+        "proposal_nonce",
+        "action_id",
+        "action_kind",
+        "action_version",
+        "envelope_hash",
+        "deployment_domain",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "v3_finalized_exact",
+        "finalization_transaction",
+        "finalized_at",
+        "observed_at",
+        "resource_url_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "report_hash",
+        "settlement_transaction",
+        "source_commit",
+        "deployment_commit",
+        "captured_at"
+      ],
+      "properties": {
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "proposal_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "proposal_nonce": {
+          "$ref": "#/$defs/hex32"
+        },
+        "action_id": {
+          "$ref": "#/$defs/hex32"
+        },
+        "action_kind": {
+          "const": "OfficialX402SettlementV1"
+        },
+        "action_version": {
+          "const": 1
+        },
+        "envelope_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "deployment_domain": {
+          "$ref": "#/$defs/hex32"
+        },
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "package_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "contract_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "v3_finalized_exact": {
+          "const": true
+        },
+        "finalization_transaction": {
+          "$ref": "#/$defs/hex32"
+        },
+        "finalized_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "resource_url_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "payment_requirements_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "signed_payment_payload_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "settlement_transaction": {
+          "$ref": "#/$defs/hex32"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/git_sha"
+        },
+        "deployment_commit": {
+          "$ref": "#/$defs/git_sha"
+        },
+        "captured_at": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    },
+    "internal_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "proposal_id",
+        "proposal_hash",
+        "proposal_nonce",
+        "action_id",
+        "action_kind",
+        "action_version",
+        "envelope_hash",
+        "deployment_domain",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "v3_finalized_exact",
+        "finalization_transaction",
+        "finalized_at",
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "settlement_transaction",
+        "verification_status",
+        "observed_at",
+        "checks"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/proposal_id"
+        },
+        "proposal_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "proposal_nonce": {
+          "$ref": "#/$defs/hex32"
+        },
+        "action_id": {
+          "$ref": "#/$defs/hex32"
+        },
+        "action_kind": {
+          "const": "OfficialX402SettlementV1"
+        },
+        "action_version": {
+          "const": 1
+        },
+        "envelope_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "deployment_domain": {
+          "$ref": "#/$defs/hex32"
+        },
+        "network": {
+          "const": "casper:casper-test"
+        },
+        "package_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "contract_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "v3_finalized_exact": {
+          "const": true
+        },
+        "finalization_transaction": {
+          "$ref": "#/$defs/hex32"
+        },
+        "finalized_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "resource_url_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "report_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "payment_requirements_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "signed_payment_payload_hash": {
+          "$ref": "#/$defs/hex32"
+        },
+        "settlement_transaction": {
+          "$ref": "#/$defs/hex32"
+        },
+        "verification_status": {
+          "const": "verified"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "checks": {
+          "$ref": "#/$defs/exact_envelope_checks"
+        }
+      }
+    },
+    "checks": {
+      "$ref": "#/$defs/official_checks"
+    }
+  },
+  "$defs": {
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "proposal_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9-]{1,64}$"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    },
+    "json_pointer": {
+      "type": "string",
+      "pattern": "^/(?:[^~/]|~0|~1)+(?:/(?:[^~/]|~0|~1)+)*$",
+      "maxLength": 512
+    },
+    "check_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "passed",
+        "source",
+        "observed_at",
+        "evidence_paths",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "passed": {
+          "const": true
+        },
+        "source": {
+          "const": "artifacts/live/official-x402-settlement-v1.json"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "evidence_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/json_pointer"
+          }
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/hex32"
+        }
+      }
+    },
+    "registry_check_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "required",
+        "passed",
+        "source",
+        "observed_at"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "const": true
+        },
+        "passed": {
+          "const": true
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "detail_code": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+        }
+      }
+    },
+    "exact_envelope_checks": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/exact_01"
+        },
+        {
+          "$ref": "#/$defs/exact_02"
+        },
+        {
+          "$ref": "#/$defs/exact_03"
+        },
+        {
+          "$ref": "#/$defs/exact_04"
+        },
+        {
+          "$ref": "#/$defs/exact_05"
+        },
+        {
+          "$ref": "#/$defs/exact_06"
+        },
+        {
+          "$ref": "#/$defs/exact_07"
+        },
+        {
+          "$ref": "#/$defs/exact_08"
+        },
+        {
+          "$ref": "#/$defs/exact_09"
+        },
+        {
+          "$ref": "#/$defs/exact_10"
+        },
+        {
+          "$ref": "#/$defs/exact_11"
+        },
+        {
+          "$ref": "#/$defs/exact_12"
+        },
+        {
+          "$ref": "#/$defs/exact_13"
+        },
+        {
+          "$ref": "#/$defs/exact_14"
+        }
+      ],
+      "items": false
+    },
+    "official_checks": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/official_01"
+        },
+        {
+          "$ref": "#/$defs/official_02"
+        },
+        {
+          "$ref": "#/$defs/official_03"
+        },
+        {
+          "$ref": "#/$defs/official_04"
+        },
+        {
+          "$ref": "#/$defs/official_05"
+        },
+        {
+          "$ref": "#/$defs/official_06"
+        },
+        {
+          "$ref": "#/$defs/official_07"
+        },
+        {
+          "$ref": "#/$defs/official_08"
+        },
+        {
+          "$ref": "#/$defs/official_09"
+        },
+        {
+          "$ref": "#/$defs/official_10"
+        },
+        {
+          "$ref": "#/$defs/official_11"
+        },
+        {
+          "$ref": "#/$defs/official_12"
+        },
+        {
+          "$ref": "#/$defs/official_13"
+        },
+        {
+          "$ref": "#/$defs/official_14"
+        },
+        {
+          "$ref": "#/$defs/official_15"
+        },
+        {
+          "$ref": "#/$defs/official_16"
+        },
+        {
+          "$ref": "#/$defs/official_17"
+        },
+        {
+          "$ref": "#/$defs/official_18"
+        },
+        {
+          "$ref": "#/$defs/official_19"
+        },
+        {
+          "$ref": "#/$defs/official_20"
+        },
+        {
+          "$ref": "#/$defs/official_21"
+        },
+        {
+          "$ref": "#/$defs/official_22"
+        }
+      ],
+      "items": false
+    },
+    "exact_01": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "source_tree_sha256_matches_release_manifest"
+        }
+      }
+    },
+    "exact_02": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "wasm_sha256_matches_release_manifest"
+        }
+      }
+    },
+    "exact_03": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "generated_schema_sha256_matches_release_manifest"
+        }
+      }
+    },
+    "exact_04": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "envelope_hash_recomputed_from_typed_fields"
+        }
+      }
+    },
+    "exact_05": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "proposal_commitment_matches_envelope_hash"
+        }
+      }
+    },
+    "exact_06": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "signer_set_and_threshold_match_deployment"
+        }
+      }
+    },
+    "exact_07": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "pre_quorum_finalize_reverted_with_code_8"
+        }
+      }
+    },
+    "exact_08": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "post_quorum_mutated_envelope_reverted_with_code_10"
+        }
+      }
+    },
+    "exact_09": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "exact_envelope_finalization_accepted"
+        }
+      }
+    },
+    "exact_10": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "repeat_finalization_reverted_with_code_12"
+        }
+      }
+    },
+    "exact_11": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "finalization_deploy_processed_without_execution_error"
+        }
+      }
+    },
+    "exact_12": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "contract_readback_marks_proposal_finalized"
+        }
+      }
+    },
+    "exact_13": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "contract_readback_marks_action_authorized"
+        }
+      }
+    },
+    "exact_14": {
+      "$ref": "#/$defs/registry_check_base",
+      "properties": {
+        "name": {
+          "const": "package_contract_and_deployment_domain_match_manifest"
+        }
+      }
+    },
+    "official_01": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash"
+        }
+      }
+    },
+    "official_02": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "resource_object_equals_configured_resource"
+        }
+      }
+    },
+    "official_03": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "accepted_equals_current_payment_requirements"
+        }
+      }
+    },
+    "official_04": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "payment_requirements_argument_equals_accepted"
+        }
+      }
+    },
+    "official_05": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "eip712_signature_verified"
+        }
+      }
+    },
+    "official_06": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "public_key_account_hash_equals_payer"
+        }
+      }
+    },
+    "official_07": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "authorization_equals_envelope_payer_payee_value_nonce_and_window"
+        }
+      }
+    },
+    "official_08": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "resource_url_hash_matches_envelope"
+        }
+      }
+    },
+    "official_09": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "report_hash_matches_envelope"
+        }
+      }
+    },
+    "official_10": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "payment_requirements_hash_matches_envelope"
+        }
+      }
+    },
+    "official_11": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "signed_payment_payload_hash_matches_envelope"
+        }
+      }
+    },
+    "official_12": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "active_wcspr_v8_pre_verify_drift_guard_passed"
+        }
+      }
+    },
+    "official_13": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "facilitator_verify_returned_is_valid_true"
+        }
+      }
+    },
+    "official_14": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "active_wcspr_v8_pre_settle_drift_guard_passed"
+        }
+      }
+    },
+    "official_15": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "facilitator_settlement_response_success_true"
+        }
+      }
+    },
+    "official_16": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "settlement_transaction_finalized_without_execution_error"
+        }
+      }
+    },
+    "official_17": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "active_wcspr_v8_post_settle_target_and_args_readback_passed"
+        }
+      }
+    },
+    "official_18": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "fulfillment_authorization_nonce_unique_binding_matches"
+        }
+      }
+    },
+    "official_19": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "fulfillment_restart_reconciliation_passed"
+        }
+      }
+    },
+    "official_20": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "exact_retry_returned_stored_fulfillment_without_second_settlement"
+        }
+      }
+    },
+    "official_21": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission"
+        }
+      }
+    },
+    "official_22": {
+      "$ref": "#/$defs/check_base",
+      "properties": {
+        "name": {
+          "const": "protected_report_released_only_after_finalized_state"
+        }
+      }
+    }
+  }
+}

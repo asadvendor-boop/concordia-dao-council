@@ -81,7 +81,6 @@ def test_fixed_tool_contract_is_immutable_and_exposes_host_receipt_schema() -> N
     assert release_gate_contract.BOUND_HOST_AUTHORITY_DESCENDANT_PATHS == (
         "release/RELEASE_MANIFEST.json",
         "release/G13_SUBMISSION_RECEIPT.json",
-        "release/STAGED_RELEASE_INPUTS.json",
     )
     assert set(release_gate_contract.BOUND_TOOL_SPECS) == {
         "dig",

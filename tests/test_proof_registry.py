@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from shared.proof_registry import (
     normalize_proof_item,
     proof_item_is_green,
     validate_internal_record,
+    validate_registry_document,
+    validate_release_registry_document,
 )
 
 
@@ -23,6 +26,95 @@ NOW = "2026-07-22T20:00:00Z"
 HEX32 = "ab" * 32
 OTHER_HEX32 = "cd" * 32
 GIT_SHA = "1" * 40
+
+
+def test_release_adapter_contract_pins_both_missing_producer_check_sets() -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "handoff"
+        / "RELEASE_REGISTRY_ADAPTER_SCHEMAS.json"
+    )
+    contract = json.loads(path.read_text(encoding="utf-8"))
+
+    assert contract["schema_version"] == (
+        "concordia.release_registry_adapter_contract.v1"
+    )
+    for proof_type in ("safepay_v2", "official_x402_settlement_v1"):
+        assert contract[proof_type]["required_checks"] == list(
+            REQUIRED_CHECKS_BY_PROOF_TYPE[proof_type]
+        )
+        mutations = contract[proof_type]["required_mutation_tests"]
+        assert [row["check"] for row in mutations] == list(
+            REQUIRED_CHECKS_BY_PROOF_TYPE[proof_type]
+        )
+        assert len({row["id"] for row in mutations}) == len(mutations)
+        assert all(row["mutation"].startswith("/") for row in mutations)
+    assert contract["assembler_contract"]["release_public_proof_count"] == 5
+    assert contract["assembler_contract"]["release_internal_action_count"] == 2
+
+    repository = Path(__file__).resolve().parents[1]
+    loaded_schemas: dict[str, dict] = {}
+    for name, binding in contract["exact_json_schemas"].items():
+        schema_path = repository / binding["path"]
+        raw = schema_path.read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == binding["sha256"]
+        schema = json.loads(raw)
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        loaded_schemas[name] = schema
+
+        stack = [schema]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                if value.get("type") == "object":
+                    assert value.get("additionalProperties") is False
+                stack.extend(value.values())
+            elif isinstance(value, list):
+                stack.extend(value)
+
+    assert loaded_schemas["safepay_artifact"]["required"] == (
+        contract["safepay_v2"]["required_top_level_fields"]
+    )
+    assert loaded_schemas["official_x402_artifact"]["required"] == (
+        contract["official_x402_settlement_v1"]["required_top_level_fields"]
+    )
+    official_derived = loaded_schemas["official_x402_result"]["properties"][
+        "derived_facts"
+    ]["required"]
+    assert "v3_finalized_exact" in official_derived
+
+    def result_check_names(schema: dict, key: str) -> list[str]:
+        checks = schema["properties"][key]
+        if "$ref" in checks:
+            checks = schema["$defs"][checks["$ref"].rsplit("/", 1)[1]]
+        names: list[str] = []
+        for row in checks["prefixItems"]:
+            definition = schema["$defs"][row["$ref"].rsplit("/", 1)[1]]
+            if "allOf" in definition:
+                name_schema = definition["allOf"][1]
+            else:
+                name_schema = definition
+            names.append(name_schema["properties"]["name"]["const"])
+        return names
+
+    assert result_check_names(loaded_schemas["safepay_result"], "checks") == list(
+        REQUIRED_CHECKS_BY_PROOF_TYPE["safepay_v2"]
+    )
+    assert result_check_names(
+        loaded_schemas["official_x402_result"], "checks"
+    ) == list(REQUIRED_CHECKS_BY_PROOF_TYPE["official_x402_settlement_v1"])
+
+
+def test_release_registry_validator_rejects_general_empty_registry() -> None:
+    document = {
+        "schema_version": 1,
+        "public_items": [],
+        "internal_records": [],
+    }
+
+    assert validate_registry_document(document) == document
+    with pytest.raises(ValueError, match="exact public proof set"):
+        validate_release_registry_document(document)
 
 
 def _checks(proof_type: str, *, failed: str | None = None) -> list[dict]:
@@ -101,6 +193,7 @@ def _internal_record(*, kind: str = "OfficialX402SettlementV1") -> dict:
         "report_hash": "0a" * 32 if x402 else None,
         "payment_requirements_hash": "0b" * 32 if x402 else None,
         "signed_payment_payload_hash": "0c" * 32 if x402 else None,
+        "settlement_transaction": "0d" * 32 if x402 else None,
         "verification_status": "verified",
         "observed_at": NOW,
         "checks": _checks("exact_envelope_v3"),

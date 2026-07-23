@@ -668,7 +668,18 @@ def _internal_record(
     finalization_transaction = _normalized_hash32(
         finalizations[0].get("deploy_hash"), "v3 finalization transaction"
     )
-    finalized_at, observed_at = _exact_finality_timing(exact_artifact.document)
+    finalized_at, finality_observed_at = _exact_finality_timing(
+        exact_artifact.document
+    )
+    observed_at = _text(
+        exact_item.get("captured_at"), "v3 registry verification observed_at"
+    )
+    if _parse_timestamp(
+        observed_at, "v3 registry verification observed_at"
+    ) < _parse_timestamp(finality_observed_at, "v3 finality observed_at"):
+        raise AssemblyError(
+            "v3 registry verification predates the canonical finality observation"
+        )
     record = {
         "schema_version": 1,
         "proposal_id": exact_item["proposal_id"],
@@ -690,6 +701,7 @@ def _internal_record(
         "report_hash": None,
         "payment_requirements_hash": None,
         "signed_payment_payload_hash": None,
+        "settlement_transaction": None,
         "verification_status": "verified",
         "observed_at": observed_at,
         "checks": copy.deepcopy(exact_item["checks"]),
