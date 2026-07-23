@@ -33,3 +33,4 @@ docs/SUBMISSION_CHECKLIST.md
 # Local AI/dev-tool instruction files; keep out of public submission repos.
 dashboard/CLAUDE.md
 dashboard/AGENTS.md
+site/

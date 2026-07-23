@@ -12,33 +12,67 @@ it privately rather than opening a public issue.
 Please include steps to reproduce and the potential impact. We aim to
 acknowledge reports promptly and will keep you informed of remediation progress.
 
+!!! warning "Finals-sprint posture — release-derived, not yet a present guarantee"
+    This document describes the **target** security posture for the Casper
+    buildathon finals. The completeness statements below — every production
+    secret loaded via `_FILE`, the new finals services being in supported scope,
+    and scanning/remediation being complete — are **release-derived facts** that
+    hold only after the WP3 approval-boundary and WP5 official-x402 integrations
+    land, the production configuration is inspected, and the final
+    CodeQL/Dependabot gate passes. Until that release evidence exists, treat each
+    such statement as `PENDING_PROOF`, not as a current guarantee.
+
 ## Supported Scope
 
-This is a hackathon submission running on the Casper **Testnet**. No mainnet
-funds are at risk. The security-relevant surfaces are:
+This is a Casper buildathon finals submission running on the Casper
+**Testnet**. No mainnet funds are at risk. The security-relevant surfaces are:
 
-- the governance gateway API (`gateway/`),
-- the Casper contract package (`contracts/`), and
-- the proof/evidence runtime (`shared/proof_runtime.py`).
+- the governance gateway API (`gateway/`), including the human-approval
+  boundary and the judge-demo capability endpoints,
+- the Casper contract packages (`contracts/`),
+- the proof/evidence runtime (`shared/proof_runtime.py`),
+- the SafePay Lite payment provider (`x402_provider/`), and
+- the official x402 settlement service (`services/x402-official/`, a finals
+  service that enters supported scope **on integration** — `PENDING_PROOF`
+  until the WP5 corrected commit lands).
+
+## Secrets Handling (finals-sprint target)
+
+The intended production posture is that runtime secrets are loaded only via
+`_FILE` indirection from `/run/secrets` (for example
+`*_FILE=/run/secrets/<name>`), with no direct-value secret environment
+variables, and that no secret values appear in the repository, container images,
+logs, or error responses, and facilitator or operator tokens are never echoed
+back in response bodies or diagnostics. Confirmation that **every** production
+secret meets this bar is a release-derived fact produced by inspecting the final
+hosted configuration during the WP3/WP5 integration — `PENDING_PROOF` until then.
 
 ## Automated Scanning
 
 This repository has GitHub CodeQL code scanning and Dependabot alerts enabled.
-High-severity findings are tracked and remediated; non-applicable findings
-(for example, timing side-channels that require local co-residency, or
-build-time-only dependencies with no runtime untrusted-input path) are
-documented and dismissed with justification.
+High-severity findings are tracked, and the intent is that they are remediated
+or dismissed with justification. A statement that scanning and remediation are
+**complete** is only valid after the final CodeQL/Dependabot gate runs against
+the integrated finals tree — `PENDING_PROOF` until that gate result exists.
+Non-applicable findings (for example, timing side-channels that require local
+co-residency, or build-time-only dependencies with no runtime untrusted-input
+path) are documented and dismissed with justification.
 
-## Remediated Findings (July 2026 review)
+## Remediated Findings (July 2026 review — pending final-gate confirmation)
 
-- **All 11 High CodeQL alerts fixed in code**: path-traversal hardening via a
+The following remediations were applied in code during the July 2026 review.
+They are confirmed as *complete for the release* only when the final
+CodeQL/Dependabot gate re-runs against the integrated tree (`PENDING_PROOF`):
+
+- **11 High CodeQL alerts addressed in code**: path-traversal hardening via a
   basename-sanitize + `normpath`/`startswith` containment guard
   (`gateway/app.py::_safe_data_path`), an anchored regex for the insecure-URL
   audit check, and bounded regex quantifiers plus an input cap for the
   allocation parser (`shared/proof_runtime.py`).
-- **3 High dependency advisories fixed by upgrade**: `langsmith` → 0.10.0
+- **3 High dependency advisories addressed by upgrade**: `langsmith` → 0.10.0
   (SSRF, GHSA in TracingMiddleware) and `starlette` → 1.3.1 (form-limits
-  bypass; SSRF/UNC credential theft), verified against the full test suite.
+  bypass; SSRF/UNC credential theft), verified against the test suite at the
+  time of the fix.
 
 ## Dismissed Findings Register
 

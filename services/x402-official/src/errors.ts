@@ -1,0 +1,120 @@
+/**
+ * Sanitized error model.
+ *
+ * Every error that can cross a module boundary carries only a stable machine
+ * code, an HTTP status, and a retryability flag. No error in this service ever
+ * carries request bodies, headers, tokens, or upstream response bodies —
+ * constructing one with free-form interpolated context is forbidden by design
+ * (the CSPR.cloud facilitator 401 reflects the supplied Authorization value,
+ * so even exception text is a leak channel).
+ */
+
+export type RefusalKind =
+  | "invalid_request"
+  | "verify_refusal"
+  | "settle_refusal"
+  | "terminal_conflict"
+  | "upstream_unavailable"
+  | "upstream_malformed"
+  | "internal";
+
+export class ServiceRefusal extends Error {
+  readonly httpStatus: number;
+  readonly code: string;
+  readonly kind: RefusalKind;
+  readonly retryable: boolean;
+
+  constructor(
+    httpStatus: number,
+    code: string,
+    kind: RefusalKind,
+    retryable = false,
+  ) {
+    // The message is exactly the machine code — never interpolated context.
+    super(code);
+    this.name = "ServiceRefusal";
+    this.httpStatus = httpStatus;
+    this.code = code;
+    this.kind = kind;
+    this.retryable = retryable;
+  }
+}
+
+export function invalidRequest(code: string): ServiceRefusal {
+  return new ServiceRefusal(400, code, "invalid_request");
+}
+
+export function terminalConflict(code: string): ServiceRefusal {
+  return new ServiceRefusal(409, code, "terminal_conflict");
+}
+
+export function upstreamUnavailable(code: string): ServiceRefusal {
+  return new ServiceRefusal(503, code, "upstream_unavailable", true);
+}
+
+export function upstreamMalformed(code: string): ServiceRefusal {
+  return new ServiceRefusal(502, code, "upstream_malformed");
+}
+
+/**
+ * Local durable-state integrity refusal (security addendum, items 2/4). A
+ * corrupt, tampered, or impossible ledger row / stored response fails CLOSED:
+ * it is never replayed as success and never patched over with a synthesized
+ * fallback response. Not retryable — the state itself is wrong.
+ */
+export function integrityRefusal(code: string): ServiceRefusal {
+  return new ServiceRefusal(500, code, "internal");
+}
+
+/** 429 throttle refusal for the public /verify and /settle endpoints. */
+export function rateLimited(): ServiceRefusal {
+  return new ServiceRefusal(429, "rate_limited", "invalid_request", true);
+}
+
+/**
+ * Pending-finality signal (§11, WP5-2). A `finalized:false` readback means the
+ * settlement transaction is not yet final on chain — it is NOT a terminal
+ * failure. It is retryable, leaves the row resumable in `transaction_observed`,
+ * and must never transition the row to `failed_terminal`.
+ */
+export class PendingFinalityError extends ServiceRefusal {
+  constructor() {
+    super(503, "reconciliation_pending", "upstream_unavailable", true);
+    this.name = "PendingFinalityError";
+  }
+}
+
+/** Refusals that surface as {isValid:false}/{success:false} bodies. */
+export const REFUSAL_CODES = {
+  UNGOVERNED_PAYLOAD: "ungoverned_payload",
+  AMBIGUOUS_GOVERNANCE_BINDING: "ambiguous_governance_binding",
+  GOVERNANCE_RECORD_INVALID: "governance_record_invalid",
+  BLOCKED_UPGRADE_DRIFT: "blocked_upgrade_drift",
+  CROSS_BINDING_REJECTED: "cross_binding_rejected",
+  AUTHORIZATION_NONCE_REUSED: "authorization_nonce_reused",
+  RECONCILIATION_PENDING: "reconciliation_pending",
+  MALFORMED_FACILITATOR_RESPONSE: "malformed_facilitator_response",
+  FACILITATOR_UNREACHABLE: "facilitator_unreachable",
+  REGISTRY_UNAVAILABLE: "registry_unavailable",
+  CHAIN_OBSERVATION_UNAVAILABLE: "chain_observation_unavailable",
+  SECRET_UNAVAILABLE: "secret_unavailable",
+  SETTLEMENT_NOT_FINALIZED: "settlement_not_finalized",
+  SETTLEMENT_EXECUTION_FAILED: "settlement_execution_failed",
+  /**
+   * Expiry terminalization of a lost-response settlement: the authorization's
+   * own validity window has passed AND a finalized observation strictly after
+   * `valid_before` shows the nonce unconsumed, so the on-chain contract can no
+   * longer accept the original transaction. Manual reauthorization (a fresh
+   * authorization/nonce from the payer) is required. Never emitted while the
+   * original submission could still land.
+   */
+  AUTHORIZATION_EXPIRED_UNRECOVERED: "authorization_expired_unrecovered",
+  POST_SETTLE_READBACK_FAILED: "post_settle_readback_failed",
+  FACILITATOR_REPORTED_FAILURE: "facilitator_reported_failure",
+  /** Bounded stable codes for untrusted upstream facilitator reasons. */
+  FACILITATOR_DECLINED: "facilitator_declined",
+  FACILITATOR_SETTLEMENT_DECLINED: "facilitator_settlement_declined",
+  /** Durable-state integrity refusals (security addendum, items 2/4). */
+  LEDGER_TERMINAL_INVARIANT_VIOLATED: "ledger_terminal_invariant_violated",
+  STORED_RESPONSE_INTEGRITY_FAILURE: "stored_response_integrity_failure",
+} as const;

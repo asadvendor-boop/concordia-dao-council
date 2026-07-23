@@ -2,10 +2,39 @@
 
 These routes are the local collaboration substrate for provider-neutral LLM
 agents and the deterministic Gateway ledger. They store rooms, participants, and messages in the Gateway ledger.
+
+Room identity v1 (G1 freeze, §12):
+    - ``sender_id`` / ``sender_role`` / ``sender_type`` are derived ONLY from
+      the authenticated key mapping (role from the agent key, agent id from
+      the ``{ROLE}_AGENT_ID`` environment pattern).
+    - PRODUCTION BOUNDARY (WP3-7 / Codex addendum item 7): EVERY caller-supplied
+      sender/participant identity field is rejected with 400
+      ``identity_fields_are_server_derived`` — even one that exactly equals the
+      authenticated principal.
+    - !! FLAGGED DEV/TEST COMPAT GATE !! Outside production an EXACT match is
+      tolerated (conflicts still rejected) because the frozen Codex-owned
+      ``shared/proposal_room.py`` ALWAYS transmits ``sender_id`` /
+      ``sender_role`` / ``sender_type`` (and ``role`` on add_participant). Those
+      exact call sites MUST be migrated to stop sending identity fields before
+      production strictness holds end-to-end; recorded in
+      ``handoff/INTERFACE_MANIFEST_WP3.md`` as remaining_for_codex. Stored
+      identity is ALWAYS server-derived regardless of mode.
+    - Agent keys can never emit ``User`` or ``System`` sender types. Human
+      approval enters only through the approval boundary (approve_ui calls
+      the internal ``store_room_message`` / ``store_room_participant``
+      helpers server-side; their signatures are unchanged).
+    - Create/join/list/read/post enforce room membership and the frozen
+      role-operation matrix. List endpoints are scoped to the authenticated
+      caller.
+    - Production agent traffic cannot use the GATEWAY_SECRET → ``gateway``
+      full-ACL fallback for message posting; the global fallback removal in
+      gateway/auth.py + submission.py is Codex-owned (recorded in
+      handoff/INTERFACE_MANIFEST_WP3.md).
 """
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -18,9 +47,77 @@ from gateway.auth import get_role_for_key
 
 router = APIRouter()
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+# Frozen role-operation matrix (G1 machine schema, room_identity_v1).
+# join targets: which registered role each role may add to a member room.
+# ``None`` means any registered role (gateway only).
+_JOIN_TARGETS: dict[str, set[str] | None] = {
+    "gateway": None,
+    "recorder": {"triage"},
+    "triage": {"diagnosis"},
+    "diagnosis": {"safety_reviewer"},
+    "safety_reviewer": {"commander"},
+    "commander": {"operator"},
+    "operator": set(),
+}
+_CREATE_ROOM_ROLES = {"gateway", "recorder"}
+_MATRIX_ROLES = frozenset(_JOIN_TARGETS)
+
+_IDENTITY_REJECTION = {
+    "detail": "identity_fields_are_server_derived",
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _production_mode() -> bool:
+    if os.getenv("CONCORDIA_TEST_MODE", "").strip().lower() in _TRUE_VALUES:
+        return False
+    return os.getenv("APP_ENV", "").strip().lower() in {"production", "prod"}
+
+
+def _derived_agent_id(role: str) -> str:
+    """Server-side agent identity for a role ({ROLE}_AGENT_ID pattern)."""
+    return os.getenv(f"{role.upper()}_AGENT_ID", role) or role
+
+
+def _agent_id_index() -> tuple[dict[str, str], frozenset[str]]:
+    """Deterministic reverse map ``agent_id -> role`` plus collided agent ids.
+
+    Roles are iterated in a stable **sorted** order — never set-iteration
+    order (WP3-8). An agent id derived for more than one role is a duplicate /
+    ambiguous principal; it is recorded as collided and removed from the index
+    so every lookup and every principal resolution for it fails closed instead
+    of silently resolving to whichever role set iteration happened to reach
+    first. (Rejecting duplicate role *keys* at startup is Codex-owned in
+    gateway/auth.py.)
+    """
+    index: dict[str, str] = {}
+    collided: set[str] = set()
+    for role in sorted(_MATRIX_ROLES):
+        if role == "gateway":
+            continue
+        agent_id = _derived_agent_id(role)
+        existing = index.get(agent_id)
+        if existing is not None and existing != role:
+            collided.add(agent_id)
+        else:
+            index[agent_id] = role
+    for agent_id in collided:
+        index.pop(agent_id, None)
+    return index, frozenset(collided)
+
+
+def _registered_role_for_agent_id(agent_id: str) -> str | None:
+    """Unique reverse lookup: registered agent id → matrix role.
+
+    Returns ``None`` for an unknown OR ambiguous (collided) agent id.
+    """
+    index, _ = _agent_id_index()
+    return index.get(agent_id)
 
 
 def _role_or_401(agent_key: str) -> str:
@@ -30,6 +127,82 @@ def _role_or_401(agent_key: str) -> str:
     return role
 
 
+def _principal_or_error(agent_key: str) -> tuple[str, str]:
+    """Authenticated principal: (role, derived agent id).
+
+    Roles outside the frozen matrix (e.g. ``scribe``) have no room
+    operations under room identity v1. A caller whose role derives a duplicated
+    (collided) agent id has no unique principal and is refused (WP3-8): identity
+    binds the stable authenticated principal, not a set-iteration lookup.
+    """
+    role = _role_or_401(agent_key)
+    if role not in _MATRIX_ROLES:
+        raise HTTPException(status_code=403, detail="role_not_permitted")
+    agent_id = _derived_agent_id(role)
+    if role != "gateway":
+        _, collided = _agent_id_index()
+        if agent_id in collided:
+            raise HTTPException(status_code=403, detail="ambiguous_principal")
+    return role, agent_id
+
+
+def _require_room(db, room_id: str) -> sqlite3.Row:
+    room = db.execute(
+        "SELECT * FROM proposal_rooms WHERE room_id=?", (room_id,)
+    ).fetchone()
+    if not room:
+        raise HTTPException(status_code=404, detail="room_not_found")
+    return room
+
+
+def _is_member(db, room_id: str, participant_id: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, participant_id),
+    ).fetchone()
+    return row is not None
+
+
+def _require_membership(db, room_id: str, role: str, agent_id: str) -> None:
+    """Membership gate with the matrix's gateway bypass."""
+    if role == "gateway":
+        return
+    if not _is_member(db, room_id, agent_id):
+        raise HTTPException(status_code=403, detail="not_a_room_member")
+
+
+_SENDER_IDENTITY_FIELDS = ("sender_id", "sender_role", "sender_type")
+
+
+def _reject_supplied_sender_identity(body, *, role: str, agent_id: str) -> None:
+    """Enforce that message sender identity is exclusively server-derived.
+
+    **Production boundary (WP3-7 / addendum 7):** EVERY caller-supplied identity
+    field is rejected — even one that exactly equals the authenticated principal.
+
+    **Dev/test compat gate (flagged, non-production only):** the frozen
+    Codex-owned ``shared/proposal_room.py`` ALWAYS transmits
+    ``sender_id``/``sender_role``/``sender_type`` (see the module docstring and
+    ``handoff/INTERFACE_MANIFEST_WP3.md`` — those exact call sites must be
+    migrated to stop sending identity fields before production strictness can
+    hold end-to-end). Until then, outside production an EXACT match is tolerated
+    while any conflict is still rejected. Stored identity is ALWAYS derived.
+    """
+    supplied = {f for f in _SENDER_IDENTITY_FIELDS if f in body.model_fields_set}
+    if _production_mode():
+        if supplied:
+            raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+        return
+    # Non-production compat gate: tolerate exact match, reject any conflict.
+    if body.sender_type != "Agent":
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+    if body.sender_id is not None and body.sender_id != agent_id:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+    if body.sender_role is not None and body.sender_role != role:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+
+
 class CreateRoomRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     proposal_id: str | None = Field(default=None, max_length=120)
@@ -37,6 +210,9 @@ class CreateRoomRequest(BaseModel):
 
 class ParticipantRequest(BaseModel):
     participant_id: str = Field(min_length=1, max_length=120)
+    # ``role`` is accepted for wire compatibility but IGNORED: the
+    # participant role is derived from the registered agent id (room
+    # identity v1 — caller-supplied identity fields are ignored/rejected).
     role: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, max_length=120)
 
@@ -98,7 +274,11 @@ def store_room_participant(
     role: str | None = None,
     display_name: str | None = None,
 ) -> dict:
-    """Insert or update an proposal-room participant."""
+    """Insert or update an proposal-room participant.
+
+    Internal server-side helper — signature unchanged (approve_ui and the
+    nonce publication path call this directly with server-derived identity).
+    """
     room = db.execute("SELECT room_id FROM proposal_rooms WHERE room_id=?", (room_id,)).fetchone()
     if not room:
         raise HTTPException(status_code=404, detail="room_not_found")
@@ -134,7 +314,13 @@ def store_room_message(
     message_type: str = "message",
     metadata: dict[str, Any] | None = None,
 ) -> dict:
-    """Append a message to a Gateway-owned Council Chamber."""
+    """Append a message to a Gateway-owned Council Chamber.
+
+    Internal server-side helper — signature unchanged. The trusted human
+    approval boundary (approve_ui) publishes through this path with
+    server-derived identity; the HTTP route derives identity from the
+    authenticated key before calling it.
+    """
     room = db.execute("SELECT * FROM proposal_rooms WHERE room_id=?", (room_id,)).fetchone()
     if not room:
         raise HTTPException(status_code=404, detail="room_not_found")
@@ -176,7 +362,10 @@ async def create_room(
     request: Request,
     x_agent_key: str = Header(default="", alias="X-Agent-Key"),
 ):
-    role = _role_or_401(x_agent_key)
+    role, agent_id = _principal_or_error(x_agent_key)
+    if role not in _CREATE_ROOM_ROLES:
+        raise HTTPException(status_code=403, detail="role_not_permitted")
+
     db = request.app.state.db
     now = _now()
 
@@ -200,6 +389,18 @@ async def create_room(
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (room_id, body.proposal_id, body.title, role, now, now),
+        )
+        # creator_auto_joined (frozen create_room contract) — the creator's
+        # derived identity becomes a participant atomically.
+        db.execute(
+            """
+            INSERT INTO proposal_room_participants
+            (room_id, participant_id, role, display_name, joined_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(room_id, participant_id) DO UPDATE SET
+                role=excluded.role
+            """,
+            (room_id, agent_id, role, None, now),
         )
         if body.proposal_id:
             db.execute(
@@ -227,13 +428,57 @@ async def add_participant(
     request: Request,
     x_agent_key: str = Header(default="", alias="X-Agent-Key"),
 ):
-    _role_or_401(x_agent_key)
+    role, agent_id = _principal_or_error(x_agent_key)
     db = request.app.state.db
+    _require_room(db, room_id)
+
+    # Requester must be a room member unless gateway (frozen join contract).
+    _require_membership(db, room_id, role, agent_id)
+
+    # The participant role is a server-derived identity field. On the production
+    # boundary a caller-supplied ``role`` is rejected (WP3-7). Outside production
+    # it is ignored (documented compat gate — the recorder sends role=agent_id
+    # junk on every add_participant; see the module docstring / interface
+    # manifest for the exact Codex-owned call site to migrate).
+    if _production_mode() and "role" in body.model_fields_set:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+
+    # Idempotent re-join: adding an existing member grants nothing new.
+    existing = db.execute(
+        "SELECT participant_id, role, display_name FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, body.participant_id),
+    ).fetchone()
+    if existing:
+        return {
+            "status": "joined",
+            "room_id": room_id,
+            "participant": {
+                "participant_id": existing["participant_id"],
+                "role": existing["role"],
+                "display_name": existing["display_name"],
+            },
+        }
+
+    # participant_role is derived from the registered agent id (unique reverse
+    # lookup). A collided/ambiguous id fails closed rather than resolving to an
+    # arbitrary role (WP3-8).
+    _index, _collided = _agent_id_index()
+    if body.participant_id in _collided:
+        raise HTTPException(status_code=400, detail="ambiguous_participant")
+    target_role = _registered_role_for_agent_id(body.participant_id)
+    if target_role is None:
+        raise HTTPException(status_code=400, detail="unknown_participant")
+
+    allowed_targets = _JOIN_TARGETS[role]
+    if allowed_targets is not None and target_role not in allowed_targets:
+        raise HTTPException(status_code=403, detail="join_target_not_permitted")
+
     participant = store_room_participant(
         db,
         room_id,
         body.participant_id,
-        role=body.role,
+        role=target_role,
         display_name=body.display_name,
     )
     return {
@@ -250,17 +495,31 @@ async def post_message(
     request: Request,
     x_agent_key: str = Header(default="", alias="X-Agent-Key"),
 ):
-    role = _role_or_401(x_agent_key)
+    role, agent_id = _principal_or_error(x_agent_key)
+
+    # Production agent traffic cannot use the GATEWAY_SECRET full-ACL
+    # fallback for room posting (room identity v1). The global fallback
+    # removal is Codex-owned; this route-level rejection is the WP3 slice.
+    if role == "gateway" and _production_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="gateway_fallback_forbidden_for_agent_traffic",
+        )
+
+    # Identity is server-derived; agent keys can never emit User/System.
+    _reject_supplied_sender_identity(body, role=role, agent_id=agent_id)
+
     db = request.app.state.db
-    sender_role = body.sender_role or role
-    sender_id = body.sender_id or sender_role
+    _require_room(db, room_id)
+    _require_membership(db, room_id, role, agent_id)
+
     message = store_room_message(
         db,
         room_id,
         body.content,
-        sender_id=sender_id,
-        sender_role=sender_role,
-        sender_type=body.sender_type,
+        sender_id=agent_id,
+        sender_role=role,
+        sender_type="Agent",
         mentions=body.mentions,
         message_type=body.message_type,
         metadata=body.metadata,
@@ -276,8 +535,11 @@ async def list_messages(
     limit: int = 100,
     x_agent_key: str = Header(default="", alias="X-Agent-Key"),
 ):
-    _role_or_401(x_agent_key)
+    role, agent_id = _principal_or_error(x_agent_key)
     db = request.app.state.db
+    _require_room(db, room_id)
+    _require_membership(db, room_id, role, agent_id)
+
     limit = max(1, min(limit, 500))
     rows = db.execute(
         """
@@ -304,25 +566,35 @@ async def list_rooms(
     limit: int = 100,
     x_agent_key: str = Header(default="", alias="X-Agent-Key"),
 ):
-    """List Council Chambers visible to an agent.
+    """List Council Chambers visible to the AUTHENTICATED caller.
 
-    The local agent runtime uses this endpoint instead of an external room
-    websocket.  ``participant_id`` keeps each agent scoped to rooms it has
-    actually been recruited into.
+    Non-gateway results are always scoped to the caller's own membership
+    (room identity v1): a caller-selected foreign ``participant_id`` is
+    rejected, so one agent can never enumerate another agent's rooms.
     """
-    _role_or_401(x_agent_key)
+    role, agent_id = _principal_or_error(x_agent_key)
     db = request.app.state.db
     limit = max(1, min(limit, 500))
 
     clauses: list[str] = []
     params: list[Any] = []
     join = ""
-    if participant_id:
+    if role == "gateway":
+        # Gateway service scope (matrix list_rooms) — optional filter allowed.
+        if participant_id:
+            join = """
+            JOIN proposal_room_participants p
+              ON p.room_id = r.room_id AND p.participant_id = ?
+            """
+            params.append(participant_id)
+    else:
+        if participant_id and participant_id != agent_id:
+            raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
         join = """
         JOIN proposal_room_participants p
           ON p.room_id = r.room_id AND p.participant_id = ?
         """
-        params.append(participant_id)
+        params.append(agent_id)
     if state:
         clauses.append("i.state = ?")
         params.append(state)

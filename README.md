@@ -46,7 +46,7 @@ Reviewer links:
 |---|---|
 | Concordia DAO Council framing and Casper-specific council personas | Implemented |
 | DAO Constitution with 30% request capped to 8% | Implemented |
-| Verity dissent receipt and Wells governance archive | Implemented |
+| Verity dissent receipt and deterministic governance archive (presented by Wells) | Implemented |
 | Native Python Casper deploy construction with typed CLValues | Implemented |
 | Odra `GovernanceReceipt` canonical receipt proof | Implemented |
 | Supplemental Odra quorum proof with browser-wallet approval | Implemented |
@@ -107,8 +107,8 @@ Technical jury note: Concordia freezes the canonical proof for reproducibility. 
 | **Mercer** | Treasury Intelligence Agent | Reviews treasury exposure, liquidity context, RWA impact, and Casper ecosystem signals. |
 | **Verity** | Risk & Legal Agent | Challenges unsafe proposals and flags treasury, compliance, or policy violations. |
 | **Alden** | Protocol Strategy Agent | Converts the deliberation into an exact governance execution envelope. |
-| **Locke** | Casper Execution Agent | Executes only the approved envelope and anchors the receipt to Casper Testnet. |
-| **Wells** | Governance Archivist | Summarizes the session and records the sealed governance evidence trail. |
+| **Locke** | Casper Execution Agent | Authorization-bound, model-involved execution role (not a deliberative agent): executes only the approved envelope and anchors the receipt to Casper Testnet. |
+| **Wells** | Governance Archivist | Non-reasoning archival/presentation persona: presents the sealed evidence trail; the deterministic archive is produced by Locke/Core. |
 | **Concordia Core** | Deterministic Evidence Core | Seals cards, owns state transitions, validates nonces, and enforces exact-envelope execution. |
 
 ## Evidence model
@@ -243,7 +243,7 @@ See `docs/SUBMISSION_ASSETS_STATUS.md` for the current split between verified te
 5. Alden revises the plan to an 8% capped allocation with guardrails.
 6. A multisig approver approves the exact execution envelope.
 7. Locke anchors the approved governance receipt and dissent hash to Casper Testnet.
-8. Wells produces the final governance archive.
+8. The deterministic core seals the final governance archive; Wells presents it for review.
 
 ## LLM model policy
 
@@ -254,7 +254,7 @@ CONCORDIA_TEST_MODE=1
 CONCORDIA_DISABLE_LLM_REASONING=1
 ```
 
-For the recorded and hosted walkthrough, configure a live OpenAI-compatible model endpoint through `LLM_BASE_URL`, `LLM_API_KEY`, and the per-agent model variables. The hosted walkthrough uses the Qwen assignment documented in [docs/LLM_PROVIDER.md](docs/LLM_PROVIDER.md). In production mode the Gateway refuses to trigger the workflow when live LLM readiness fails.
+For the recorded and hosted walkthrough, configure a live OpenAI-compatible model endpoint through `LLM_BASE_URL`, `LLM_API_KEY`, and the per-agent model variables. The hosted walkthrough uses the provider-agnostic, role-tiered model assignment documented in [docs/LLM_PROVIDER.md](docs/LLM_PROVIDER.md). In production mode the Gateway refuses to trigger the workflow when live LLM readiness fails.
 
 ## Safety boundaries
 

@@ -1,0 +1,14 @@
+{
+  "resources": [
+    {
+      "id": "finals-report-001",
+      "url": "https://x402.concordiadao.xyz/resource/finals-report-001",
+      "description": "Concordia finals protected report",
+      "mimeType": "application/json",
+      "amount": "1000000000",
+      "payTo": "00abababababababababababababababababababababababababababababababab",
+      "maxTimeoutSeconds": 600,
+      "reportFile": "/run/config/x402-report-finals-report-001.json"
+    }
+  ]
+}

@@ -5,9 +5,21 @@ models are advisory and interchangeable, while policy checks, nonce binding,
 exact-envelope validation, quorum gating, and Casper execution are enforced by
 code.
 
+Canonical role taxonomy (used consistently across all judge-facing copy):
+
+- **Four deliberative agents** — Rowan, Mercer, Verity, and Alden — reason over
+  the proposal. Their model output is purely advisory.
+- **Locke** is an **authorization-bound, model-involved execution role**, not a
+  fifth deliberative agent. It is model-involved only as a narrow echo: it can
+  submit the exact envelope the deterministic core has already authorized.
+- **Concordia Core** is deterministic infrastructure, not a model.
+- **Wells** is a **non-reasoning archival/presentation persona**. The
+  deterministic governance archive is produced by Locke/Core; Wells presents the
+  record and performs no model reasoning.
+
 The system uses OpenAI-compatible environment variables. The values below are
 example values for any OpenAI-compatible provider, not a statement that the
-hosted walkthrough uses OpenAI:
+hosted walkthrough uses a specific vendor:
 
 ```bash
 LLM_API_KEY=
@@ -22,21 +34,25 @@ LLM_SCRIBE_MODEL=gpt-4o-mini
 
 ## Deployed model assignment (hosted walkthrough)
 
-The hosted Concordia walkthrough uses Qwen models with role-specific depth:
+The hosted walkthrough assigns models by **tier**, matched to what each role
+actually needs. The specific provider and model identifiers used by the current
+hosted deployment are release-derived facts recorded in the deployment
+configuration, not fixed here.
 
-| Persona | Internal role | Deployed model | Why |
+| Persona | Internal role | Model tier | Why |
 |---|---|---|---|
-| Mercer | `diagnosis` | `qwen3.7-plus` | Deep treasury and risk analysis needs reasoning depth. |
-| Verity | `safety_reviewer` | `qwen3.7-plus` | Challenge and dissent quality is the product. |
-| Alden | `commander` | `qwen3.7-plus` | Plan synthesis and DAO Mandate drafting require stronger reasoning. |
-| Rowan | `triage` | `qwen3.6-flash` | High-frequency routing favors low latency. |
-| Locke | `operator` | `qwen3.6-flash` | Narrow execution echo is deliberately low-authority. |
-| Wells | `scribe` | `qwen3.6-flash` via `LLM_SCRIBE_MODEL`, archival metadata label | Archiving and governance publication are deterministic code paths; Wells is not one of the five live-required advisory roles. |
+| Mercer | `diagnosis` | Deep-reasoning tier | Deep treasury and risk analysis needs reasoning depth. |
+| Verity | `safety_reviewer` | Deep-reasoning tier | Challenge and dissent quality is the product. |
+| Alden | `commander` | Deep-reasoning tier | Plan synthesis and DAO Mandate drafting require stronger reasoning. |
+| Rowan | `triage` | Low-latency tier | High-frequency routing favors low latency. |
+| Locke | `operator` | Low-latency tier | Narrow execution echo is deliberately low-authority. |
+| Wells | `scribe` | Configured metadata label only | Non-reasoning archival/presentation persona: archiving and governance publication are deterministic code paths, and Wells performs no model reasoning in the judge path. Not one of the model-involved live-required roles. |
 
-The Gateway's live-readiness gate covers exactly five advisory roles: `triage`,
-`diagnosis`, `safety_reviewer`, `commander`, and `operator`. These are the same
-five roles reported by the public `/ready` endpoint. Wells's archival pipeline is
-deterministic by design.
+The Gateway's live-readiness gate covers five model-involved roles reported by
+the public `/ready` endpoint: `triage`, `diagnosis`, `safety_reviewer`, and
+`commander` (the four deliberative agents) plus `operator` (Locke's execution
+role). Wells's `scribe` role is intentionally not gated — its archive is
+deterministic code, not model reasoning.
 
 You do not need to swap models to qualify. The important point is to keep the
 LLM layer advisory. The deterministic Gateway and exact-envelope checker remain

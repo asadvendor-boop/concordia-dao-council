@@ -1,0 +1,95 @@
+# Concordia DAO Council — public documentation site.
+#
+# SAFETY: docs_dir is the curated docs-site/ tree, NOT the internal docs/
+# directory. Internal working documents in docs/ are source material only and
+# must never be auto-exposed. Navigation is explicit; nothing is auto-discovered.
+
+site_name: Concordia DAO Council
+site_url: https://docs.concordiadao.xyz/
+site_description: >-
+  Concordia DAO Council is the Casper governance firewall for AI-run DAOs:
+  deliberative agents advise, a deterministic core owns every state transition
+  and seals evidence, and approved decisions are anchored as verifiable receipts
+  on Casper Testnet.
+
+repo_url: https://github.com/asadvendor-boop/concordia-dao-council
+repo_name: concordia-dao-council
+edit_uri: ""
+
+docs_dir: docs-site
+
+# Safety net: even inside the curated tree, never publish drafts, partials,
+# or editor leftovers.
+exclude_docs: |
+  drafts/
+  internal/
+  *.draft.md
+  *.tmp
+  *.orig
+  *.bak
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  # Custom 404 lives in a dot-directory inside docs_dir. MkDocs ignores
+  # dot-directories when collecting docs, so it is used only as a theme
+  # override source and is never published as a content page.
+  custom_dir: docs-site/.overrides
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.footer
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.integrate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+nav:
+  - Product Overview: index.md
+  - Judge Quickstart: judge-walkthrough.md
+  - Architecture & Trust Boundaries: architecture.md
+  - Agent & Role Taxonomy: agent-taxonomy.md
+  - v1/v2/v3 Lineage: governance-receipts.md
+  - v3 Envelope Specification: v3-envelope.md
+  - SafePay Lite: safepay-lite.md
+  - Official x402: official-x402.md
+  - Treasury Execution: treasury-execution.md
+  - Proof Provenance: proof-verification.md
+  - Verifier SDK / CLI: verifier-cli.md
+  - Policy Matrix: policy-matrix.md
+  - Deployment & Security: deployment-security.md
+  - Public Receipts: links.md
+  - Launch Roadmap: launch-roadmap.md

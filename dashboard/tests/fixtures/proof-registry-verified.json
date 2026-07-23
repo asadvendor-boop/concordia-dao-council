@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-23T00:00:00Z",
+  "proposal_id": "DAO-PROP-6CB25C",
+  "items": [
+    {
+      "proof_id": "fixture-exact-envelope-v3",
+      "proof_type": "exact_envelope_v3",
+      "generation": "v3",
+      "lineage": "supplemental",
+      "observation_mode": "live",
+      "temporal_scope": "current",
+      "verification_status": "verified",
+      "execution_outcome": "accepted",
+      "claim_scope": "exact-envelope v3 four-outcome enforcement (test fixture)",
+      "enforcement_scope": "on-chain quorum + exact envelope hash binding",
+      "proposal_id": "DAO-PROP-6CB25C",
+      "action_id": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+      "envelope_hash": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+      "artifact_path": "artifacts/live/test-fixture-observation.json",
+      "artifact_sha256": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+      "source_commit": "abababababababababababababababababababab",
+      "deployment_commit": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "network": "casper:casper-test",
+      "package_hash": "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+      "contract_hash": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+      "deployment_domain": "8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+      "schema_version": "test-fixture-v1",
+      "captured_at": "2026-07-23T00:00:00Z",
+      "payment_requirements_hash": null,
+      "signed_payment_payload_hash": null,
+      "report_hash": null,
+      "settlement_transaction": null,
+      "checks": [
+        {
+          "name": "source_tree_sha256_matches_release_manifest",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "wasm_sha256_matches_release_manifest",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "generated_schema_sha256_matches_release_manifest",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "envelope_hash_recomputed_from_typed_fields",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "proposal_commitment_matches_envelope_hash",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "signer_set_and_threshold_match_deployment",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "pre_quorum_finalize_reverted_with_code_8",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "post_quorum_mutated_envelope_reverted_with_code_10",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "exact_envelope_finalization_accepted",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "repeat_finalization_reverted_with_code_12",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "finalization_deploy_processed_without_execution_error",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "contract_readback_marks_proposal_finalized",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "contract_readback_marks_action_authorized",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "package_contract_and_deployment_domain_match_manifest",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "repeat_authorization_reverted_with_code_13",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        }
+      ],
+      "links": [
+        {
+          "rel": "chain_deploy",
+          "label": "Fixture accepted deploy",
+          "href": "https://testnet.cspr.live/deploy/2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+          "kind": "chain"
+        }
+      ]
+    },
+    {
+      "proof_id": "fixture-safepay-v2",
+      "proof_type": "safepay_v2",
+      "generation": "v2",
+      "lineage": "supplemental",
+      "observation_mode": "live",
+      "temporal_scope": "current",
+      "verification_status": "verified",
+      "execution_outcome": "accepted",
+      "claim_scope": "SafePay v2 native-CSPR single consumption (test fixture)",
+      "enforcement_scope": "provider durable consumption ledger",
+      "proposal_id": "DAO-PROP-6CB25C",
+      "action_id": null,
+      "envelope_hash": null,
+      "artifact_path": "artifacts/live/test-fixture-observation.json",
+      "artifact_sha256": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+      "source_commit": "abababababababababababababababababababab",
+      "deployment_commit": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "network": "casper:casper-test",
+      "package_hash": null,
+      "contract_hash": null,
+      "deployment_domain": null,
+      "schema_version": "test-fixture-v1",
+      "captured_at": "2026-07-23T00:00:00Z",
+      "payment_requirements_hash": null,
+      "signed_payment_payload_hash": null,
+      "report_hash": "6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f",
+      "settlement_transaction": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+      "checks": [
+        {
+          "name": "quote_hash_recomputed",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "issued_quote_row_matches_and_survives_restart",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "per_quote_correlation_id_recomputed_and_equals_native_transfer_id",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "payment_deploy_finalized_without_execution_error",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "single_native_transfer_exact",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "payee_amount_and_transfer_id_exact",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "proposal_resource_and_correlation_exact",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "report_hash_recomputed_and_matches_quote",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "provider_consumption_row_matches_payment_and_binding",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        },
+        {
+          "name": "cross_binding_reuse_returned_terminal_409",
+          "required": true,
+          "passed": true,
+          "source": "artifacts/live/test-fixture-observation.json",
+          "observed_at": "2026-07-23T00:00:00Z"
+        }
+      ],
+      "links": []
+    },
+    {
+      "proof_id": "fixture-official-x402",
+      "proof_type": "official_x402_settlement_v1",
+      "generation": "v3",
+      "lineage": "supplemental",
+      "observation_mode": "unavailable",
+      "temporal_scope": "current",
+      "verification_status": "unavailable",
+      "execution_outcome": "not_attempted",
+      "claim_scope": "official x402 WCSPR settlement (fail-closed, no live proof yet)",
+      "enforcement_scope": "governance-bound facilitator settlement gate",
+      "proposal_id": "DAO-PROP-6CB25C",
+      "action_id": null,
+      "envelope_hash": null,
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "source_commit": null,
+      "deployment_commit": null,
+      "network": null,
+      "package_hash": null,
+      "contract_hash": null,
+      "deployment_domain": null,
+      "schema_version": null,
+      "captured_at": null,
+      "payment_requirements_hash": null,
+      "signed_payment_payload_hash": null,
+      "report_hash": null,
+      "settlement_transaction": null,
+      "checks": [],
+      "links": []
+    }
+  ]
+}
