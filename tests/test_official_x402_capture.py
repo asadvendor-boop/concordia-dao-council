@@ -276,6 +276,30 @@ def test_prepared_output_is_canonical_and_writeonce(tmp_path: Path) -> None:
         _emit(prepared, str(out))
 
 
+@pytest.mark.parametrize("input_mode", [0o400, 0o600])
+def test_control_json_reader_accepts_only_descriptor_safe_private_files(
+    tmp_path: Path, input_mode: int
+) -> None:
+    from scripts.official_x402_capture import _read_json
+
+    path = tmp_path / "control.json"
+    expected = {"purpose": "raw-capture-control"}
+    path.write_bytes(_canonical(expected))
+    path.chmod(input_mode)
+
+    assert _read_json(path, context="control") == expected
+
+    path.chmod(0o644)
+    with pytest.raises(CaptureError, match="secure|safely"):
+        _read_json(path, context="control")
+
+    path.chmod(0o600)
+    link = tmp_path / "control-link.json"
+    link.symlink_to(path)
+    with pytest.raises(CaptureError, match="secure|safely"):
+        _read_json(link, context="control")
+
+
 # ==========================================================================
 # capture
 # ==========================================================================
