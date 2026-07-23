@@ -55,6 +55,15 @@
 		}
 	}
 
+	handle /x402/v2/* {
+		reverse_proxy concordia-gateway:8000 {
+			# Preserve one real client quota identity through the trusted chain.
+			# Setting these values overwrites every caller-supplied instance.
+			header_up X-Concordia-Client-IP {remote_host}
+			header_up X-Concordia-SafePay-Proxy {file./run/secrets/safepay_proxy_secret}
+		}
+	}
+
 	handle /x402/* {
 		reverse_proxy concordia-gateway:8000
 	}

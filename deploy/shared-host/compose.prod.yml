@@ -91,6 +91,8 @@ x-concordia-secrets: &concordia-secrets
   - approval_ui_csrf_secret
   - demo_capability_hmac_secret
   - dashboard_demo_gateway_token
+  - safepay_proxy_secret
+  - safepay_quote_token_secret
   - concordia_operator_token
   - x402_official_gateway_token
   - casper_secret_key
@@ -122,6 +124,9 @@ services:
       APPROVAL_UI_CSRF_SECRET_FILE: /run/secrets/approval_ui_csrf_secret
       DEMO_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/demo_capability_hmac_secret
       DASHBOARD_DEMO_GATEWAY_TOKEN_FILE: /run/secrets/dashboard_demo_gateway_token
+      SAFEPAY_PROXY_SECRET_FILE: /run/secrets/safepay_proxy_secret
+      SAFEPAY_QUOTE_TOKEN_SECRET_FILE: /run/secrets/safepay_quote_token_secret
+      SAFEPAY_TRUSTED_PROXY_CIDRS: ${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}
       CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
       X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
       CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
@@ -522,6 +527,8 @@ secrets:
     file: ${CONCORDIA_OPERATOR_TOKEN_FILE:-/opt/apps/concordia/secrets/concordia_operator_token}
   safepay_proxy_secret:
     file: ${SAFEPAY_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_proxy_secret}
+  safepay_quote_token_secret:
+    file: ${SAFEPAY_QUOTE_TOKEN_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_quote_token_secret}
   safepay_client_key_hmac_secret:
     file: ${SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_client_key_hmac_secret}
   x402_official_cspr_cloud_token:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -89,8 +90,23 @@ from shared.approval import (
 from shared.runtime_secrets import read_secret, read_secret_file_only
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
 from shared.x402_payments import (
+    SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
+    SAFEPAY_V2_QUOTE_CAPABILITY_HEADER,
+    SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+    SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
+    SAFEPAY_V2_SCHEMA_VERSION,
+    SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+    SAFEPAY_V2_WALLET_INTENT_SCHEMA,
     build_payment_request,
+    issue_safepay_v2_quote_capability,
+    parse_safepay_v2_strict_json,
     payment_required_headers,
+    redeem_safepay_v2_quote,
+    request_safepay_v2_quote,
+    safepay_v2_error_body,
+    safepay_v2_account_hash_from_public_key,
+    validate_safepay_v2_gateway_quote,
+    verify_safepay_v2_quote_capability,
     settle_x402_payment_with_retry,
     x402_payment_correlation_id,
     x402_receiver_public_key,
@@ -174,6 +190,78 @@ def infer_legacy_sender_role_from_text(content: str) -> str | None:
     if "recorder" in lowered:
         return "concordia_core"
     return None
+
+
+def _normalized_safepay_ip(value: Any) -> str | None:
+    if not isinstance(value, str) or not value or "%" in value or "," in value:
+        return None
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+def _parse_safepay_trusted_proxy_networks(
+    raw: str | None,
+) -> tuple[
+    ipaddress.IPv4Network | ipaddress.IPv6Network, ...
+]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in (raw or "").split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(
+                "SAFEPAY_TRUSTED_PROXY_CIDRS contains an invalid CIDR"
+            ) from exc
+    return tuple(networks)
+
+
+def _safepay_proxy_headers(request: Request) -> dict[str, str] | None:
+    """Resolve one trusted client identity and overwrite provider auth headers."""
+
+    proxy_secret = read_secret_file_only("SAFEPAY_PROXY_SECRET")
+    if len(proxy_secret.encode("utf-8")) < 32:
+        return None
+    peer = _normalized_safepay_ip(
+        request.client.host if request.client is not None else None
+    )
+    # An invalid socket identity collapses into one non-routable quota bucket;
+    # caller-controlled text is never forwarded as an identity.
+    resolved = peer or "0.0.0.0"
+    if peer is not None:
+        peer_address = ipaddress.ip_address(peer)
+        peer_is_trusted = any(
+            peer_address.version == network.version and peer_address in network
+            for network in request.app.state.safepay_trusted_proxy_networks
+        )
+        supplied_attestation = request.headers.get(
+            "X-Concordia-SafePay-Proxy", ""
+        )
+        forwarded = _normalized_safepay_ip(
+            request.headers.get("X-Concordia-Client-IP")
+        )
+        if (
+            peer_is_trusted
+            and forwarded is not None
+            and hmac.compare_digest(supplied_attestation, proxy_secret)
+        ):
+            resolved = forwarded
+    return {
+        "X-Concordia-Client-IP": resolved,
+        "X-Concordia-SafePay-Proxy": proxy_secret,
+    }
+
+
+def _safepay_quote_capability_secret() -> bytes | None:
+    secret = read_secret_file_only("SAFEPAY_QUOTE_TOKEN_SECRET").encode("utf-8")
+    return secret if len(secret) >= 32 else None
 
 
 def _safe_json_dict(value: Any) -> dict[str, Any]:
@@ -494,7 +582,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    new_app.state.safepay_trusted_proxy_networks = (
+        _parse_safepay_trusted_proxy_networks(
+            os.getenv("SAFEPAY_TRUSTED_PROXY_CIDRS")
+        )
+    )
     new_app.state._db_path = db_path
+    # Tests replace this with an httpx MockTransport. Production leaves it
+    # unset and always uses the pinned internal provider origin.
+    new_app.state.safepay_v2_transport = None
     new_app.state.proof_registry = ProofRegistryRepository(
         os.getenv("CONCORDIA_PROOF_REGISTRY_DIR", "artifacts/live/proof-registry")
     )
@@ -511,6 +607,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         allow_origins=cors_origins,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Agent-Key", "X-Operator-Token", "X-CSRF-Token"],
+        expose_headers=[SAFEPAY_V2_QUOTE_CAPABILITY_HEADER],
     )
     new_app.add_middleware(RateLimitMiddleware)
 
@@ -651,6 +748,222 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError:
             logger.exception("proof_registry_x402_load_failed")
             return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    def _safepay_v2_gateway_response(result: Any) -> Response:
+        return Response(
+            content=result.content,
+            status_code=result.status_code,
+            media_type="application/json",
+            headers=result.headers,
+        )
+
+    def _safepay_v2_local_error(
+        status_code: int,
+        code: str,
+        *,
+        retryable: bool,
+        replay_disposition: str,
+    ) -> JSONResponse:
+        return JSONResponse(
+            safepay_v2_error_body(code, retryable, replay_disposition),
+            status_code=status_code,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Concordia-SafePay-Version": SAFEPAY_V2_SCHEMA_VERSION,
+            },
+        )
+
+    async def _strict_safepay_json(request: Request) -> dict[str, Any] | None:
+        try:
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
+                    return None
+                chunks.append(chunk)
+            body = parse_safepay_v2_strict_json(b"".join(chunks))
+        except (TypeError, ValueError, RecursionError, RuntimeError):
+            return None
+        return body if isinstance(body, dict) else None
+
+    @new_app.post("/x402/v2/quotes")
+    async def safepay_v2_quote_proxy(request: Request):
+        """Proxy a quote request to the pinned provider and validate its quote."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body) != {"schema_version", "proposal_id", "resource_id"}
+            or body.get("schema_version") != SAFEPAY_V2_QUOTE_REQUEST_SCHEMA
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        quote_secret = _safepay_quote_capability_secret()
+        proxy_headers = _safepay_proxy_headers(request)
+        if quote_secret is None or proxy_headers is None:
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="not_attempted",
+            )
+        result = await request_safepay_v2_quote(
+            proposal_id=body.get("proposal_id"),
+            resource_id=body.get("resource_id"),
+            transport=new_app.state.safepay_v2_transport,
+            proxy_headers=proxy_headers,
+        )
+        if result.status_code == 402:
+            capability = issue_safepay_v2_quote_capability(
+                result.body["quote"], quote_secret
+            )
+            result = type(result)(
+                status_code=result.status_code,
+                content=result.content,
+                body=result.body,
+                headers={
+                    **result.headers,
+                    SAFEPAY_V2_QUOTE_CAPABILITY_HEADER: capability,
+                },
+            )
+        return _safepay_v2_gateway_response(result)
+
+    @new_app.post("/x402/v2/payment-intent")
+    async def safepay_v2_payment_intent(request: Request):
+        """Build a wallet intent from the exact provider-issued quote."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body)
+            != {
+                "schema_version",
+                "quote",
+                "quote_capability",
+                "signer_public_key",
+            }
+            or body.get("schema_version") != SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA
+            or not isinstance(body.get("signer_public_key"), str)
+            or not body["signer_public_key"].strip()
+            or validate_safepay_v2_gateway_quote(
+                body.get("quote"), require_unexpired=True
+            )
+            is not None
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+
+        quote = body["quote"]
+        quote_secret = _safepay_quote_capability_secret()
+        if quote_secret is None:
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        if not verify_safepay_v2_quote_capability(
+            quote,
+            body.get("quote_capability"),
+            quote_secret,
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        receiver_public_key = os.getenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", "").strip()
+        try:
+            derived_payee = safepay_v2_account_hash_from_public_key(receiver_public_key)
+        except (TypeError, ValueError):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        if not hmac.compare_digest(derived_payee, quote["payee_account_hash"]):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+
+        unsigned = build_unsigned_casper_transfer_deploy(
+            signer_public_key=body["signer_public_key"].strip(),
+            target_public_key=receiver_public_key,
+            amount_motes=int(quote["amount_motes"]),
+            correlation_id=int(quote["correlation_id"]),
+        )
+        if unsigned.get("status") != "ready":
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        return JSONResponse(
+            {
+                **unsigned,
+                "schema_version": SAFEPAY_V2_WALLET_INTENT_SCHEMA,
+                "status": "ready",
+                "quote": quote,
+                "payment_requirements": {
+                    "network": quote["network"],
+                    "payee_account_hash": quote["payee_account_hash"],
+                    "amount_motes": quote["amount_motes"],
+                    "correlation_id": quote["correlation_id"],
+                    "expires_at": quote["expires_at"],
+                },
+            },
+            headers={
+                "Cache-Control": "no-store",
+                "X-Concordia-SafePay-Version": SAFEPAY_V2_SCHEMA_VERSION,
+            },
+        )
+
+    @new_app.post("/x402/v2/redemptions")
+    async def safepay_v2_redemption_proxy(request: Request):
+        """Redeem the exact issued quote; provider remains sole authority."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body) != {"schema_version", "quote", "payment_hash"}
+            or body.get("schema_version") != SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        proxy_headers = _safepay_proxy_headers(request)
+        if proxy_headers is None:
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="verification_pending",
+            )
+        result = await redeem_safepay_v2_quote(
+            quote=body.get("quote"),
+            payment_hash=body.get("payment_hash"),
+            transport=new_app.state.safepay_v2_transport,
+            proxy_headers=proxy_headers,
+        )
+        return _safepay_v2_gateway_response(result)
 
     @new_app.get("/x402/governance-report")
     async def x402_governance_report(request: Request, proposal_id: str = "demo"):

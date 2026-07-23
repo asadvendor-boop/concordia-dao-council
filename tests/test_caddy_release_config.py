@@ -74,6 +74,24 @@ def test_safepay_provider_overwrites_client_identity_and_proxy_attestation() -> 
     assert "{$SAFEPAY_PROXY_SECRET}" not in route
 
 
+def test_safepay_gateway_route_overwrites_client_identity_and_attestation() -> None:
+    config = _config()
+
+    start = config.index("(concordia_app)")
+    end = config.index("{$CONCORDIA_HOSTNAME}", start)
+    block = config[start:end]
+    route_start = block.index("handle /x402/v2/*")
+    route_end = block.index("\n\thandle ", route_start + 1)
+    route = block[route_start:route_end]
+    assert "reverse_proxy concordia-gateway:8000" in route
+    assert "header_up X-Concordia-Client-IP {remote_host}" in route
+    assert (
+        "header_up X-Concordia-SafePay-Proxy "
+        "{file./run/secrets/safepay_proxy_secret}"
+    ) in route
+    assert "{$SAFEPAY_PROXY_SECRET}" not in route
+
+
 def test_official_x402_host_exposes_only_frozen_method_path_pairs() -> None:
     config = _config()
 
