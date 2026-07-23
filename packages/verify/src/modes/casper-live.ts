@@ -368,7 +368,7 @@ function validateEndpoints(values: readonly string[]): URL[] {
     throw new CasperLiveError("invalid", "duplicate_live_rpc_origin", "trusted RPC endpoint origins must be distinct");
   }
   if (new Set(endpoints.map(({ hostname }) => normalizeHostname(hostname))).size !== endpoints.length) {
-    throw new CasperLiveError("invalid", "nonindependent_live_rpc_hosts", "trusted RPC endpoints must use independently named hosts");
+    throw new CasperLiveError("invalid", "nonindependent_live_rpc_hosts", "trusted RPC endpoints must use distinct DNS hostnames");
   }
   return endpoints;
 }
