@@ -105,13 +105,181 @@ def test_casper_signer_path_and_key_are_scoped_to_gateway_and_locke() -> None:
 
 def test_legacy_x402_credentials_and_facilitator_are_absent_from_runtime() -> None:
     document = _compose()
-    for service in document["services"].values():
+    for service_name, service in document["services"].items():
         environment = service.get("environment", {})
-        assert "X402_FACILITATOR_URL" not in environment
+        if service_name == "x402-official":
+            assert environment["X402_FACILITATOR_URL"] == (
+                "https://x402-facilitator.cspr.cloud"
+            )
+        else:
+            assert "X402_FACILITATOR_URL" not in environment
         assert "X402_FACILITATOR_TOKEN" not in environment
         assert "X402_FACILITATOR_TOKEN_FILE" not in environment
         assert "X402_PROVIDER_TOKEN" not in environment
         assert "X402_PROVIDER_TOKEN_FILE" not in environment
+
+
+def test_finals_boundary_secrets_are_file_scoped_to_exact_consumers() -> None:
+    document = _compose()
+    services = document["services"]
+    assert isinstance(services, dict)
+
+    expected: dict[str, set[str]] = {
+        "approval_ui_user": {"gateway"},
+        "approval_ui_approver_id": {"gateway"},
+        "demo_capability_hmac_secret": {"gateway"},
+        "dashboard_demo_gateway_token": {"gateway", "dashboard"},
+        "safepay_proxy_secret": {"x402-provider"},
+        "safepay_client_key_hmac_secret": {"x402-provider"},
+        "x402_official_cspr_cloud_token": {"x402-official"},
+        "x402_official_signer": {"x402-official"},
+        "x402_official_gateway_token": {"gateway", "x402-official"},
+    }
+    env_names = {
+        "approval_ui_user": "APPROVAL_UI_USER_FILE",
+        "approval_ui_approver_id": "APPROVAL_UI_APPROVER_ID_FILE",
+        "demo_capability_hmac_secret": "DEMO_CAPABILITY_HMAC_SECRET_FILE",
+        "dashboard_demo_gateway_token": "DASHBOARD_DEMO_GATEWAY_TOKEN_FILE",
+        "safepay_proxy_secret": "SAFEPAY_PROXY_SECRET_FILE",
+        "safepay_client_key_hmac_secret": "SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE",
+        "x402_official_cspr_cloud_token": "X402_CSPR_CLOUD_TOKEN_FILE",
+        "x402_official_signer": "X402_SIGNER_FILE",
+        "x402_official_gateway_token": "X402_GATEWAY_TOKEN_FILE",
+    }
+
+    for secret_name, consumers in expected.items():
+        for service_name, service in services.items():
+            environment = service.get("environment", {})
+            mounted = set(service.get("secrets", []))
+            assert isinstance(environment, dict)
+            if service_name in consumers:
+                assert secret_name in mounted
+                assert environment[env_names[secret_name]] == (
+                    f"/run/secrets/{secret_name}"
+                )
+            else:
+                assert secret_name not in mounted
+                assert env_names[secret_name] not in environment
+
+    dashboard = services["dashboard"]
+    assert "concordia_operator_token" not in set(dashboard.get("secrets", []))
+    assert "CONCORDIA_OPERATOR_TOKEN_FILE" not in dashboard["environment"]
+
+
+def test_finals_boundary_secret_definitions_are_file_backed() -> None:
+    document = _compose()
+    secrets = document["secrets"]
+    expected = {
+        "approval_ui_user",
+        "approval_ui_approver_id",
+        "demo_capability_hmac_secret",
+        "dashboard_demo_gateway_token",
+        "safepay_proxy_secret",
+        "safepay_client_key_hmac_secret",
+        "x402_official_cspr_cloud_token",
+        "x402_official_signer",
+        "x402_official_gateway_token",
+    }
+    for name in expected:
+        definition = secrets[name]
+        assert isinstance(definition, dict)
+        assert set(definition) == {"file"}
+        assert str(definition["file"]).startswith("${")
+        assert str(definition["file"]).startswith(
+            "${" + name.upper() + "_FILE:-/opt/apps/concordia/secrets/"
+        )
+
+
+def test_safepay_v2_provider_has_durable_ledger_and_frozen_runtime_terms() -> None:
+    document = _compose()
+    provider = document["services"]["x402-provider"]
+    environment = provider["environment"]
+
+    assert environment["X402_LEDGER"] == "/data/safepay.db"
+    assert environment["SAFEPAY_TRUSTED_PROXY_CIDRS"] == (
+        "${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}"
+    )
+    assert environment["SAFEPAY_PAYEE_ACCOUNT_HASH"] == (
+        "${SAFEPAY_PAYEE_ACCOUNT_HASH:?Set SAFEPAY_PAYEE_ACCOUNT_HASH}"
+    )
+    assert environment["SAFEPAY_AMOUNT_MOTES"] == (
+        "${SAFEPAY_AMOUNT_MOTES:?Set SAFEPAY_AMOUNT_MOTES}"
+    )
+    assert provider["volumes"] == ["x402_provider_data:/data"]
+    assert "x402_provider_data" in document["volumes"]
+    assert "ports" not in provider
+
+
+def test_official_x402_service_is_frozen_internal_and_persistent() -> None:
+    document = _compose()
+    service = document["services"]["x402-official"]
+    environment = service["environment"]
+
+    assert service["build"] == {
+        "context": "../..",
+        "dockerfile": "services/x402-official/Dockerfile",
+    }
+    assert service["restart"] == "unless-stopped"
+    assert "ports" not in service
+    assert environment == {
+        "NODE_ENV": "production",
+        "X402_OFFICIAL_PORT": "8787",
+        "X402_FACILITATOR_URL": "https://x402-facilitator.cspr.cloud",
+        "X402_NETWORK": "casper:casper-test",
+        "X402_SCHEME": "exact",
+        "X402_WCSPR_PACKAGE_HASH": (
+            "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e"
+        ),
+        "X402_WCSPR_CONTRACT_HASH": (
+            "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+        ),
+        "X402_WCSPR_CONTRACT_VERSION": "8",
+        "X402_TOKEN_NAME": "Wrapped CSPR",
+        "X402_TOKEN_SYMBOL": "WCSPR",
+        "X402_TOKEN_DECIMALS": "9",
+        "X402_TOKEN_DOMAIN_VERSION": "1",
+        "X402_LEDGER_PATH": "/data/x402-official.db",
+        "X402_GATEWAY_INTERNAL_URL": "http://gateway:8000",
+        "X402_RESOURCES_FILE": "/run/config/x402-resources.json",
+        "X402_CSPR_CLOUD_TOKEN_FILE": (
+            "/run/secrets/x402_official_cspr_cloud_token"
+        ),
+        "X402_SIGNER_FILE": "/run/secrets/x402_official_signer",
+        "X402_GATEWAY_TOKEN_FILE": (
+            "/run/secrets/x402_official_gateway_token"
+        ),
+    }
+    assert set(service["volumes"]) == {
+        "x402_official_data:/data",
+        (
+            "${X402_OFFICIAL_CONFIG_DIR:-/opt/apps/concordia/config/"
+            "x402-official}:/run/config:ro"
+        ),
+    }
+    assert "x402_official_data" in document["volumes"]
+    assert set(service["networks"]) == {"concordia-edge", "concordia-internal"}
+    assert service["networks"]["concordia-internal"]["aliases"] == [
+        "concordia-x402-official"
+    ]
+    assert "gateway" in document["services"]["gateway"]["networks"][
+        "concordia-internal"
+    ]["aliases"]
+
+
+def test_official_x402_healthcheck_is_local_and_fail_closed() -> None:
+    service = _compose()["services"]["x402-official"]
+    healthcheck = service["healthcheck"]
+
+    assert healthcheck["test"] == [
+        "CMD-SHELL",
+        (
+            "node -e \"fetch('http://127.0.0.1:8787/health')"
+            ".then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ),
+    ]
+    assert healthcheck["interval"] == "10s"
+    assert healthcheck["timeout"] == "5s"
+    assert healthcheck["retries"] == 12
 
 
 def test_cspr_cloud_reads_file_secret_and_file_wins_over_direct_env(

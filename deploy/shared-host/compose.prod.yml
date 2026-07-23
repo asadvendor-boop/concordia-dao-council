@@ -85,9 +85,14 @@ x-concordia-secrets: &concordia-secrets
   - operator_submission_key
   - proposal_room_api_key
   - approval_proxy_secret
+  - approval_ui_user
+  - approval_ui_approver_id
   - approval_ui_bcrypt_hash
   - approval_ui_csrf_secret
+  - demo_capability_hmac_secret
+  - dashboard_demo_gateway_token
   - concordia_operator_token
+  - x402_official_gateway_token
   - casper_secret_key
 
 services:
@@ -111,9 +116,14 @@ services:
       OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
       PROPOSAL_ROOM_API_KEY_FILE: /run/secrets/proposal_room_api_key
       APPROVAL_PROXY_SECRET_FILE: /run/secrets/approval_proxy_secret
+      APPROVAL_UI_USER_FILE: /run/secrets/approval_ui_user
+      APPROVAL_UI_APPROVER_ID_FILE: /run/secrets/approval_ui_approver_id
       APPROVAL_UI_BCRYPT_HASH_FILE: /run/secrets/approval_ui_bcrypt_hash
       APPROVAL_UI_CSRF_SECRET_FILE: /run/secrets/approval_ui_csrf_secret
+      DEMO_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/demo_capability_hmac_secret
+      DASHBOARD_DEMO_GATEWAY_TOKEN_FILE: /run/secrets/dashboard_demo_gateway_token
       CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+      X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
       CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
       CSPR_CLOUD_SERVICE_SCOPE: mercer
       X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
@@ -127,6 +137,7 @@ services:
       concordia-internal:
         aliases:
           - concordia-gateway
+          - gateway
     depends_on:
       simulator:
         condition: service_started
@@ -149,10 +160,20 @@ services:
       X402_PROVIDER_URL: ""
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       GATEWAY_SECRET_FILE: /run/secrets/gateway_secret
+      X402_LEDGER: /data/safepay.db
+      SAFEPAY_PROXY_SECRET_FILE: /run/secrets/safepay_proxy_secret
+      SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE: /run/secrets/safepay_client_key_hmac_secret
+      SAFEPAY_TRUSTED_PROXY_CIDRS: ${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}
+      SAFEPAY_PAYEE_ACCOUNT_HASH: ${SAFEPAY_PAYEE_ACCOUNT_HASH:?Set SAFEPAY_PAYEE_ACCOUNT_HASH}
+      SAFEPAY_AMOUNT_MOTES: ${SAFEPAY_AMOUNT_MOTES:?Set SAFEPAY_AMOUNT_MOTES}
       X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
     secrets:
       - llm_api_key
       - gateway_secret
+      - safepay_proxy_secret
+      - safepay_client_key_hmac_secret
+    volumes:
+      - x402_provider_data:/data
     networks:
       concordia-edge:
         aliases:
@@ -165,6 +186,55 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *bounded-logging
+
+  x402-official:
+    build:
+      context: ../..
+      dockerfile: services/x402-official/Dockerfile
+    image: concordia-x402-official:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      X402_OFFICIAL_PORT: "8787"
+      X402_FACILITATOR_URL: https://x402-facilitator.cspr.cloud
+      X402_NETWORK: casper:casper-test
+      X402_SCHEME: exact
+      X402_WCSPR_PACKAGE_HASH: 3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e
+      X402_WCSPR_CONTRACT_HASH: 032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a
+      X402_WCSPR_CONTRACT_VERSION: "8"
+      X402_TOKEN_NAME: Wrapped CSPR
+      X402_TOKEN_SYMBOL: WCSPR
+      X402_TOKEN_DECIMALS: "9"
+      X402_TOKEN_DOMAIN_VERSION: "1"
+      X402_LEDGER_PATH: /data/x402-official.db
+      X402_GATEWAY_INTERNAL_URL: http://gateway:8000
+      X402_RESOURCES_FILE: /run/config/x402-resources.json
+      X402_CSPR_CLOUD_TOKEN_FILE: /run/secrets/x402_official_cspr_cloud_token
+      X402_SIGNER_FILE: /run/secrets/x402_official_signer
+      X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
+    secrets:
+      - x402_official_cspr_cloud_token
+      - x402_official_signer
+      - x402_official_gateway_token
+    volumes:
+      - x402_official_data:/data
+      - ${X402_OFFICIAL_CONFIG_DIR:-/opt/apps/concordia/config/x402-official}:/run/config:ro
+    networks:
+      concordia-edge:
+        aliases:
+          - concordia-x402-official
+      concordia-internal:
+        aliases:
+          - concordia-x402-official
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -195,9 +265,9 @@ services:
     environment:
       GATEWAY_URL: http://concordia-gateway:8000
       CONCORDIA_LIVE_DEMO: "${CONCORDIA_LIVE_DEMO:-0}"
-      CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+      DASHBOARD_DEMO_GATEWAY_TOKEN_FILE: /run/secrets/dashboard_demo_gateway_token
     secrets:
-      - concordia_operator_token
+      - dashboard_demo_gateway_token
     networks:
       concordia-edge:
         aliases:
@@ -412,6 +482,8 @@ networks:
 volumes:
   concordia-data:
   concordia-ipfs-data:
+  x402_provider_data:
+  x402_official_data:
 
 secrets:
   llm_api_key:
@@ -434,12 +506,30 @@ secrets:
     file: ${PROPOSAL_ROOM_API_KEY_FILE:-/opt/apps/concordia/secrets/proposal_room_api_key}
   approval_proxy_secret:
     file: ${APPROVAL_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/approval_proxy_secret}
+  approval_ui_user:
+    file: ${APPROVAL_UI_USER_FILE:-/opt/apps/concordia/secrets/approval_ui_user}
+  approval_ui_approver_id:
+    file: ${APPROVAL_UI_APPROVER_ID_FILE:-/opt/apps/concordia/secrets/approval_ui_approver_id}
   approval_ui_bcrypt_hash:
     file: ${APPROVAL_UI_BCRYPT_HASH_FILE:-/opt/apps/concordia/secrets/approval_ui_bcrypt_hash}
   approval_ui_csrf_secret:
     file: ${APPROVAL_UI_CSRF_SECRET_FILE:-/opt/apps/concordia/secrets/approval_ui_csrf_secret}
+  demo_capability_hmac_secret:
+    file: ${DEMO_CAPABILITY_HMAC_SECRET_FILE:-/opt/apps/concordia/secrets/demo_capability_hmac_secret}
+  dashboard_demo_gateway_token:
+    file: ${DASHBOARD_DEMO_GATEWAY_TOKEN_FILE:-/opt/apps/concordia/secrets/dashboard_demo_gateway_token}
   concordia_operator_token:
     file: ${CONCORDIA_OPERATOR_TOKEN_FILE:-/opt/apps/concordia/secrets/concordia_operator_token}
+  safepay_proxy_secret:
+    file: ${SAFEPAY_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_proxy_secret}
+  safepay_client_key_hmac_secret:
+    file: ${SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_client_key_hmac_secret}
+  x402_official_cspr_cloud_token:
+    file: ${X402_OFFICIAL_CSPR_CLOUD_TOKEN_FILE:-/opt/apps/concordia/secrets/x402_official_cspr_cloud_token}
+  x402_official_signer:
+    file: ${X402_OFFICIAL_SIGNER_FILE:-/opt/apps/concordia/secrets/x402_official_signer}
+  x402_official_gateway_token:
+    file: ${X402_OFFICIAL_GATEWAY_TOKEN_FILE:-/opt/apps/concordia/secrets/x402_official_gateway_token}
   casper_secret_key:
     file: ${CASPER_SECRET_KEY_FILE:-/opt/apps/concordia/secrets/casper_secret_key.pem}
   cspr_cloud_access_token:
