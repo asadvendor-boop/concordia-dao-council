@@ -1,10 +1,30 @@
 # INTERFACE MANIFEST — WP5 (official CSPR.cloud x402 settlement service)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `91b5498` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item)
+- Producer commit: `1bf4890` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item → `1bf4890` clean-install reproducibility)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §6, §11, §12 "Official x402 local service v1", §13
-- Lane status: `npm ci` + typecheck clean; 354/354 vitest green x3 consecutive at `91b5498` (incl. adversarial concurrency, stored-response-tampering, terminal-invariant, and resource-transport suites); `npm audit --audit-level=high` clean. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+- Lane status: proven at `1bf4890` from a BRAND-NEW detached checkout in which ONLY `services/x402-official` ran `npm ci` (verified: no `dashboard/node_modules`, no root `node_modules`, `NODE_PATH` unset, isolation re-checked after the runs): typecheck clean; 354/354 vitest green x3 consecutive; `npm audit --audit-level=high` 0 vulnerabilities. Codex independently reproduced the same result at `1bf4890`. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+
+## Clean-install reproducibility (Codex blocker at `91b5498`) — fixed at `1bf4890`
+Codex proved `91b5498` was NOT clean-install reproducible: the cross-language
+suite imported `dashboard/app/_components/provenance.js` AS-IS, which contains
+JSX and React-component imports, so the claimed 354/354 silently depended on a
+sibling `dashboard/node_modules` (react/jsx-runtime) plus an undeclared
+esbuild import in `vitest.config.ts`. Fix (no React/dashboard dependency added
+to the service):
+- NEW `dashboard/app/_components/provenance-pure.js` — JSX-free and
+  dependency-free BY CONTRACT (header comment states the invariant); exact
+  extraction, zero logic changes, of `REQUIRED_CHECKS_BY_PROOF_TYPE`,
+  `PUBLIC_ITEM_REQUIRED_FIELDS`, `registryItemErrors`, `itemGreenVerified`,
+  `parseRfc3339Utc`.
+- `provenance.js` imports + re-exports the pure module; every dashboard
+  consumer keeps importing from `./provenance` unchanged; renderers untouched.
+- The cross-language suite imports ONLY `provenance-pure.js`; the vitest
+  esbuild/JSX transform was deleted entirely.
+- **Codex/integration invariant:** any future test or tool that wants the
+  dashboard's validation logic from outside `dashboard/` must import
+  `provenance-pure.js`, never `provenance.js`.
 
 ## Trusted client-identity throttling (final blocker) — at `96f0a1a`
 x402-official settlement throttling keys client identity on the trusted `X-Concordia-Client-IP` header, following the same G1 §12 convention as the SafePay provider. **DEPLOYMENT REQUIREMENT (Caddy, x402 vhost — Codex-owned): Caddy MUST remove any caller-supplied `X-Concordia-Client-IP` and overwrite it with the actual remote peer address on every request proxied to x402-official (mirror the existing SafePay vhost rule).** The service accepts this header ONLY because it is never host-exposed. Precedence: a present single well-formed IP token IS the identity (lowercased, IPv4-mapped-IPv6 collapsed); missing/malformed values fall back to the immediate socket peer. One shared fixed-window budget per identity covers BOTH `POST /settle` and paid `GET /resource/*`; unpaid 402 discovery never draws from it. The throttle map is strictly bounded (10,000 windows; expired-first then oldest-live eviction; the >10k-identities-per-window early-refresh trade-off is documented in source and accepted to guarantee bounded memory). Unlike SafePay's fuller §12 mechanism there is NO CIDR/HMAC proxy attestation here — if this service were ever host-exposed the header would be spoofable; the Caddy strip+overwrite is therefore a hard deployment gate.

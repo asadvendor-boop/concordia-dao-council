@@ -1,10 +1,10 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `72f1747` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` → `a78d103` dependency gate → `60ee252` exact-commit-audit predicates → `72f1747` flake fix; Playwright 100 x3 consecutive + contract 17/17 + `npm audit --audit-level=high` exit 0 at `72f1747`, verified from a clean `rm -rf node_modules && npm ci`)
+- Producer commit: `0dde3ae` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` → `a78d103` dependency gate → `60ee252` exact-commit-audit predicates → `72f1747` flake fix → `03863a4` final-audit fail-open closures → `1bf4890` provenance-pure extraction (re-exported, consumers unchanged) → `0dde3ae` two remaining e2e flake fixes; at `0dde3ae` from a fresh production build: Playwright 133 x3 consecutive + collapse test x25 + wp7-release-blockers x6 twice (210/210, 210/210) + contract 17/17 + `npm audit --audit-level=high` exit 0. Codex independently reproduced dashboard clean install/build with 132/133 at `1bf4890` — the single failure was the pre-hydration collapse click fixed in `0dde3ae`.)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §13 (provenance-aware proof registry), §12 (SafePay v2 / official x402)
-- Lane status: production build clean; 40/40 Playwright green x3 consecutive; `tests/test_dashboard_contract.py` 17/17 (fully migrated, nothing deleted); `git diff --check` clean.
+- Lane status: see the producer-commit line above for the CURRENT fresh counts (the per-pass sections below record each pass's own historical counts); `tests/test_dashboard_contract.py` fully migrated, nothing deleted; `git diff --check` clean.
 
 ## Correction pass (post NO-GO review) — what changed at `9d623a7`
 - Proposal-switch isolation (generation counter + AbortController; stale generations discarded whole); two-step demo capability flow wired and judge-reachable, reset removed; chain_valid three-state (missing = unknown, never green); approval authorized only from an affirmative selected-proposal decision with exact plan/action-hash binding; SafePay availability fallbacks removed; duplicate static H1 proof summaries removed from `/judge` + `/proof`; `provenance.js` now validates the FULL 29-field §13 item (enums, provenance/temporal/outcome binding, required-check set exactly-once, chronology, freshness normalization at the registry boundary).
@@ -31,7 +31,7 @@ All ten reproduced fail-open predicates are fixed: affirmative-decision-only app
 - `run.human_intervention === true` as the consumed-authorization observation.
 
 ## Public proof registry — `GET /proof-registry/v1/{proposal_id}` (Codex / WP4)
-Serve the exact `public_proof_registry_v1` shape: `{schema_version:1, generated_at, proposal_id, items:[...]}`, each item the full 28-field object with `checks:[{name, required, passed, source, observed_at, detail_code?}]`. Dashboard binding contracts:
+Serve the exact `public_proof_registry_v1` shape: `{schema_version:1, generated_at, proposal_id, items:[...]}`, each item the full 29-field object (`deployment_domain` included) with `checks:[{name, required, passed, source, observed_at, detail_code?}]`. Dashboard binding contracts:
 
 - **`exact_envelope_v3` item → V3Sequence** via required check names:
   `pre_quorum_finalize_reverted_with_code_8`, `post_quorum_mutated_envelope_reverted_with_code_10`, `exact_envelope_finalization_accepted`, `repeat_finalization_reverted_with_code_12`; plus OPTIONAL extra check `repeat_authorization_reverted_with_code_13` to light the code-13 `ActionAlreadyAuthorized` card.
@@ -50,11 +50,11 @@ These blocks are now strictly payload-gated (UI shows honest pending until serve
 ## Truth repairs delivered (source-verified by me)
 - No `duplicate_proof_rejected:true` anywhere in `app/`.
 - `DEFAULT_X402_PAYMENT_HASH` removed; only `HISTORICAL_SAFEPAY_PAYMENT_HASH` remains, rendered with explicit historical labels, backing no replay-safety claim.
-- `receiptVerified` = `verification?.recovered === true` (fail-open fixed).
+- `receiptVerified` derives from the explicit receipt-verification predicate `isReceiptVerified` (recovery is NOT verification — the earlier `recovered === true` rule was superseded at `c700fcc`).
 - §13 green predicate implemented; `expected_rejection` renders as positive proof; top-level booleans never green.
 - SafePay Lite vs official x402 permanently distinct panels; official x402 fail-closed pending.
 - 7/7-vs-6/6 agents-online inconsistency fixed (single `agentStatusInfo()` source).
-- Truthful `Seven council roles · Five reasoning agents + deterministic core + archivist` label + Chamber/Gateway/Core responsibilities panel preserved.
+- `Seven council roles` label + Chamber/Gateway/Core responsibilities panel preserved; agent-count wording is the corrected taxonomy (four deliberative agents + authorization-bound Locke + deterministic Core + non-reasoning archivist Wells — the original "Five reasoning agents" phrasing recorded here was wrong and is superseded).
 - `PROFILES.scribe` undefined-profile bug fixed to `PROFILES.wells`.
 - Pre-existing CSS cascade bug fixed (base rules after media blocks had disabled mobile overrides).
 
