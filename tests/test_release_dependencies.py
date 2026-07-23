@@ -40,12 +40,19 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
     )
 
     assert "pillow==12.3.0" in project["tool"]["uv"]["constraint-dependencies"]
+    assert "click==8.3.3" in project["tool"]["uv"]["constraint-dependencies"]
     pillows = [
         item
         for item in lock["package"]
         if item.get("name") == "pillow"
     ]
     assert [item.get("version") for item in pillows] == ["12.3.0"]
+    clicks = [
+        item
+        for item in lock["package"]
+        if item.get("name") == "click"
+    ]
+    assert [item.get("version") for item in clicks] == ["8.3.3"]
 
     assert package["overrides"]["brace-expansion"] == "1.1.16"
     brace = package_lock["packages"]["node_modules/brace-expansion"]
@@ -59,3 +66,16 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
         dashboard_lock["packages"]["node_modules/brace-expansion"]["version"]
         == "1.1.16"
     )
+
+
+def test_security_register_records_current_python_dependency_posture() -> None:
+    policy = (ROOT / ".github" / "SECURITY.md").read_text(encoding="utf-8")
+
+    assert "GHSA-47fr-3ffg-hgmw" in policy
+    assert "CVE-2026-7246" in policy
+    assert "GHSA-9f5j-8jwj-x28g" in policy
+    assert "GHSA-79v4-65xg-pq4g" in policy
+    assert "GHSA-h4gh-qq45-vh27" in policy
+    assert "GHSA-m959-cc7f-wv43" in policy
+    assert "No mainnet funds are at risk" not in policy
+    assert "Testnet-only deployment; no mainnet keys or funds" not in policy

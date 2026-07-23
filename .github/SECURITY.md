@@ -24,8 +24,10 @@ acknowledge reports promptly and will keep you informed of remediation progress.
 
 ## Supported Scope
 
-This is a Casper buildathon finals submission running on the Casper
-**Testnet**. No mainnet funds are at risk. The security-relevant surfaces are:
+The judged application and its automated `pycspr` release signer run on Casper
+**Testnet**. A separately versioned Mainnet canary is preparation-only until its
+own live gate passes; the Mainnet browser-wallet account is not mounted into,
+or available to, unattended automation. The security-relevant surfaces are:
 
 - the governance gateway API (`gateway/`), including the human-approval
   boundary and the judge-demo capability endpoints,
@@ -69,10 +71,12 @@ CodeQL/Dependabot gate re-runs against the integrated tree (`PENDING_PROOF`):
   (`gateway/app.py::_safe_data_path`), an anchored regex for the insecure-URL
   audit check, and bounded regex quantifiers plus an input cap for the
   allocation parser (`shared/proof_runtime.py`).
-- **3 High dependency advisories addressed by upgrade**: `langsmith` → 0.10.0
-  (SSRF, GHSA in TracingMiddleware) and `starlette` → 1.3.1 (form-limits
-  bypass; SSRF/UNC credential theft), verified against the test suite at the
-  time of the fix.
+- **High dependency advisories addressed by upgrade**: `langsmith` → 0.10.0
+  (SSRF, GHSA in TracingMiddleware), `starlette` → 1.3.1 (form-limits
+  bypass; SSRF/UNC credential theft), and `click` → 8.3.3
+  (`GHSA-47fr-3ffg-hgmw` / `CVE-2026-7246`), verified against the test suite
+  at the time of each fix. Concordia does not call the vulnerable
+  `click.edit()` API, but the compatible patched release is pinned anyway.
 
 ## Dismissed Findings Register
 
@@ -82,9 +86,13 @@ installable fix exists. Each is revisited when its upstream constraint lifts.
 | Advisory | Package | Severity | Why it cannot be fixed today | Risk assessment |
 |---|---|---|---|---|
 | GHSA-rc23-xxgq-x27g | `wee_alloc` (Rust, contract build) | Critical (unmaintained) | No patched release exists. It is a build-time WASM allocator; swapping it changes the compiled WASM and would invalidate the deployed testnet contract package hash currently under judging. | No runtime untrusted-input path; build-time only. Replace before any mainnet build. |
-| GHSA-537c-gmf6-5ccf | `cryptography` | High | Transitive via `pycspr==1.2.0` — the **latest** Casper Python SDK — which pins `cryptography>=42.0.2,<43.0.0`; the fixed 48.0.1 is uninstallable (verified: dependency resolution fails on the constraint). | Testnet-only deployment; no mainnet keys or funds. Revisit when pycspr lifts its cap. |
-| GHSA-r6ph-v2qm-q3c2 | `cryptography` | High | Same `pycspr` cap; fixed 46.0.5+ uninstallable. | Same as above. |
-| GHSA-wj6h-64fc-37mp | `ecdsa` (Minerva) | High | No upstream fix has ever shipped; transitive via `pycspr`. | The Minerva attack requires a local timing side channel on P-256 signing — outside this testnet proof system's threat model. Revisit if a patched release ships. |
+| GHSA-537c-gmf6-5ccf | `cryptography` | High | Transitive via `pycspr==1.2.0` — the latest Casper Python SDK — which pins `cryptography>=42.0.2,<43.0.0`; the fixed 48.0.1 is resolver-incompatible with that cap. | The affected path requires an attacker-controlled DER primitive larger than 2 GiB. Concordia's release key loaders cap trusted operator PEM files at 64 KiB, and x402 uses fixed-size raw keys/signatures rather than DER. |
+| GHSA-r6ph-v2qm-q3c2 | `cryptography` | High | Same `pycspr` cap; the fixed 46.0.5+ cannot be installed with `pycspr==1.2.0`. | The affected APIs require SECT curves or generic DER/PEM public-key loading. Concordia's payment path uses raw Ed25519 or SECP256K1 keys and no SECT curve. |
+| GHSA-m959-cc7f-wv43, GHSA-79v4-65xg-pq4g, GHSA-h4gh-qq45-vh27 | `cryptography` | High/Medium | The available fixes begin above the `<43.0.0` cap imposed by `pycspr==1.2.0`. | These findings concern X.509 verification, TLS raw-public-key processing, or OpenSSL expected-name checks. Concordia does not expose those APIs in its agent, release, or payment paths. |
+| GHSA-wj6h-64fc-37mp | `ecdsa` (Minerva) | High | No upstream fix has shipped; `ecdsa` is transitive via `pycspr`. | The advisory concerns P-256 signing; `pycspr` hardcodes deterministic SECP256K1 signing. |
+| GHSA-9f5j-8jwj-x28g | `ecdsa` | High | The fixed 0.19.2 is resolver-incompatible with `pycspr==1.2.0`, which pins `ecdsa>=0.18.0,<0.19.0`. | The relevant malformed-DER path is bypassed by the finals release loaders, which accept bounded trusted PEM input through `cryptography` and pass a raw 32-byte secret to `pycspr`. The legacy fallback is operator-secret-only, not network input. |
 
 Medium/low advisories on the same capped dependencies inherit the same
-constraint and are tracked in the repository's Security tab.
+constraint and are tracked in the repository's Security tab. These waivers are
+re-evaluated when the Casper Python SDK lifts its dependency caps; they are not
+claims that the packages themselves are vulnerability-free.
