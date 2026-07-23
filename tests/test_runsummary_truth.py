@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from gateway.app import _approval_ui_is_configured, _run_receipt_is_verified
+from gateway.app import (
+    _approval_ui_is_configured,
+    _response_plan_public_bindings,
+    _run_receipt_is_verified,
+)
+from shared.approval import compute_action_hash, compute_plan_hash, normalize_plan_for_hash
 
 
 class _RecordingRepository:
@@ -77,3 +82,41 @@ def test_approval_ui_configuration_requires_all_five_file_secrets(
 
     monkeypatch.delenv("APPROVAL_UI_CSRF_SECRET_FILE")
     assert not _approval_ui_is_configured()
+
+
+def test_public_response_plan_exposes_independently_recomputable_approval_bindings() -> None:
+    plan = {
+        "card_type": "ResponsePlan",
+        "proposal_id": "DAO-PROP-TEST",
+        "revision": 2,
+        "envelopes": [
+            {
+                "action_id": "rebalance_liquidity_allocation",
+                "target": "treasury",
+                "params": {"allocation_bps": 800},
+            }
+        ],
+        "card_hash": "sealed-card-hash",
+        "previous_card_hash": "previous-card-hash",
+        "sequence_number": 7,
+    }
+
+    bindings = _response_plan_public_bindings(plan)
+
+    assert bindings == {
+        "approval_binding_hash": compute_plan_hash(normalize_plan_for_hash(plan)),
+        "action_binding_hash": compute_action_hash(plan["envelopes"]),
+    }
+
+
+def test_public_response_plan_binding_ignores_derived_fields_and_fails_closed_without_actions() -> None:
+    plan = {
+        "card_type": "ResponsePlan",
+        "proposal_id": "DAO-PROP-TEST",
+        "revision": 1,
+        "envelopes": [],
+        "approval_binding_hash": "caller-supplied-value",
+        "action_binding_hash": "caller-supplied-value",
+    }
+
+    assert _response_plan_public_bindings(plan) == {}

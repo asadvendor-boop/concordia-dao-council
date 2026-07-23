@@ -81,7 +81,11 @@ from shared.proof_registry import (
     RegistryNotFound,
 )
 from gateway.auth import validate_agent_identity_configuration
-from shared.approval import compute_action_hash
+from shared.approval import (
+    compute_action_hash,
+    compute_plan_hash,
+    normalize_plan_for_hash,
+)
 from shared.runtime_secrets import read_secret, read_secret_file_only
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
 from shared.x402_payments import (
@@ -425,6 +429,30 @@ def _approval_ui_is_configured() -> bool:
             "APPROVAL_UI_CSRF_SECRET",
         )
     )
+
+
+def _response_plan_public_bindings(plan_data: dict[str, Any]) -> dict[str, str]:
+    """Derive the exact approval hashes from the stored plan for public verification."""
+
+    plan = dict(plan_data)
+    plan.pop("approval_binding_hash", None)
+    plan.pop("action_binding_hash", None)
+    envelopes = plan.get("envelopes")
+    if (
+        not isinstance(envelopes, list)
+        or not envelopes
+        or any(not isinstance(envelope, dict) for envelope in envelopes)
+    ):
+        return {}
+    try:
+        return {
+            "approval_binding_hash": compute_plan_hash(
+                normalize_plan_for_hash(plan)
+            ),
+            "action_binding_hash": compute_action_hash(envelopes),
+        }
+    except (TypeError, ValueError):
+        return {}
 
 
 @asynccontextmanager
@@ -1047,6 +1075,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "name": "Concordia Core",
                 "role": "Deterministic Control Plane",
             })
+            public_data = public_evidence_value(data)
+            if row["card_type"] == "ResponsePlan":
+                public_data.update(_response_plan_public_bindings(data))
             parsed_cards.append({
                 "sequence": row["sequence_number"],
                 "card_type": row["card_type"],
@@ -1054,7 +1085,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "agent": persona,
                 "hash": row["card_hash"],
                 "published": row["published_at"] is not None,
-                "data": public_evidence_value(data),
+                "data": public_data,
             })
         role_sequence = [card["role"] for card in parsed_cards]
         handoffs = [
