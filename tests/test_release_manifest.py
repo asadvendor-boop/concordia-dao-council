@@ -2631,6 +2631,72 @@ def _write_organizer_link_audit(
         "links": [{"link_id": link_id} for link_id in known_link_ids],
     }
     _write(repository, relative, document)
+    invocation_relative = (
+        release_manifest.ORGANIZER_G12_INVOCATION_PATH
+        if relative == release_manifest.ORGANIZER_G12_AUDIT_PATH
+        else release_manifest.ORGANIZER_G13_INVOCATION_PATH
+    )
+    request_raw = (
+        repository / release_manifest.ORGANIZER_LINK_REQUEST_PATH
+    ).read_bytes()
+    audit_raw = (repository / relative).read_bytes()
+    _, host_toolchain_bound, _ = release_manifest._host_toolchain_binding(
+        repository
+    )
+    invocation = {
+        "schema_version": (
+            release_manifest.ORGANIZER_LINK_INVOCATION_SCHEMA_VERSION
+        ),
+        "phase": (
+            "G12"
+            if relative == release_manifest.ORGANIZER_G12_AUDIT_PATH
+            else "G13"
+        ),
+        "status": "passed",
+        "collection_mode": "live_incognito",
+        "started_at": started_at,
+        "ended_at": captured_at,
+        "command": {
+            "argv": [
+                "node",
+                release_manifest.ORGANIZER_LINK_RUNNER_PATH,
+                "--input",
+                release_manifest.ORGANIZER_LINK_REQUEST_PATH,
+            ],
+            "exit_code": 0,
+            "fixture_argument_present": False,
+            "stdout_sha256": hashlib.sha256(audit_raw).hexdigest(),
+            "stderr_sha256": hashlib.sha256(b"").hexdigest(),
+            "tool_identity_sha256": "41" * 32,
+            "command_assets_sha256": "42" * 32,
+        },
+        "request": {
+            "path": release_manifest.ORGANIZER_LINK_REQUEST_PATH,
+            "sha256": hashlib.sha256(request_raw).hexdigest(),
+        },
+        "source_bindings": [
+            {
+                "path": source,
+                "sha256": hashlib.sha256(
+                    (repository / source).read_bytes()
+                ).hexdigest(),
+            }
+            for source in (
+                release_manifest.ORGANIZER_LINK_CORE_PATH,
+                release_manifest.ORGANIZER_LINK_RUNNER_PATH,
+            )
+        ],
+        "host_toolchain": {
+            "path": host_toolchain_bound.path,
+            "sha256": host_toolchain_bound.sha256,
+            "artifact_commit": host_toolchain_bound.artifact_commit,
+        },
+        "audit": {
+            "path": relative,
+            "sha256": hashlib.sha256(audit_raw).hexdigest(),
+        },
+    }
+    _write(repository, invocation_relative, invocation)
     return (repository / relative).read_bytes()
 
 
@@ -6481,6 +6547,8 @@ def test_cli_has_fixed_capture_assemble_and_g13_commands_without_operator_status
     assert b"capture" in help_result.stdout
     assert b"assemble" in help_result.stdout
     assert b"prepare-host-toolchain" in help_result.stdout
+    assert b"capture-organizer-g12" in help_result.stdout
+    assert b"capture-organizer-g13" in help_result.stdout
     assert b"verify-command-gates" in help_result.stdout
     assert b"verify-g13" in help_result.stdout
     rejected = subprocess.run(
@@ -6539,6 +6607,8 @@ def test_cli_absolute_path_bootstraps_its_own_repository_without_cwd_or_pythonpa
         "    raise ReleaseManifestError('not used')\n"
         "def capture_release_observations_once(root):\n"
         "    return ()\n"
+        "def capture_organizer_link_audit_once(root, *, phase):\n"
+        "    raise ReleaseManifestError('not used')\n"
         "def assemble_release_manifest_once(root):\n"
         "    raise ReleaseManifestError('not used')\n"
         "def verify_g13_submission_receipt(root):\n"

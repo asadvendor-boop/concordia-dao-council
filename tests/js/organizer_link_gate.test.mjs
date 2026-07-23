@@ -207,6 +207,11 @@ function passingRouteObservation(spec) {
     rendered_download_controls: [],
     client_downloads: [],
     blocked_websockets: [],
+    document: {
+      title_sha256: "f".repeat(64),
+      main_count: 1,
+      heading_count: 1,
+    },
   };
 }
 
@@ -293,6 +298,28 @@ test("route observations fail closed on query loss, wrong tabs, browser errors, 
   expectFailure("WEBSOCKET_ATTEMPT", () =>
     gate.validateRouteObservation(overview, websocketAttempt),
   );
+
+  const contradictoryTab = passingRouteObservation(overview);
+  contradictoryTab.active_proof_tab = "safety";
+  expectFailure("PROOF_TAB_NOT_ACTIVE", () =>
+    gate.validateRouteObservation(overview, contradictoryTab),
+  );
+
+  const malformedControls = passingRouteObservation(overview);
+  malformedControls.rendered_download_controls = [
+    { control_id: { value: "export" }, label: { value: "Export" } },
+  ];
+  malformedControls.client_downloads = [
+    {
+      control_id: { value: "export" },
+      suggested_filename: "export.json",
+      body_bytes: 32,
+      body_sha256: "f".repeat(64),
+    },
+  ];
+  expectFailure("OBSERVATION_FIELDS_INVALID", () =>
+    gate.validateRouteObservation(overview, malformedControls),
+  );
 });
 
 test("link observations require documented redirects, successful bytes, and real documentation anchors", () => {
@@ -310,6 +337,10 @@ test("link observations require documented redirects, successful bytes, and real
     body_bytes: 128,
     body_sha256: "c".repeat(64),
     anchor_found: null,
+    concordia_identity: null,
+    kind: "known_external",
+    sources: ["known:github_repository"],
+    content_type: "text/html",
   };
   assert.deepEqual(
     gate.validateLinkObservation(plainSpec, passing),
@@ -380,6 +411,28 @@ test("www has one exact tracked 308 to the apex and both surfaces prove Concordi
       to: "https://concordiadao.xyz/",
       status: 308,
     },
+    {
+      from: "https://concordiadao.xyz/",
+      to: "https://concordiadao.xyz/dashboard/",
+      status: 302,
+    },
+    {
+      from: "https://concordiadao.xyz/dashboard/",
+      to: "https://concordiadao.xyz/dashboard",
+      status: 308,
+    },
+  ]);
+  assert.deepEqual(apex.allowed_redirects, [
+    {
+      from: "https://concordiadao.xyz/",
+      to: "https://concordiadao.xyz/dashboard/",
+      status: 302,
+    },
+    {
+      from: "https://concordiadao.xyz/dashboard/",
+      to: "https://concordiadao.xyz/dashboard",
+      status: 308,
+    },
   ]);
   assert.deepEqual(www.identity, { kind: "concordia_home" });
   assert.deepEqual(apex.identity, { kind: "concordia_home" });
@@ -387,7 +440,7 @@ test("www has one exact tracked 308 to the apex and both surfaces prove Concordi
   const observation = {
     link_id: www.link_id,
     requested_url: www.url,
-    effective_url: "https://concordiadao.xyz/",
+    effective_url: "https://concordiadao.xyz/dashboard",
     status: 200,
     redirects: structuredClone(www.allowed_redirects),
     body_bytes: 128,
@@ -398,11 +451,48 @@ test("www has one exact tracked 308 to the apex and both surfaces prove Concordi
       title_match: true,
       visible_marker_match: true,
     },
+    kind: "known_external",
+    sources: ["known:custom_www"],
+    content_type: "text/html",
   };
   assert.equal(gate.validateLinkObservation(www, observation).status, 200);
   observation.concordia_identity.visible_marker_match = false;
   expectFailure("CONCORDIA_IDENTITY_MISMATCH", () =>
     gate.validateLinkObservation(www, observation),
+  );
+});
+
+test("route and link observations reject undeclared nested fields", () => {
+  const request = expectedRequest();
+  const inventory = gate.buildInventory();
+  const route = passingRouteObservation(inventory.dashboard_routes[0]);
+  route.route_identity.unexpected = true;
+  expectFailure("ROUTE_DOM_IDENTITY_MISMATCH", () =>
+    gate.validateRouteObservation(inventory.dashboard_routes[0], route),
+  );
+
+  const spec = request.known_links[0];
+  const link = {
+    link_id: spec.link_id,
+    requested_url: spec.url,
+    effective_url: spec.allowed_redirects.at(-1)?.to ?? spec.url,
+    status: 200,
+    redirects: structuredClone(spec.allowed_redirects),
+    body_bytes: 128,
+    body_sha256: "a".repeat(64),
+    anchor_found: null,
+    concordia_identity: {
+      kind: "concordia_home",
+      title_match: true,
+      visible_marker_match: true,
+      unexpected: true,
+    },
+    kind: "known_external",
+    sources: [`known:${spec.link_id}`],
+    content_type: "text/html",
+  };
+  expectFailure("CONCORDIA_IDENTITY_MISMATCH", () =>
+    gate.validateLinkObservation(spec, link),
   );
 });
 
@@ -428,6 +518,9 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
             title_match: true,
             visible_marker_match: true,
           },
+    kind: "known_external",
+    sources: [`known:${spec.link_id}`],
+    content_type: "text/html",
   }));
   const result = gate.buildResult({
     request,
@@ -550,6 +643,10 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
           body_bytes: 32,
           body_sha256: "f".repeat(64),
           anchor_found: null,
+          concordia_identity: null,
+          kind: "first_party_anchor",
+          sources: ["overview:first_party_anchor"],
+          content_type: "text/html",
         },
       ],
       runtime: result.runtime,

@@ -37,12 +37,12 @@ const HELP = `Usage:
   node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json --fixture tests/fixtures/organizer-link-gate-pass.json
 
 The collector emits exactly one canonical JSON audit to stdout. Redirect a
-live-incognito G12 run to release/organizer/G12_RENDERED_LINK_AUDIT.json and a
-separate live-incognito G13 run to
-release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json only on an exact clean release
-candidate. Fixture mode is deterministic, offline CI validation only and never
-qualifies as release evidence. No browser state or other local artifact is
-written.
+live-incognito run only for diagnostics. Authoritative G12/G13 evidence must be
+created by build_release_manifest.py capture-organizer-g12 or
+capture-organizer-g13, which binds the no-fixture invocation and audit in one
+immutable batch. Fixture mode is deterministic, offline CI validation only and
+never qualifies as release evidence. No browser state or other local artifact
+is written by this runner.
 `;
 const FIXTURE_SCHEMA = "concordia.organizer_rendered_link_fixture.v1";
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -888,6 +888,13 @@ function fixtureRoute(spec, overrides, knownIds) {
     rendered_download_controls: [],
     client_downloads: [],
     blocked_websockets: [],
+    document: {
+      title_sha256: digestBytes(
+        Buffer.from(`fixture:${spec.route_id}`, "utf8"),
+      ),
+      main_count: 1,
+      heading_count: 1,
+    },
     ...fixtureOverride(
       overrides,
       spec.route_id,
@@ -918,8 +925,10 @@ function fixtureLink(spec, overrides, knownIds) {
             title_match: true,
             visible_marker_match: true,
           },
-    kind: "fixture",
-    sources: [`known:${spec.link_id}`],
+    kind: spec.kind ?? "known_external",
+    sources: structuredClone(
+      spec.sources ?? [`known:${spec.link_id}`],
+    ),
     content_type: "text/html; fixture=true",
     ...fixtureOverride(
       overrides,

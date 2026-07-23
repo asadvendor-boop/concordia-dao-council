@@ -7,7 +7,18 @@
     {
       "link_id": "custom_apex",
       "url": "https://concordiadao.xyz/",
-      "allowed_redirects": [],
+      "allowed_redirects": [
+        {
+          "from": "https://concordiadao.xyz/",
+          "to": "https://concordiadao.xyz/dashboard/",
+          "status": 302
+        },
+        {
+          "from": "https://concordiadao.xyz/dashboard/",
+          "to": "https://concordiadao.xyz/dashboard",
+          "status": 308
+        }
+      ],
       "identity": {
         "kind": "concordia_home"
       }
@@ -19,6 +30,16 @@
         {
           "from": "https://www.concordiadao.xyz/",
           "to": "https://concordiadao.xyz/",
+          "status": 308
+        },
+        {
+          "from": "https://concordiadao.xyz/",
+          "to": "https://concordiadao.xyz/dashboard/",
+          "status": 302
+        },
+        {
+          "from": "https://concordiadao.xyz/dashboard/",
+          "to": "https://concordiadao.xyz/dashboard",
           "status": 308
         }
       ],

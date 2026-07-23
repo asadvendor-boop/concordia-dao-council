@@ -39,7 +39,18 @@ function knownLink(url, allowedRedirects = [], identity = null) {
 export const KNOWN_LINKS = Object.freeze({
   custom_apex: knownLink(
     "https://concordiadao.xyz/",
-    [],
+    [
+      {
+        from: "https://concordiadao.xyz/",
+        to: "https://concordiadao.xyz/dashboard/",
+        status: 302,
+      },
+      {
+        from: "https://concordiadao.xyz/dashboard/",
+        to: "https://concordiadao.xyz/dashboard",
+        status: 308,
+      },
+    ],
     { kind: "concordia_home" },
   ),
   custom_www: knownLink(
@@ -48,6 +59,16 @@ export const KNOWN_LINKS = Object.freeze({
       {
         from: "https://www.concordiadao.xyz/",
         to: "https://concordiadao.xyz/",
+        status: 308,
+      },
+      {
+        from: "https://concordiadao.xyz/",
+        to: "https://concordiadao.xyz/dashboard/",
+        status: 302,
+      },
+      {
+        from: "https://concordiadao.xyz/dashboard/",
+        to: "https://concordiadao.xyz/dashboard",
         status: 308,
       },
     ],
@@ -147,6 +168,24 @@ function exactKeys(value, keys, code, label) {
     actual.some((key, index) => key !== expected[index])
   ) {
     fail(code, `${label} has a non-exact field set`);
+  }
+}
+
+function exactArrayRows(value, keys, code, label) {
+  if (!Array.isArray(value)) {
+    fail(code, `${label} must be an array`);
+  }
+  for (const [index, row] of value.entries()) {
+    exactKeys(row, keys, code, `${label}[${index}]`);
+  }
+}
+
+function exactStringArray(value, code, label) {
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== "string")
+  ) {
+    fail(code, `${label} must contain only strings`);
   }
 }
 
@@ -480,7 +519,98 @@ function validateRouteIdentity(spec, observation) {
   }
 }
 
+const ROUTE_OBSERVATION_FIELDS = Object.freeze([
+  "route_id",
+  "requested_url",
+  "final_url",
+  "status",
+  "redirects",
+  "active_proof_tab",
+  "console_errors",
+  "page_errors",
+  "blocked_non_read_requests",
+  "first_party_failures",
+  "rendered_links",
+  "rendered_assets",
+  "document_ids",
+  "document_names",
+  "route_identity",
+  "rendered_download_controls",
+  "client_downloads",
+  "blocked_websockets",
+  "document",
+]);
+const LINK_OBSERVATION_FIELDS = Object.freeze([
+  "link_id",
+  "requested_url",
+  "effective_url",
+  "status",
+  "redirects",
+  "body_bytes",
+  "body_sha256",
+  "anchor_found",
+  "concordia_identity",
+  "kind",
+  "sources",
+  "content_type",
+]);
+
+function validateRedirectRows(value, label) {
+  exactArrayRows(
+    value,
+    ["from", "to", "status"],
+    "OBSERVATION_FIELDS_INVALID",
+    label,
+  );
+  for (const [index, row] of value.entries()) {
+    strictPublicUrl(row.from, `${label}[${index}] from`);
+    strictPublicUrl(row.to, `${label}[${index}] to`);
+    if (
+      !Number.isInteger(row.status) ||
+      row.status < 300 ||
+      row.status >= 400
+    ) {
+      fail(
+        "OBSERVATION_FIELDS_INVALID",
+        `${label}[${index}] status is not a redirect`,
+      );
+    }
+  }
+}
+
+function validateRenderedItems(value, label) {
+  exactArrayRows(
+    value,
+    ["href", "element_kind", "download"],
+    "OBSERVATION_FIELDS_INVALID",
+    label,
+  );
+  for (const [index, row] of value.entries()) {
+    if (
+      !["anchor", "asset"].includes(row.element_kind) ||
+      typeof row.download !== "boolean"
+    ) {
+      fail(
+        "OBSERVATION_FIELDS_INVALID",
+        `${label}[${index}] metadata is invalid`,
+      );
+    }
+  }
+}
+
 function validateClientDownloads(spec, observation) {
+  exactArrayRows(
+    observation.rendered_download_controls,
+    ["control_id", "label"],
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} rendered download controls`,
+  );
+  exactArrayRows(
+    observation.client_downloads,
+    ["control_id", "suggested_filename", "body_bytes", "body_sha256"],
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} client downloads`,
+  );
   if (
     !Array.isArray(observation.rendered_download_controls) ||
     !Array.isArray(observation.client_downloads)
@@ -496,6 +626,19 @@ function validateClientDownloads(spec, observation) {
   const observedIds = observation.client_downloads.map(
     (row) => row.control_id,
   );
+  for (const row of observation.rendered_download_controls) {
+    if (
+      typeof row.control_id !== "string" ||
+      row.control_id.trim() === "" ||
+      typeof row.label !== "string" ||
+      row.label.trim() === ""
+    ) {
+      fail(
+        "OBSERVATION_FIELDS_INVALID",
+        `${spec.route_id} has invalid rendered download controls`,
+      );
+    }
+  }
   if (
     expectedIds.length !== new Set(expectedIds).size ||
     observedIds.length !== new Set(observedIds).size ||
@@ -525,6 +668,12 @@ function validateClientDownloads(spec, observation) {
 }
 
 export function validateRouteObservation(spec, observation) {
+  exactKeys(
+    observation,
+    ROUTE_OBSERVATION_FIELDS,
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} route observation`,
+  );
   if (
     observation?.route_id !== spec.route_id ||
     observation.requested_url !== spec.url
@@ -541,21 +690,56 @@ export function validateRouteObservation(spec, observation) {
   if (!redirectsMatch(observation.redirects, spec.allowed_redirects)) {
     fail("UNDOCUMENTED_REDIRECT", `${spec.route_id} redirected unexpectedly`);
   }
+  validateRedirectRows(observation.redirects, `${spec.route_id} redirects`);
   const finalUrl = validateQuery(spec, observation.final_url);
   const expectedPath = new URL(spec.url).pathname;
   if (finalUrl.origin !== APP_ORIGIN || finalUrl.pathname !== expectedPath) {
     fail("ROUTE_TARGET_MISMATCH", `${spec.route_id} changed route target`);
   }
-  if (
-    spec.active_proof_tab !== null &&
-    observation.active_proof_tab !== spec.active_proof_tab
-  ) {
+  if (observation.active_proof_tab !== spec.active_proof_tab) {
     fail(
       "PROOF_TAB_NOT_ACTIVE",
       `${spec.route_id} did not activate ${spec.active_proof_tab}`,
     );
   }
   validateRouteIdentity(spec, observation);
+  validateRenderedItems(
+    observation.rendered_links,
+    `${spec.route_id} rendered links`,
+  );
+  validateRenderedItems(
+    observation.rendered_assets,
+    `${spec.route_id} rendered assets`,
+  );
+  exactStringArray(
+    observation.document_ids,
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} document IDs`,
+  );
+  exactStringArray(
+    observation.document_names,
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} document names`,
+  );
+  exactKeys(
+    observation.document,
+    ["title_sha256", "main_count", "heading_count"],
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.route_id} document summary`,
+  );
+  if (
+    typeof observation.document.title_sha256 !== "string" ||
+    !HEX_64.test(observation.document.title_sha256) ||
+    !Number.isInteger(observation.document.main_count) ||
+    observation.document.main_count < 0 ||
+    !Number.isInteger(observation.document.heading_count) ||
+    observation.document.heading_count < 0
+  ) {
+    fail(
+      "OBSERVATION_FIELDS_INVALID",
+      `${spec.route_id} document summary is invalid`,
+    );
+  }
   validateClientDownloads(spec, observation);
   if (!Array.isArray(observation.blocked_websockets)) {
     fail(
@@ -592,6 +776,12 @@ export function validateRouteObservation(spec, observation) {
 }
 
 export function validateLinkObservation(spec, observation) {
+  exactKeys(
+    observation,
+    LINK_OBSERVATION_FIELDS,
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.link_id} link observation`,
+  );
   if (
     observation?.link_id !== spec.link_id ||
     observation.requested_url !== spec.url
@@ -611,6 +801,7 @@ export function validateLinkObservation(spec, observation) {
   ) {
     fail("UNDOCUMENTED_REDIRECT", `${spec.link_id} redirected unexpectedly`);
   }
+  validateRedirectRows(observation.redirects, `${spec.link_id} redirects`);
   const expectedFinal =
     spec.allowed_redirects.at(-1)?.to ?? spec.url;
   if (observation.effective_url !== expectedFinal) {
@@ -665,6 +856,26 @@ export function validateLinkObservation(spec, observation) {
     fail(
       "CONCORDIA_IDENTITY_MISMATCH",
       `${spec.link_id} has unexpected identity evidence`,
+    );
+  }
+  exactStringArray(
+    observation.sources,
+    "OBSERVATION_FIELDS_INVALID",
+    `${spec.link_id} sources`,
+  );
+  const expectedKind = spec.kind ?? "known_external";
+  const expectedSources = spec.sources ?? [`known:${spec.link_id}`];
+  if (
+    observation.kind !== expectedKind ||
+    canonicalJson(observation.sources) !== canonicalJson(expectedSources) ||
+    typeof observation.content_type !== "string" ||
+    observation.content_type.trim() === "" ||
+    observation.content_type.length > 256 ||
+    ![true, false, null].includes(observation.anchor_found)
+  ) {
+    fail(
+      "OBSERVATION_FIELDS_INVALID",
+      `${spec.link_id} link metadata is invalid`,
     );
   }
   return clone(observation);
@@ -752,6 +963,8 @@ export function buildResult({
         link_id: row.link_id,
         url: row.requested_url,
         allowed_redirects: [],
+        kind: row.kind,
+        sources: row.sources,
       };
       return validateLinkObservation(spec, row);
     });

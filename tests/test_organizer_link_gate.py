@@ -22,7 +22,7 @@ def test_failure_first_node_contract_suite_passes() -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "# pass 12" in completed.stdout
+    assert "# pass 13" in completed.stdout
     assert "# fail 0" in completed.stdout
 
 
@@ -58,14 +58,19 @@ def test_frozen_request_and_core_cover_the_organizer_census() -> None:
 
 def test_organizer_gate_is_invoked_before_both_g12_and_g13() -> None:
     notes = DOCUMENTATION.read_text()
-    command = (
-        "node scripts/run_organizer_link_gate.mjs "
-        "--input handoff/ORGANIZER_LINK_GATE_REQUEST.json"
-    )
 
-    assert notes.count(command) >= 2
+    assert (
+        "python scripts/build_release_manifest.py capture-organizer-g12"
+        in notes
+    )
+    assert (
+        "python scripts/build_release_manifest.py capture-organizer-g13"
+        in notes
+    )
     assert "release/organizer/G12_RENDERED_LINK_AUDIT.json" in notes
     assert "release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json" in notes
+    assert "no-fixture invocation receipt" in notes
+    assert "shell redirection into either release path" in notes
     assert "before G12" in notes
     assert "before G13" in notes
     assert "does not replace or weaken G12 or G13" in notes

@@ -19,6 +19,7 @@ from shared.release_manifest import (  # noqa: E402
     RELEASE_MANIFEST_PATH,
     ReleaseManifestError,
     assemble_release_manifest_once,
+    capture_organizer_link_audit_once,
     capture_release_observations_once,
     prepare_host_toolchain_receipt_once,
     run_committed_python_artifact_verifier,
@@ -34,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
         "prepare-host-toolchain",
         "verify-command-gates",
         "capture",
+        "capture-organizer-g12",
+        "capture-organizer-g13",
         "assemble",
         "verify-g13",
     ):
@@ -81,6 +84,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = {
                 "command": "capture",
                 "receipt_count": len(paths),
+                "status": "captured",
+            }
+        elif args.command in {
+            "capture-organizer-g12",
+            "capture-organizer-g13",
+        }:
+            phase = "G12" if args.command.endswith("g12") else "G13"
+            audit, invocation = capture_organizer_link_audit_once(
+                args.repository_root,
+                phase=phase,
+            )
+            result = {
+                "command": args.command,
+                "phase": phase,
+                "audit_path": audit.relative_to(args.repository_root).as_posix(),
+                "audit_sha256": hashlib.sha256(audit.read_bytes()).hexdigest(),
+                "invocation_path": invocation.relative_to(
+                    args.repository_root
+                ).as_posix(),
+                "invocation_sha256": hashlib.sha256(
+                    invocation.read_bytes()
+                ).hexdigest(),
                 "status": "captured",
             }
         elif args.command == "assemble":

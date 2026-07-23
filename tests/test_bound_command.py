@@ -79,6 +79,8 @@ def test_fixed_tool_contract_is_immutable_and_exposes_host_receipt_schema() -> N
         "release/g13/",
     )
     assert release_gate_contract.BOUND_HOST_AUTHORITY_DESCENDANT_PATHS == (
+        "release/organizer/G12_RENDERED_LINK_AUDIT.json",
+        "release/organizer/G12_RENDERED_LINK_INVOCATION.json",
         "release/RELEASE_MANIFEST.json",
         "release/G13_SUBMISSION_RECEIPT.json",
     )

@@ -41,8 +41,9 @@ initial-round video, socials, and every historical Casper receipt linked to
 judges. The collector also discovers rendered anchors, client- and server-side
 downloads, and every rendered asset from the DOM. It binds exact route and tab
 identity, exact query-parameter multisets, same-origin cross-document
-fragments, the tracked `www` 308 to the Concordia apex, and blocks WebSockets
-before connection while retaining the attempt as failing evidence.
+fragments, the tracked `www` 308 to the Concordia apex followed by the frozen
+Next root redirects, and blocks WebSockets before connection while retaining
+the attempt as failing evidence.
 
 It fails closed on any non-read application request, invalid URL, doubled
 `/dashboard/dashboard` base path, missing document anchor, undocumented
@@ -54,31 +55,28 @@ their exact source, destination, and status are committed in
 Run this against the exact deployed release-candidate SHA before G12:
 
 ```bash
-mkdir -p release/organizer
-node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
-  > release/organizer/G12_RENDERED_LINK_AUDIT.json
-node scripts/verify_organizer_link_audit.mjs \
-  release/organizer/G12_RENDERED_LINK_AUDIT.json
+python scripts/build_release_manifest.py capture-organizer-g12
 ```
 
-The stdout document is canonical JSON and is the machine-readable G12 link
-receipt. Commit it with the exact release candidate and bind that commit in the
-normal release manifest. A failed collector writes no success document.
+This fixed capture command publishes both the canonical machine-readable G12
+audit at `release/organizer/G12_RENDERED_LINK_AUDIT.json` and its bound
+no-fixture invocation receipt. Commit both with the exact
+release candidate and bind that commit in the normal release manifest. Direct
+shell redirection into either release path is not authoritative evidence. A
+failed collector publishes neither file.
 
 After the new video and DoraHacks edit, run the independent organizer crawl
 again before G13; G13's existing video/embed/link receipt still runs afterward:
 
 ```bash
-node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
-  > release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json
-node scripts/verify_organizer_link_audit.mjs \
-  release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json
+python scripts/build_release_manifest.py capture-organizer-g13
 node scripts/run_g13_submission_gate.mjs --help
 ```
 
 The G13 result is separately named so the committed G12 audit is never silently
-overwritten. Both outputs are generated observations; neither may be
-hand-edited into a pass.
+overwritten at `release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json`. Both
+audit/invocation pairs are generated observations; none may
+be hand-edited into a pass.
 
 For deterministic offline CI, replay the same inventory and validators with
 the committed synthetic fixture:

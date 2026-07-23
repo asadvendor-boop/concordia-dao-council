@@ -176,6 +176,9 @@ G13_BROWSER_TRACE_PATH = "release/g13/BROWSER_TRACE.json"
 ORGANIZER_LINK_AUDIT_SCHEMA_VERSION = (
     "concordia.organizer_rendered_link_audit.v2"
 )
+ORGANIZER_LINK_INVOCATION_SCHEMA_VERSION = (
+    "concordia.organizer_rendered_link_invocation.v1"
+)
 ORGANIZER_LINK_REQUEST_PATH = "handoff/ORGANIZER_LINK_GATE_REQUEST.json"
 ORGANIZER_LINK_CORE_PATH = "scripts/organizer-link-gate-core.mjs"
 ORGANIZER_LINK_RUNNER_PATH = "scripts/run_organizer_link_gate.mjs"
@@ -185,6 +188,12 @@ ORGANIZER_G12_AUDIT_PATH = (
 )
 ORGANIZER_G13_AUDIT_PATH = (
     "release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json"
+)
+ORGANIZER_G12_INVOCATION_PATH = (
+    "release/organizer/G12_RENDERED_LINK_INVOCATION.json"
+)
+ORGANIZER_G13_INVOCATION_PATH = (
+    "release/g13/ORGANIZER_RENDERED_LINK_INVOCATION.json"
 )
 _ORGANIZER_DASHBOARD_ROUTE_IDS = (
     "overview",
@@ -2511,11 +2520,13 @@ def _assert_release_only_history(
         *PROOF_RECEIPT_PATHS.values(),
         NPM_CAPTURE_PATH,
         ORGANIZER_G12_AUDIT_PATH,
+        ORGANIZER_G12_INVOCATION_PATH,
         RELEASE_MANIFEST_PATH,
         G13_SUBMISSION_RECEIPT_PATH,
         G13_BROWSER_RECEIPT_PATH,
         G13_BROWSER_TRACE_PATH,
         ORGANIZER_G13_AUDIT_PATH,
+        ORGANIZER_G13_INVOCATION_PATH,
         "release/g13/DORAHACKS_SUBMISSION.png",
         "release/g13/FINAL_LINK_AUDIT.json",
         "release/g13/YOUTUBE_DESCRIPTION.txt",
@@ -7040,6 +7051,92 @@ def _atomic_create_once(root: Path, relative: str, payload: bytes) -> Path:
     return root / relative
 
 
+def _atomic_create_sibling_batch_once(
+    root: Path,
+    payloads: Mapping[str, bytes],
+) -> tuple[Path, ...]:
+    """Publish a small same-directory evidence batch without partial success."""
+
+    if not payloads:
+        raise ReleaseManifestError("release output batch is empty")
+    parsed = {
+        relative: _validate_relative_path(relative)
+        for relative in payloads
+    }
+    parents = {parts[:-1] for parts in parsed.values()}
+    if len(parents) != 1:
+        raise ReleaseManifestError(
+            "release output batch must share one directory"
+        )
+    parent_parts = next(iter(parents))
+    parent_fd = _secure_directory_fd(root, parent_parts, create=True)
+    temporary_names: dict[str, str] = {}
+    linked_names: list[str] = []
+    try:
+        for relative, payload in payloads.items():
+            filename = parsed[relative][-1]
+            temporary_name = (
+                f".{filename}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+            )
+            temporary_names[relative] = temporary_name
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NONBLOCK
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+            try:
+                view = memoryview(payload)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise ReleaseManifestError(
+                            "release batch write made no progress"
+                        )
+                    view = view[written:]
+                os.fchmod(descriptor, 0o600)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        for relative in payloads:
+            filename = parsed[relative][-1]
+            try:
+                os.link(
+                    temporary_names[relative],
+                    filename,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError as exc:
+                raise ReleaseManifestError(
+                    f"release output {relative} already exists"
+                ) from exc
+            linked_names.append(filename)
+        os.fsync(parent_fd)
+    except BaseException:
+        for filename in linked_names:
+            try:
+                os.unlink(filename, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.fsync(parent_fd)
+        raise
+    finally:
+        for temporary_name in temporary_names.values():
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
+    return tuple(root / relative for relative in payloads)
+
+
 def _write_capture_journal(
     root: Path, document: Mapping[str, object], *, allow_existing: bool
 ) -> None:
@@ -7942,22 +8039,343 @@ def _validate_organizer_link_audit_document(
     }
 
 
+def _validate_organizer_link_invocation_document(
+    document: Mapping[str, object],
+    *,
+    phase: str,
+    audit_path: str,
+    audit_sha256: str,
+    audit_started_at: str,
+    audit_captured_at: str,
+    request_sha256: str,
+    source_bindings: Sequence[Mapping[str, object]],
+    host_toolchain: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate one authoritative, bound, no-fixture collector invocation."""
+
+    if set(document) != {
+        "schema_version",
+        "phase",
+        "status",
+        "collection_mode",
+        "started_at",
+        "ended_at",
+        "command",
+        "request",
+        "source_bindings",
+        "host_toolchain",
+        "audit",
+    }:
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation schema is not exact"
+        )
+    if (
+        phase not in {"G12", "G13"}
+        or document.get("schema_version")
+        != ORGANIZER_LINK_INVOCATION_SCHEMA_VERSION
+        or document.get("phase") != phase
+        or document.get("status") != "passed"
+        or document.get("collection_mode") != "live_incognito"
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation is not an authoritative PASS"
+        )
+    _, started = _parse_timestamp(
+        document.get("started_at"),
+        f"{phase} organizer invocation start",
+    )
+    ended_at, ended = _parse_timestamp(
+        document.get("ended_at"),
+        f"{phase} organizer invocation end",
+    )
+    _, audit_started = _parse_timestamp(
+        audit_started_at,
+        f"{phase} organizer audit start",
+    )
+    _, audit_captured = _parse_timestamp(
+        audit_captured_at,
+        f"{phase} organizer audit capture",
+    )
+    if not started <= audit_started <= audit_captured <= ended:
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation chronology differs"
+        )
+
+    command = _mapping(
+        document.get("command"),
+        f"{phase} organizer invocation command",
+    )
+    if set(command) != {
+        "argv",
+        "exit_code",
+        "fixture_argument_present",
+        "stdout_sha256",
+        "stderr_sha256",
+        "tool_identity_sha256",
+        "command_assets_sha256",
+    }:
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation command schema is not exact"
+        )
+    expected_argv = [
+        "node",
+        ORGANIZER_LINK_RUNNER_PATH,
+        "--input",
+        ORGANIZER_LINK_REQUEST_PATH,
+    ]
+    argv = _sequence(
+        command.get("argv"),
+        f"{phase} organizer invocation argv",
+    )
+    if (
+        argv != expected_argv
+        or "--fixture" in argv
+        or command.get("fixture_argument_present") is not False
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation must use the exact no-fixture argv"
+        )
+    if (
+        command.get("exit_code") != 0
+        or _hash32(
+            command.get("stdout_sha256"),
+            f"{phase} organizer invocation stdout SHA-256",
+        )
+        != audit_sha256
+        or _hash32(
+            command.get("stderr_sha256"),
+            f"{phase} organizer invocation stderr SHA-256",
+        )
+        != hashlib.sha256(b"").hexdigest()
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation stdout/audit binding differs"
+        )
+    for field in ("tool_identity_sha256", "command_assets_sha256"):
+        _hash32(
+            command.get(field),
+            f"{phase} organizer invocation {field}",
+        )
+
+    request = _mapping(
+        document.get("request"),
+        f"{phase} organizer invocation request",
+    )
+    if (
+        set(request) != {"path", "sha256"}
+        or request.get("path") != ORGANIZER_LINK_REQUEST_PATH
+        or _hash32(
+            request.get("sha256"),
+            f"{phase} organizer invocation request SHA-256",
+        )
+        != request_sha256
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation request binding differs"
+        )
+    audit = _mapping(
+        document.get("audit"),
+        f"{phase} organizer invocation audit",
+    )
+    if (
+        set(audit) != {"path", "sha256"}
+        or audit.get("path") != audit_path
+        or _hash32(
+            audit.get("sha256"),
+            f"{phase} organizer invocation audit SHA-256",
+        )
+        != audit_sha256
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation audit binding differs"
+        )
+    expected_sources = [dict(row) for row in source_bindings]
+    actual_sources = _sequence(
+        document.get("source_bindings"),
+        f"{phase} organizer invocation source bindings",
+    )
+    if actual_sources != expected_sources:
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation source binding differs"
+        )
+    for row in actual_sources:
+        binding = _mapping(
+            row,
+            f"{phase} organizer invocation source binding",
+        )
+        if set(binding) != {"path", "sha256"}:
+            raise ReleaseManifestError(
+                f"{phase} organizer invocation source schema is not exact"
+            )
+        _text(binding.get("path"), f"{phase} organizer source path")
+        _hash32(
+            binding.get("sha256"),
+            f"{phase} organizer source SHA-256",
+        )
+    expected_host_toolchain = dict(host_toolchain)
+    actual_host_toolchain = _mapping(
+        document.get("host_toolchain"),
+        f"{phase} organizer invocation host toolchain",
+    )
+    if (
+        actual_host_toolchain != expected_host_toolchain
+        or set(actual_host_toolchain)
+        != {"path", "sha256", "artifact_commit"}
+        or actual_host_toolchain.get("path")
+        != BOUND_HOST_TOOLCHAIN_RECEIPT_PATH
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation host authority differs"
+        )
+    _hash32(
+        actual_host_toolchain.get("sha256"),
+        f"{phase} organizer host-toolchain SHA-256",
+    )
+    _git40(
+        actual_host_toolchain.get("artifact_commit"),
+        f"{phase} organizer host-toolchain artifact commit",
+    )
+    return {
+        "path": (
+            ORGANIZER_G12_INVOCATION_PATH
+            if phase == "G12"
+            else ORGANIZER_G13_INVOCATION_PATH
+        ),
+        "schema_version": ORGANIZER_LINK_INVOCATION_SCHEMA_VERSION,
+        "status": "passed",
+        "collection_mode": "live_incognito",
+        "ended_at": ended_at,
+        "audit_sha256": audit_sha256,
+    }
+
+
+def _materialize_organizer_verifier_package(
+    root: Path,
+    target: Path,
+) -> Path:
+    """Copy the verifier and its only import into one closed command tree."""
+
+    target.mkdir(mode=0o700)
+    scripts = target / "scripts"
+    scripts.mkdir(mode=0o700)
+    for relative in (
+        ORGANIZER_LINK_CORE_PATH,
+        ORGANIZER_LINK_VERIFIER_PATH,
+    ):
+        destination = target / relative
+        shutil.copy2(root / relative, destination)
+        if destination.is_symlink() or not destination.is_file():
+            raise ReleaseManifestError(
+                "organizer verifier command package contains an unsafe file"
+            )
+    return target / ORGANIZER_LINK_VERIFIER_PATH
+
+
+def _materialize_organizer_collector_package(
+    root: Path,
+    target: Path,
+) -> Path:
+    """Create the closed Playwright command tree for a live organizer audit."""
+
+    target.mkdir(mode=0o700)
+    scripts = target / "scripts"
+    scripts.mkdir(mode=0o700)
+    for relative in (
+        ORGANIZER_LINK_CORE_PATH,
+        ORGANIZER_LINK_RUNNER_PATH,
+        ORGANIZER_LINK_VERIFIER_PATH,
+    ):
+        shutil.copy2(root / relative, target / relative)
+    runtime_target = target / "scripts" / "g13-browser-runtime"
+    runtime_target.mkdir(mode=0o700)
+    runtime_inputs: list[Path] = []
+    for name in ("package.json", "package-lock.json", "install-browser.mjs"):
+        source = root / "scripts" / "g13-browser-runtime" / name
+        destination = runtime_target / name
+        shutil.copy2(source, destination)
+        runtime_inputs.append(destination)
+    _run(
+        runtime_target,
+        [
+            "npm",
+            "ci",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--registry=https://registry.npmjs.org/",
+        ],
+        limit=_CONTROL_LIMIT,
+        timeout=180,
+        repository_root=root,
+        bound_data_inputs=tuple(runtime_inputs),
+    )
+    browser_download = target.parent / "browser-download"
+    browser_download.mkdir(mode=0o700)
+    _run(
+        runtime_target,
+        [
+            "node",
+            str(runtime_target / "install-browser.mjs"),
+            str(browser_download),
+        ],
+        limit=_GIT_OUTPUT_LIMIT,
+        timeout=180,
+        repository_root=root,
+        command_asset_root=runtime_target,
+    )
+    local_browsers = (
+        runtime_target
+        / "node_modules"
+        / "playwright-core"
+        / ".local-browsers"
+    )
+    if local_browsers.exists():
+        raise ReleaseManifestError(
+            "organizer collector local browser destination already exists"
+        )
+    shutil.copytree(browser_download, local_browsers, symlinks=False)
+    binary_links = runtime_target / "node_modules" / ".bin"
+    if binary_links.exists():
+        shutil.rmtree(binary_links)
+    for current_root, directory_names, file_names in os.walk(
+        target,
+        topdown=True,
+        followlinks=False,
+    ):
+        current = Path(current_root)
+        for name in [*directory_names, *file_names]:
+            if (current / name).is_symlink():
+                raise ReleaseManifestError(
+                    "organizer collector command package contains a symlink"
+                )
+    return target / ORGANIZER_LINK_RUNNER_PATH
+
+
 def _default_organizer_link_audit_verifier(
     root: Path,
     audit: _BoundFile,
 ) -> dict[str, object]:
-    result = _run(
-        root,
-        [
-            "node",
-            str(root / ORGANIZER_LINK_VERIFIER_PATH),
-            str(root / audit.path),
-        ],
-        limit=_CONTROL_LIMIT,
-        timeout=60,
-        repository_root=root,
-        bound_data_inputs=(root / audit.path,),
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="concordia-organizer-verifier-"
+    ) as name:
+        package_root = Path(name) / "command-package"
+        entrypoint = _materialize_organizer_verifier_package(
+            root,
+            package_root,
+        )
+        result = _run(
+            root,
+            [
+                "node",
+                str(entrypoint),
+                str(root / audit.path),
+            ],
+            limit=_CONTROL_LIMIT,
+            timeout=60,
+            repository_root=root,
+            command_asset_root=package_root,
+            bound_data_inputs=(root / audit.path,),
+        )
     document, canonical = _strict_json(
         result.stdout,
         "organizer rendered-link verifier output",
@@ -7979,12 +8397,18 @@ def _organizer_link_audit_binding(
     path: str,
     phase: str,
     artifact_commit: str | None = None,
+    canaries: Sequence[bytes] = (),
 ) -> tuple[_BoundFile, dict[str, object]]:
     audit = _load_immutable_bound_file(
         root,
         path,
         _VERIFIER_ARCHIVE_LIMIT,
         artifact_commit=artifact_commit,
+    )
+    _assert_no_canary(
+        audit.raw,
+        canaries,
+        f"{phase} organizer rendered-link audit",
     )
     document, canonical = _strict_json(
         audit.raw,
@@ -7995,6 +8419,11 @@ def _organizer_link_audit_binding(
             f"{phase} organizer rendered-link audit is not canonical JSON"
         )
     stable = _validate_organizer_link_audit_document(document, phase=phase)
+    _assert_safe_projection(
+        document,
+        canaries,
+        f"{phase} organizer rendered-link audit",
+    )
     request = _load_bound_file(
         root,
         ORGANIZER_LINK_REQUEST_PATH,
@@ -8024,6 +8453,79 @@ def _organizer_link_audit_binding(
         raise ReleaseManifestError(
             f"{phase} organizer collector does not precede its audit"
         )
+    invocation_path = (
+        ORGANIZER_G12_INVOCATION_PATH
+        if phase == "G12"
+        else ORGANIZER_G13_INVOCATION_PATH
+    )
+    invocation = _load_immutable_bound_file(
+        root,
+        invocation_path,
+        _CONTROL_LIMIT,
+        artifact_commit=artifact_commit,
+    )
+    if invocation.artifact_commit != audit.artifact_commit:
+        raise ReleaseManifestError(
+            f"{phase} organizer audit and invocation are not one immutable batch"
+        )
+    _assert_no_canary(
+        invocation.raw,
+        canaries,
+        f"{phase} organizer invocation receipt",
+    )
+    invocation_document, invocation_canonical = _strict_json(
+        invocation.raw,
+        f"{phase} organizer invocation receipt",
+    )
+    if invocation.raw != invocation_canonical:
+        raise ReleaseManifestError(
+            f"{phase} organizer invocation receipt is not canonical JSON"
+        )
+    invocation_sources = [
+        {"path": source.path, "sha256": source.sha256}
+        for source in source_bounds
+        if source.path
+        in {
+            ORGANIZER_LINK_CORE_PATH,
+            ORGANIZER_LINK_RUNNER_PATH,
+        }
+    ]
+    _, host_toolchain_bound, _ = _host_toolchain_binding(root)
+    host_toolchain_row = {
+        "path": host_toolchain_bound.path,
+        "sha256": host_toolchain_bound.sha256,
+        "artifact_commit": host_toolchain_bound.artifact_commit,
+    }
+    if not _is_ancestor(
+        root,
+        host_toolchain_bound.artifact_commit,
+        audit.artifact_commit,
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer host authority does not precede its audit"
+        )
+    invocation_projection = _validate_organizer_link_invocation_document(
+        invocation_document,
+        phase=phase,
+        audit_path=path,
+        audit_sha256=audit.sha256,
+        audit_started_at=_text(
+            document.get("started_at"),
+            f"{phase} organizer audit start",
+        ),
+        audit_captured_at=_text(
+            document.get("captured_at"),
+            f"{phase} organizer audit capture",
+        ),
+        request_sha256=request.sha256,
+        source_bindings=invocation_sources,
+        host_toolchain=host_toolchain_row,
+    )
+    _assert_safe_projection(
+        invocation_document,
+        canaries,
+        f"{phase} organizer invocation receipt",
+    )
     verified = _mapping(
         _organizer_link_audit_verifier_factory(root)(root, audit),
         f"{phase} organizer verifier projection",
@@ -8044,6 +8546,11 @@ def _organizer_link_audit_binding(
         "sha256": audit.sha256,
         "artifact_commit": audit.artifact_commit,
         **stable,
+        "invocation": {
+            **invocation_projection,
+            "sha256": invocation.sha256,
+            "artifact_commit": invocation.artifact_commit,
+        },
         "source_bindings": [
             {
                 "path": source.path,
@@ -8477,6 +8984,7 @@ def _validate_g12_manifest_offline(
         root,
         path=ORGANIZER_G12_AUDIT_PATH,
         phase="G12",
+        canaries=canaries,
         artifact_commit=(
             _text(
                 claimed_organizer.get("artifact_commit"),
@@ -8795,6 +9303,7 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
         root,
         path=ORGANIZER_G12_AUDIT_PATH,
         phase="G12",
+        canaries=canaries,
     )
     receipt_bounds.append(organizer_bound)
 
@@ -8967,6 +9476,238 @@ def prepare_host_toolchain_receipt_once(repository_root: str | Path) -> Path:
     lock_descriptor = _repository_release_lock(root)
     try:
         return _prepare_host_toolchain_receipt_locked(root)
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+
+
+def _capture_organizer_link_audit_locked(
+    repository_root: str | Path,
+    *,
+    phase: str,
+) -> tuple[Path, Path]:
+    """Run the bound no-fixture browser collector and publish its receipt."""
+
+    if phase not in {"G12", "G13"}:
+        raise ReleaseManifestError("organizer audit phase is invalid")
+    root = Path(repository_root).absolute()
+    _require_repository(root)
+    _recover_capture_publication(root)
+    _require_clean_worktree(root)
+    audit_path = (
+        ORGANIZER_G12_AUDIT_PATH
+        if phase == "G12"
+        else ORGANIZER_G13_AUDIT_PATH
+    )
+    invocation_path = (
+        ORGANIZER_G12_INVOCATION_PATH
+        if phase == "G12"
+        else ORGANIZER_G13_INVOCATION_PATH
+    )
+    _preflight_outputs_absent(root, (audit_path, invocation_path))
+    canaries = _load_secret_canaries()
+    request = _load_bound_file(
+        root,
+        ORGANIZER_LINK_REQUEST_PATH,
+        _CONTROL_LIMIT,
+    )
+    core = _load_bound_file(
+        root,
+        ORGANIZER_LINK_CORE_PATH,
+        _CONTROL_LIMIT,
+    )
+    runner = _load_bound_file(
+        root,
+        ORGANIZER_LINK_RUNNER_PATH,
+        _CONTROL_LIMIT,
+    )
+    source_rows = [
+        {"path": core.path, "sha256": core.sha256},
+        {"path": runner.path, "sha256": runner.sha256},
+    ]
+    _, host_toolchain_bound, _ = _host_toolchain_binding(root)
+    host_toolchain_row = {
+        "path": host_toolchain_bound.path,
+        "sha256": host_toolchain_bound.sha256,
+        "artifact_commit": host_toolchain_bound.artifact_commit,
+    }
+    logical_argv = [
+        "node",
+        ORGANIZER_LINK_RUNNER_PATH,
+        "--input",
+        ORGANIZER_LINK_REQUEST_PATH,
+    ]
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"concordia-organizer-{phase.lower()}-"
+    ) as name:
+        temporary = Path(name)
+        package_root = temporary / "command-package"
+        entrypoint = _materialize_organizer_collector_package(
+            root,
+            package_root,
+        )
+        started_at = (
+            _utc_now()
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+        result = _run(
+            root,
+            [
+                "node",
+                str(entrypoint),
+                "--input",
+                str(root / ORGANIZER_LINK_REQUEST_PATH),
+            ],
+            limit=_VERIFIER_ARCHIVE_LIMIT,
+            timeout=180,
+            repository_root=root,
+            command_asset_root=package_root,
+            bound_data_inputs=(root / ORGANIZER_LINK_REQUEST_PATH,),
+        )
+        ended_at = (
+            _utc_now()
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+        if result.stderr != b"":
+            raise ReleaseManifestError(
+                f"{phase} organizer collector emitted stderr"
+            )
+        audit_raw = result.stdout
+        document, canonical = _strict_json(
+            audit_raw,
+            f"{phase} organizer rendered-link audit",
+        )
+        if audit_raw != canonical:
+            raise ReleaseManifestError(
+                f"{phase} organizer collector output is not canonical JSON"
+            )
+        _validate_organizer_link_audit_document(document, phase=phase)
+        _assert_no_canary(
+            audit_raw,
+            canaries,
+            f"{phase} organizer collector output",
+        )
+        _assert_safe_projection(
+            document,
+            canaries,
+            f"{phase} organizer collector output",
+        )
+
+        temporary_audit = _atomic_create_once(
+            temporary,
+            "audit.json",
+            audit_raw,
+        )
+        verifier = package_root / ORGANIZER_LINK_VERIFIER_PATH
+        verified = _run(
+            root,
+            ["node", str(verifier), str(temporary_audit)],
+            limit=_CONTROL_LIMIT,
+            timeout=60,
+            repository_root=root,
+            command_asset_root=package_root,
+            bound_data_inputs=(temporary_audit,),
+        )
+        expected_verified = {
+            "schema_version": ORGANIZER_LINK_AUDIT_SCHEMA_VERSION,
+            "verdict": "PASS",
+            "release_qualified": True,
+            "collection_mode": "live_incognito",
+            "audit_sha256": hashlib.sha256(audit_raw).hexdigest(),
+        }
+        verified_document, verified_canonical = _strict_json(
+            verified.stdout,
+            f"{phase} organizer verifier output",
+        )
+        if (
+            verified.stderr != b""
+            or verified.stdout != verified_canonical
+            or verified_document != expected_verified
+        ):
+            raise ReleaseManifestError(
+                f"{phase} organizer collector failed offline verification"
+            )
+
+    invocation_document = {
+        "schema_version": ORGANIZER_LINK_INVOCATION_SCHEMA_VERSION,
+        "phase": phase,
+        "status": "passed",
+        "collection_mode": "live_incognito",
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "command": {
+            "argv": logical_argv,
+            "exit_code": result.returncode,
+            "fixture_argument_present": False,
+            "stdout_sha256": hashlib.sha256(audit_raw).hexdigest(),
+            "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+            "tool_identity_sha256": hashlib.sha256(
+                _canonical_json(dict(result.tool_identity))
+            ).hexdigest(),
+            "command_assets_sha256": hashlib.sha256(
+                _canonical_json([dict(row) for row in result.command_assets])
+            ).hexdigest(),
+        },
+        "request": {
+            "path": request.path,
+            "sha256": request.sha256,
+        },
+        "source_bindings": source_rows,
+        "host_toolchain": host_toolchain_row,
+        "audit": {
+            "path": audit_path,
+            "sha256": hashlib.sha256(audit_raw).hexdigest(),
+        },
+    }
+    _validate_organizer_link_invocation_document(
+        invocation_document,
+        phase=phase,
+        audit_path=audit_path,
+        audit_sha256=hashlib.sha256(audit_raw).hexdigest(),
+        audit_started_at=_text(
+            document.get("started_at"),
+            f"{phase} organizer audit start",
+        ),
+        audit_captured_at=_text(
+            document.get("captured_at"),
+            f"{phase} organizer audit capture",
+        ),
+        request_sha256=request.sha256,
+        source_bindings=source_rows,
+        host_toolchain=host_toolchain_row,
+    )
+    invocation_raw = _canonical_json(invocation_document)
+    _assert_safe_projection(
+        invocation_document,
+        canaries,
+        f"{phase} organizer invocation receipt",
+    )
+    _require_clean_worktree(root)
+    published = _atomic_create_sibling_batch_once(
+        root,
+        {
+            audit_path: audit_raw,
+            invocation_path: invocation_raw,
+        },
+    )
+    return published[0], published[1]
+
+
+def capture_organizer_link_audit_once(
+    repository_root: str | Path,
+    *,
+    phase: str,
+) -> tuple[Path, Path]:
+    """Serialize one authoritative G12 or G13 rendered-link capture."""
+
+    root = Path(repository_root).absolute()
+    _require_repository(root)
+    lock_descriptor = _repository_release_lock(root)
+    try:
+        return _capture_organizer_link_audit_locked(root, phase=phase)
     finally:
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
@@ -10164,6 +10905,7 @@ def _verify_g13_submission_receipt_locked(
         "BROWSER_TRACE.json",
         "DORAHACKS_SUBMISSION.png",
         "FINAL_LINK_AUDIT.json",
+        "ORGANIZER_RENDERED_LINK_INVOCATION.json",
         "ORGANIZER_RENDERED_LINK_AUDIT.json",
         "YOUTUBE_DESCRIPTION.txt",
         "YOUTUBE_INCOGNITO.png",
@@ -10187,6 +10929,7 @@ def _verify_g13_submission_receipt_locked(
         root,
         path=ORGANIZER_G13_AUDIT_PATH,
         phase="G13",
+        canaries=canaries,
         artifact_commit=receipt_bound.artifact_commit,
     )
     if (
@@ -12442,5 +13185,6 @@ __all__ = [
     "ReleaseManifestError",
     "SCHEMA_VERSION",
     "assemble_release_manifest_once",
+    "capture_organizer_link_audit_once",
     "capture_release_observations_once",
 ]
