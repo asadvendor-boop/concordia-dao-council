@@ -35,7 +35,6 @@ x-concordia-env: &concordia-env
   CASPER_EXECUTION_MODE: ${CASPER_EXECUTION_MODE:-real}
   CASPER_EXECUTION_DRIVER: ${CASPER_EXECUTION_DRIVER:-pycspr}
   CONCORDIA_PYCSPR_DRY_RUN: "${CONCORDIA_PYCSPR_DRY_RUN:-0}"
-  CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
   CASPER_RECEIPT_CONTRACT_HASH: ${CASPER_RECEIPT_CONTRACT_HASH:?Set CASPER_RECEIPT_CONTRACT_HASH}
   CASPER_ENTRY_POINT: ${CASPER_ENTRY_POINT:-store_governance_receipt}
   CASPER_CALL_TARGET: ${CASPER_CALL_TARGET:-contract}
@@ -45,7 +44,6 @@ x-concordia-env: &concordia-env
   CASPER_CHAIN_NAME: ${CASPER_CHAIN_NAME:-casper-test}
   CASPER_PAYMENT_AMOUNT: ${CASPER_PAYMENT_AMOUNT:-5000000000}
   CSPR_CLOUD_API_URL: ${CSPR_CLOUD_API_URL:-https://api.testnet.cspr.cloud}
-  CSPR_CLOUD_ACCESS_TOKEN: ${CSPR_CLOUD_ACCESS_TOKEN:-}
   CSPR_CLOUD_STREAM_URL: ${CSPR_CLOUD_STREAM_URL:-wss://streaming.testnet.cspr.cloud}
   CASPER_QUORUM_PACKAGE_HASH: ${CASPER_QUORUM_PACKAGE_HASH:-}
   CASPER_QUORUM_CONTRACT_VERSION: ${CASPER_QUORUM_CONTRACT_VERSION:-1}
@@ -55,6 +53,16 @@ x-concordia-env: &concordia-env
   CSPR_TRADE_API_URL: ${CSPR_TRADE_API_URL:-}
   CSPR_TRADE_SLIPPAGE_BPS: ${CSPR_TRADE_SLIPPAGE_BPS:-50}
   CASPER_PUBLIC_STATUS_URL: ${CASPER_PUBLIC_STATUS_URL:-https://testnet.cspr.live}
+  IPFS_API_URL: ${IPFS_API_URL:-http://concordia-ipfs:5001}
+  IPFS_GATEWAY_BASE: ${IPFS_GATEWAY_BASE:-https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}/api/ipfs}
+  OTEL_ENABLED: ${OTEL_ENABLED:-1}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://concordia-otel-collector:4318}
+  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+
+# SafePay Lite is separate from the official x402 service. The legacy
+# facilitator URL/token path is deliberately absent from production Compose.
+x-safepay-env: &safepay-env
   X402_SETTLEMENT_MODE: ${X402_SETTLEMENT_MODE:-demo}
   X402_PAYMENT_NETWORK: ${X402_PAYMENT_NETWORK:-casper-testnet}
   X402_PAYMENT_AMOUNT: ${X402_PAYMENT_AMOUNT:-1000000}
@@ -65,18 +73,6 @@ x-concordia-env: &concordia-env
   X402_RETRY_DELAY_SECONDS: ${X402_RETRY_DELAY_SECONDS:-5}
   X402_TRANSFER_PAYMENT_AMOUNT: ${X402_TRANSFER_PAYMENT_AMOUNT:-100000000}
   X402_CSPR_LIVE_API: ${X402_CSPR_LIVE_API:-https://api.testnet.cspr.live}
-  X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
-  X402_FACILITATOR_TOKEN: ${X402_FACILITATOR_TOKEN:-}
-  X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
-  X402_PROVIDER_TOKEN: ${X402_PROVIDER_TOKEN:-}
-  X402_PROVIDER_HOSTNAME: ${X402_PROVIDER_HOSTNAME:-}
-  X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
-  IPFS_API_URL: ${IPFS_API_URL:-http://concordia-ipfs:5001}
-  IPFS_GATEWAY_BASE: ${IPFS_GATEWAY_BASE:-https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}/api/ipfs}
-  OTEL_ENABLED: ${OTEL_ENABLED:-1}
-  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://concordia-otel-collector:4318}
-  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
-  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
 
 x-concordia-secrets: &concordia-secrets
   - llm_api_key
@@ -102,7 +98,7 @@ services:
     image: concordia-dao-council:local
     restart: unless-stopped
     environment:
-      <<: *concordia-env
+      <<: [*concordia-env, *safepay-env]
       CONCORDIA_SERVICE: gateway
       OTEL_SERVICE_NAME: concordia-gateway
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
@@ -118,6 +114,9 @@ services:
       APPROVAL_UI_BCRYPT_HASH_FILE: /run/secrets/approval_ui_bcrypt_hash
       APPROVAL_UI_CSRF_SECRET_FILE: /run/secrets/approval_ui_csrf_secret
       CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+      CSPR_CLOUD_SERVICE_SCOPE: mercer
+      X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
     secrets: *concordia-secrets
     volumes:
       - concordia-data:/data
@@ -144,17 +143,16 @@ services:
     image: concordia-dao-council:local
     restart: unless-stopped
     environment:
-      <<: *concordia-env
+      <<: [*concordia-env, *safepay-env]
       CONCORDIA_SERVICE: x402-provider
       OTEL_SERVICE_NAME: concordia-x402-provider
       X402_PROVIDER_URL: ""
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       GATEWAY_SECRET_FILE: /run/secrets/gateway_secret
-      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+      X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
     secrets:
       - llm_api_key
       - gateway_secret
-      - casper_secret_key
     networks:
       concordia-edge:
         aliases:
@@ -240,9 +238,11 @@ services:
       AGENT_ROLE: mercer
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       DIAGNOSIS_SUBMISSION_KEY_FILE: /run/secrets/diagnosis_submission_key
+      CSPR_CLOUD_ACCESS_TOKEN_FILE: /run/secrets/cspr_cloud_access_token
     secrets:
       - llm_api_key
       - diagnosis_submission_key
+      - cspr_cloud_access_token
     networks:
       - concordia-internal
     depends_on:
@@ -297,6 +297,7 @@ services:
       AGENT_ROLE: locke
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
+      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
     secrets:
       - llm_api_key
       - operator_submission_key
@@ -441,3 +442,5 @@ secrets:
     file: ${CONCORDIA_OPERATOR_TOKEN_FILE:-/opt/apps/concordia/secrets/concordia_operator_token}
   casper_secret_key:
     file: ${CASPER_SECRET_KEY_FILE:-/opt/apps/concordia/secrets/casper_secret_key.pem}
+  cspr_cloud_access_token:
+    file: ${CSPR_CLOUD_ACCESS_TOKEN_FILE:-/opt/apps/concordia/secrets/cspr_cloud_access_token}
