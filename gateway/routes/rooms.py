@@ -25,11 +25,15 @@ Room identity v1 (G1 freeze, §12):
       helpers server-side; their signatures are unchanged).
     - Create/join/list/read/post enforce room membership and the frozen
       role-operation matrix. List endpoints are scoped to the authenticated
-      caller.
-    - Production agent traffic cannot use the GATEWAY_SECRET → ``gateway``
-      full-ACL fallback for message posting; the global fallback removal in
-      gateway/auth.py + submission.py is Codex-owned (recorded in
-      handoff/INTERFACE_MANIFEST_WP3.md).
+      caller. Returning an existing room on create additionally requires
+      membership (or the creator role's idempotent ``creator_auto_joined``
+      re-join) — an existing room is never disclosed merely because the
+      caller holds create permission.
+    - The legacy GATEWAY_SECRET → ``gateway`` full-ACL fallback is NOT an
+      authenticated room principal in ANY environment: every room route
+      rejects it as unauthenticated (401), matching the integrated tree where
+      gateway/auth.py (Codex-owned) removed the fallback globally, so the
+      observable contract is identical pre- and post-merge.
 """
 from __future__ import annotations
 
@@ -122,7 +126,14 @@ def _registered_role_for_agent_id(agent_id: str) -> str | None:
 
 def _role_or_401(agent_key: str) -> str:
     role = get_role_for_key(agent_key)
-    if not role:
+    if not role or role == "gateway":
+        # Integrated contract: a caller presenting only the legacy
+        # GATEWAY_SECRET full-ACL fallback (the sole source of the
+        # ``gateway`` role in gateway/auth.py) is UNAUTHENTICATED for room
+        # routes in EVERY environment — the same rejection auth.py issues for
+        # missing/invalid credentials. On the integrated tree the fallback is
+        # removed globally in gateway/auth.py (Codex-owned); this route-level
+        # guard makes the observable contract identical before that merge.
         raise HTTPException(status_code=401, detail="invalid_agent_key")
     return role
 
@@ -376,6 +387,35 @@ async def create_room(
             (body.proposal_id,),
         ).fetchone()
     if existing:
+        # Re-audit item 3: an existing room is returned on create ONLY under
+        # the frozen matrix's read/join rights — never merely because the
+        # caller holds create permission. A current member reads its own
+        # room; the room's creator ROLE is atomically (re)joined per the
+        # frozen create_room contract (``creator_auto_joined``) — the
+        # idempotent re-create path. Every other caller receives the standard
+        # membership rejection and learns nothing further about the room.
+        existing_room_id = existing["room_id"]
+        if not _is_member(db, existing_room_id, agent_id):
+            if existing["created_by"] != role:
+                raise HTTPException(status_code=403, detail="not_a_room_member")
+            # Idempotent completion of creator_auto_joined: atomically
+            # restore the creator's server-derived identity as a participant.
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute(
+                    """
+                    INSERT INTO proposal_room_participants
+                    (room_id, participant_id, role, display_name, joined_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(room_id, participant_id) DO UPDATE SET
+                        role=excluded.role
+                    """,
+                    (existing_room_id, agent_id, role, None, now),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
         room = _room_to_response(existing)
         return {"status": "already_exists", "data": room, **room}
 
@@ -497,14 +537,9 @@ async def post_message(
 ):
     role, agent_id = _principal_or_error(x_agent_key)
 
-    # Production agent traffic cannot use the GATEWAY_SECRET full-ACL
-    # fallback for room posting (room identity v1). The global fallback
-    # removal is Codex-owned; this route-level rejection is the WP3 slice.
-    if role == "gateway" and _production_mode():
-        raise HTTPException(
-            status_code=403,
-            detail="gateway_fallback_forbidden_for_agent_traffic",
-        )
+    # The legacy gateway-secret fallback never reaches this point: it is
+    # rejected as unauthenticated (401) for every room route in every
+    # environment inside _role_or_401 (integrated-tree contract).
 
     # Identity is server-derived; agent keys can never emit User/System.
     _reject_supplied_sender_identity(body, role=role, agent_id=agent_id)

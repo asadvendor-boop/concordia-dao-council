@@ -10,6 +10,7 @@ import {
   getCard,
   getProfile,
   isAuthorizedApproval,
+  isDecidedVerdict,
   isDeniedApproval,
   isReceiptVerified,
   navHref,
@@ -61,7 +62,11 @@ export function AgentsPage({ data }) {
   const receiptCard = getCard(cards, "CasperExecutionReceipt", true);
   const planAuthorized = isAuthorizedApproval(approvalCard, data.selectedId, planCard);
   const receiptVerified = isReceiptVerified(receiptCard);
-  const activityByRole = { rowan: getCard(cards, "TriageDecision") ? "Proposal intake complete" : "Monitoring proposal intake", mercer: getCard(cards, "Assessment", true) ? "Evidence analysis complete" : "Ready for evidence analysis", verity: getCard(cards, "Verdict", true) ? "Independent review complete" : "Ready to challenge conclusions", alden: planCard ? (planAuthorized ? "Plan authorized" : isDeniedApproval(approvalCard) ? "Authorization rejected" : "Awaiting human approval") : "Ready to construct a response plan", locke: receiptVerified ? "Governance execution and receipt complete" : receiptCard ? "Receipt recorded · verification not confirmed" : "Ready to execute · blocked until authorized", core: "Recording state and evidence chain", wells: "Presents the governance archive · non-reasoning persona" };
+  // "Independent review complete" requires an explicitly recorded verdict
+  // decision (shared isDecidedVerdict predicate) — a Verdict card without a
+  // decision is recorded work, never a completed review.
+  const verdictCard = getCard(cards, "Verdict", true);
+  const activityByRole = { rowan: getCard(cards, "TriageDecision") ? "Proposal intake complete" : "Monitoring proposal intake", mercer: getCard(cards, "Assessment", true) ? "Evidence analysis complete" : "Ready for evidence analysis", verity: isDecidedVerdict(verdictCard) ? "Independent review complete" : verdictCard ? "Review recorded · decision unavailable" : "Ready to challenge conclusions", alden: planCard ? (planAuthorized ? "Plan authorized" : isDeniedApproval(approvalCard) ? "Authorization rejected" : "Awaiting human approval") : "Ready to construct a response plan", locke: receiptVerified ? "Governance execution and receipt complete" : receiptCard ? "Receipt recorded · verification not confirmed" : "Ready to execute · blocked until authorized", core: "Recording state and evidence chain", wells: "Presents the governance archive · non-reasoning persona" };
   const lastHandoffFor = (role) => { const item = [...handoffs].reverse().find((handoff) => handoff.from === role || handoff.to === role); return item ? `${getProfile(item.from).name} → ${getProfile(item.to).name}` : null; };
   const skillsEyebrow = data.skills.length ? `${data.skills.length} deterministic MCP-style contracts` : "Deterministic MCP-style contracts";
   return <>

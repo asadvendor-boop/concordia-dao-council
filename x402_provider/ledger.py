@@ -688,6 +688,27 @@ class SafePayLedger:
 
         HTTP 200, same-binding, unrelated-payment, pre-consumption, and
         unbound/forged observations therefore never contribute.
+
+        ``idempotent_replay_observed`` follows the SAME bound-row discipline —
+        TRUE only when ALL of the following hold, computed from rows, never
+        from bare observation-kind presence:
+
+        1. exactly one canonical consumption exists for this ``quote_id``;
+        2. an append-only observation exists whose ``kind`` is
+           ``idempotent_replay`` AND whose actually observed ``http_status``
+           is exactly ``200`` (the stored-fulfillment replay result);
+        3. that observation is on the SAME ``(network, payment_hash)`` as the
+           canonical consumption;
+        4. it evidences the SAME binding — this exact quote and the consumed
+           resource (a replay is by definition same-binding);
+        5. it was observed at or after the canonical consumption
+           (chronology): a "replay" predating the consumption is forged; and
+        6. BOTH its ``response_digest`` and its ``consumed_response_hash``
+           equal the canonical consumption's independently stored
+           ``response_hash`` — a genuine replay serves the frozen fulfillment
+           byte-for-byte, so both bindings carry the canonical hash. A
+           directly inserted kind/status row without these bindings can never
+           set the flag.
         """
         del claimed_artifact  # never trusted, never read
         expected_409_digest = safepay_v2_body_digest(
@@ -702,14 +723,8 @@ class SafePayLedger:
                 "FROM payment_consumptions WHERE quote_id = ?",
                 (quote_id,),
             ).fetchall()
-            kinds = {
-                row["kind"]
-                for row in conn.execute(
-                    "SELECT DISTINCT kind FROM safepay_redemption_observations WHERE quote_id = ?",
-                    (quote_id,),
-                )
-            }
             cross_binding_rejected_observed = False
+            idempotent_replay_observed = False
             if len(consumptions) == 1:
                 consumption = consumptions[0]
                 cross_binding_rejected_observed = (
@@ -735,10 +750,33 @@ class SafePayLedger:
                     ).fetchone()[0]
                     >= 1
                 )
+                idempotent_replay_observed = (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM safepay_redemption_observations o "
+                        "WHERE o.kind = 'idempotent_replay' "
+                        "AND o.http_status = 200 "
+                        "AND o.network = ? "
+                        "AND o.payment_hash = ? "
+                        "AND o.quote_id = ? "
+                        "AND o.resource_id = ? "
+                        "AND o.observed_at >= ? "
+                        "AND o.response_digest = ? "
+                        "AND o.consumed_response_hash = ?",
+                        (
+                            consumption["network"],
+                            consumption["payment_hash"],
+                            quote_id,
+                            consumption["resource_id"],
+                            int(consumption["consumed_at"]),
+                            consumption["response_hash"],
+                            consumption["response_hash"],
+                        ),
+                    ).fetchone()[0]
+                    >= 1
+                )
         finally:
             conn.close()
         consumption_recorded = len(consumptions) == 1
-        idempotent_replay_observed = "idempotent_replay" in kinds
         return {
             "schema_version": "safepay-evidence-summary-v2",
             "quote_id": quote_id,

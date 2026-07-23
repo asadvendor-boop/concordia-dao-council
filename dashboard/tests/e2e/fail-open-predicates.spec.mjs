@@ -57,12 +57,19 @@ function proposalCard(title = "Risky treasury move", sequence = 1, extra = {}) {
   return { card_type: "ProposalCard", sequence, hash: `hash-proposal-${sequence}`, data: { title, raw_payload: { title } }, ...extra };
 }
 
+// DELIBERATE MIGRATION (WP7 final blocker 4 — exact action binding):
+// isAuthorizedApproval now ALSO requires the approval's action_hash to exactly
+// equal the plan's client-visible data.action_binding_hash. The plan fixture
+// therefore carries action_binding_hash, and every approval fixture that is
+// meant to isolate a DIFFERENT violated dimension (or to be the authorized
+// positive control) carries the matching action_hash. No assertion below was
+// weakened — each test still asserts exactly what it asserted before.
 function planCard(extra = {}) {
   return {
     card_type: "ResponsePlan",
     sequence: 4,
     hash: "plan-hash-abc",
-    data: { envelopes: [{ action_id: "execute_casper_governance_receipt", target: "treasury", parameters: { approved_allocation_bps: 800 } }] },
+    data: { action_binding_hash: "action-hash-def", envelopes: [{ action_id: "execute_casper_governance_receipt", target: "treasury", parameters: { approved_allocation_bps: 800 } }] },
     ...extra,
   };
 }
@@ -93,7 +100,7 @@ test.describe("affirmative approval requires an explicit decision", () => {
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+      approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByRole("heading", { name: "Authorization boundary visible" })).toBeVisible();
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
@@ -104,7 +111,7 @@ test.describe("affirmative approval requires an explicit decision", () => {
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "MAYBE_LATER", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+      approvalCard({ decision: "MAYBE_LATER", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByRole("heading", { name: "Authorization boundary visible" })).toBeVisible();
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
@@ -127,7 +134,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "APPROVED", plan_hash: "plan-hash-abc" }),
+      approvalCard({ decision: "APPROVED", plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByRole("heading", { name: "Authorization boundary visible" })).toBeVisible();
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
@@ -137,7 +144,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc" }),
+      approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
   });
@@ -146,7 +153,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL }, "PolicyAuthorization"),
+      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, action_hash: "action-hash-def" }, "PolicyAuthorization"),
     ]);
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
   });
@@ -155,7 +162,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash" }),
+      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
   });
@@ -164,7 +171,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
     await openApprovals(page, [
       proposalCard(),
       planCard(),
-      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+      approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
     ]);
     await expect(page.getByRole("heading", { name: "Exact action authorized" })).toBeVisible();
     await expect(page.getByText("Authorization recorded · execution unconfirmed")).toBeVisible();
@@ -174,7 +181,7 @@ test.describe("approval binding requires explicit proposal + plan-hash equality"
 });
 
 test.describe("execution requires positive receipt verification, never receipt presence", () => {
-  const boundApproval = () => approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" });
+  const boundApproval = () => approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" });
 
   test("receipt PRESENCE without verification never marks Executed or consumed", async ({ page }) => {
     await openApprovals(page, [
@@ -261,7 +268,7 @@ test.describe("evidence checks render only from their own observed fields", () =
           cards: [
             proposalCard(),
             planCard(),
-            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
           ],
         },
       },
@@ -293,7 +300,7 @@ test.describe("evidence checks render only from their own observed fields", () =
           cards: [
             proposalCard("Risky treasury move", 1, { published: true }),
             planCard({ published: true }),
-            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }, "StructuredApproval", { published: true }),
+            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }, "StructuredApproval", { published: true }),
           ],
         },
       },
@@ -397,7 +404,7 @@ test.describe("historical cards and personas never imply online presence", () =>
           cards: [
             proposalCard(),
             planCard(),
-            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+            approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
             receiptCard({ actions_taken: [{ action_id: "execute_casper_governance_receipt", status: "success" }] }),
           ],
         },

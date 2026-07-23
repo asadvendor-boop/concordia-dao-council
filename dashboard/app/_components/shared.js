@@ -170,11 +170,15 @@ export function EnforcementClimaxPanel() {
   </Panel>;
 }
 
+// Static fallback for when no live run data has been observed. It is recorded
+// history and says so explicitly (dated, "recorded", "frozen for review") —
+// it never claims a live-verified state; verification cues render only from
+// observed payload predicates elsewhere.
 export function VerifiedRunStaticFallback({ compact = false }) {
   return <div className={cx("empty-state", "verified-run-fallback", compact && "compact")}>
     <span className="empty-icon"><Icon name="replay" size={26} /></span>
-    <strong>Verified Casper run available</strong>
-    <p>{DEFAULT_REVIEW_PROPOSAL_ID} is the completed reviewer run with policy dissent, multisig approval, and Casper Testnet receipt proof.</p>
+    <strong>Recorded Casper run available</strong>
+    <p>{DEFAULT_REVIEW_PROPOSAL_ID} is the completed reviewer run with policy dissent, multisig approval, and Casper Testnet receipt proof — recorded June 2026 and frozen for review.</p>
     <div className="fallback-actions">
       <Link className="text-link" href={navHref("/runs", DEFAULT_REVIEW_PROPOSAL_ID)}>Open replay <Icon name="chevronRight" size={15} /></Link>
       <Link className="text-link" href={navHref("/evidence", DEFAULT_REVIEW_PROPOSAL_ID)}>Open evidence <Icon name="chevronRight" size={15} /></Link>
@@ -186,5 +190,5 @@ export function VerifiedRunStaticFallback({ compact = false }) {
 export function RecentRunsTable({ runSummary, proposals, onSelect }) {
   const runs = runSummary?.runs || [];
   if (!runs.length) return <VerifiedRunStaticFallback compact />;
-  return <div className="table-wrap"><table className="data-table recent-runs-table"><thead><tr><th>Proposal</th><th>Family</th><th>Outcome</th><th>Duration</th><th>Challenges</th><th>Receipt</th><th>Evidence</th></tr></thead><tbody>{runs.slice(0, 4).map((run) => { const proposal = proposals.find((item) => item.proposal_id === run.proposal_id); return <tr key={run.proposal_id} onClick={() => onSelect(run.proposal_id)}><td><strong>{run.proposal_id}</strong><small>{proposal ? formatDateTime(proposal.created_at) : "Verified run"}</small></td><td><strong>{displayFamily(run.proposal_family)}</strong><small>{run.signal_service || "same-family proof"}</small></td><td><StatusPill tone={run.state === "CLOSED_FALSE_ALARM" ? "muted" : stateTone(run.state)} compact>{stateLabel(run.state)}</StatusPill></td><td>{formatDuration(run.total_resolution_secs)}</td><td>{run.challenges ?? 0}</td><td>{run.casper_explorer_url ? <a className="text-link" href={run.casper_explorer_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>CSPR.live <Icon name="external" size={13} /></a> : <StatusPill tone={run.receipt_verified === true ? "success" : "muted"} compact>{run.receipt_verified === true ? "Verified" : "N/A"}</StatusPill>}</td><td><StatusPill tone={run.chain_valid === true ? "success" : run.chain_valid === false ? "danger" : "muted"} compact>{run.chain_valid === true ? "Valid" : run.chain_valid === false ? "Invalid" : "Recorded"}</StatusPill></td></tr>; })}</tbody></table></div>;
+  return <div className="table-wrap"><table className="data-table recent-runs-table"><thead><tr><th>Proposal</th><th>Family</th><th>Outcome</th><th>Duration</th><th>Challenges</th><th>Receipt</th><th>Evidence</th></tr></thead><tbody>{runs.slice(0, 4).map((run) => { const proposal = proposals.find((item) => item.proposal_id === run.proposal_id); return <tr key={run.proposal_id} onClick={() => onSelect(run.proposal_id)}><td><strong>{run.proposal_id}</strong><small>{proposal ? formatDateTime(proposal.created_at) : "Recorded run"}</small></td><td><strong>{displayFamily(run.proposal_family)}</strong><small>{run.signal_service || "same-family proof"}</small></td><td><StatusPill tone={run.state === "CLOSED_FALSE_ALARM" ? "muted" : stateTone(run.state)} compact>{stateLabel(run.state)}</StatusPill></td><td>{formatDuration(run.total_resolution_secs)}</td><td>{run.challenges ?? 0}</td><td>{run.casper_explorer_url ? <a className="text-link" href={run.casper_explorer_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>CSPR.live <Icon name="external" size={13} /></a> : <StatusPill tone={run.receipt_verified === true ? "success" : "muted"} compact>{run.receipt_verified === true ? "Verified" : "N/A"}</StatusPill>}</td><td><StatusPill tone={run.chain_valid === true ? "success" : run.chain_valid === false ? "danger" : "muted"} compact>{run.chain_valid === true ? "Valid" : run.chain_valid === false ? "Invalid" : "Recorded"}</StatusPill></td></tr>; })}</tbody></table></div>;
 }

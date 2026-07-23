@@ -1,14 +1,20 @@
 /**
- * Proof-item builder receipts (security addendum, reviewer items 3 + 5).
+ * Proof-item builder receipts (security addendum, reviewer items 3 + 5;
+ * migrated to the current 22-check registry set).
  *
  * The reviewer showed buildSettlementRegistryItem() fabricating its own
  * passing evidence: identity fields plus one timestamp minted every required
  * check with passed:true. These tests pin the fixed contract: the caller must
  * supply one independently observed receipt PER required check (name, passed,
- * source, observed_at, evidence), and the builder validates the complete set —
- * refusing on any missing, duplicate, extra, unpassed, or malformed
- * observation. It must be impossible to mint verification_status "verified"
- * from identity fields alone.
+ * source, observed_at, evidence, optional detail_code), and the builder
+ * validates the complete set — refusing on any missing, duplicate, extra,
+ * unpassed, unknown-field, or malformed observation. It must be impossible to
+ * mint verification_status "verified" from identity fields alone.
+ *
+ * §13 emission rule: the validated `evidence` receipt field is INPUT ONLY —
+ * emitted checks carry only {name, required, passed, source, observed_at,
+ * detail_code?}; anything else would invalidate the item in the shared
+ * registry and the dashboard.
  */
 
 import { describe, expect, it } from "vitest";
@@ -20,45 +26,12 @@ import {
   type SettlementCheckObservationInput,
   type SettlementItemInput,
 } from "../src/settlement-item.js";
-
-const SOURCE = "artifacts/live/official-x402-settlement-v1.json";
-const OBSERVED_AT = "2026-07-22T20:00:00Z";
-
-export function validChecks(
-  observedAt = OBSERVED_AT,
-): SettlementCheckObservationInput[] {
-  return OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS.map((name) => ({
-    name,
-    passed: true,
-    source: SOURCE,
-    observed_at: observedAt,
-    evidence: `independently captured artifact record for ${name}`,
-  }));
-}
-
-function validInput(overrides: Partial<SettlementItemInput> = {}): SettlementItemInput {
-  return {
-    proposalId: "FINALS-X402-001",
-    actionId: "33".repeat(32),
-    envelopeHash: "44".repeat(32),
-    deploymentDomain: "55".repeat(32),
-    network: "casper:casper-test",
-    packageHash: "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
-    contractHash: "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a",
-    paymentRequirementsHash: "ab".repeat(32),
-    signedPaymentPayloadHash: "cd".repeat(32),
-    reportHash: "ef".repeat(32),
-    settlementTransaction: "66".repeat(32),
-    observationMode: "live",
-    capturedAt: "2026-07-22T20:05:00Z",
-    checks: validChecks(),
-    sourceCommit: "abcdef1",
-    deploymentCommit: "1234567",
-    artifactPath: SOURCE,
-    artifactSha256: "77".repeat(32),
-    ...overrides,
-  };
-}
+import {
+  FIXTURE_OBSERVED_AT as OBSERVED_AT,
+  FIXTURE_SOURCE as SOURCE,
+  validChecks,
+  validInput,
+} from "./settlement-item-fixture.js";
 
 function codeOf(fn: () => unknown): string {
   try {
@@ -81,7 +54,7 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
     ).toThrow(SettlementItemError);
   });
 
-  it("builds only from a complete set of per-check receipts, carrying each receipt through", () => {
+  it("builds only from a complete set of per-check receipts, emitting the §13 shape", () => {
     const item = buildSettlementRegistryItem(validInput());
     expect(item.verification_status).toBe("verified");
     expect(item.checks.map((c) => c.name)).toEqual([
@@ -92,7 +65,15 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
       expect(check.passed).toBe(true);
       expect(check.source).toBe(SOURCE);
       expect(check.observed_at).toBe(OBSERVED_AT);
-      expect(check.evidence).toContain(check.name);
+      // §13: the supporting evidence receipt is validated but NEVER emitted.
+      expect(Object.keys(check)).toEqual([
+        "name",
+        "required",
+        "passed",
+        "source",
+        "observed_at",
+      ]);
+      expect(check).not.toHaveProperty("evidence");
     }
   });
 
@@ -131,7 +112,7 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
         passed: true,
         source: SOURCE,
         observed_at: OBSERVED_AT,
-        evidence: "not part of the frozen required set",
+        evidence: "not part of the current required set",
       },
     ];
     expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks })))).toBe(
@@ -157,6 +138,17 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
     checks[0] = null as unknown as SettlementCheckObservationInput;
     expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks })))).toBe(
       "invalid_check_observation",
+    );
+  });
+
+  it("refuses a receipt carrying a field outside the receipt contract", () => {
+    const checks = validChecks();
+    checks[4] = {
+      ...checks[4]!,
+      required: true,
+    } as unknown as SettlementCheckObservationInput;
+    expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks })))).toBe(
+      "unexpected_check_field",
     );
   });
 
@@ -188,7 +180,7 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
     );
   });
 
-  it("refuses a check without supporting evidence", () => {
+  it("refuses a check without supporting evidence (input contract unchanged)", () => {
     const empty = validChecks();
     empty[3] = { ...empty[3]!, evidence: "" };
     expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks: empty })))).toBe(
@@ -199,6 +191,26 @@ describe("the builder cannot fabricate evidence (reviewer item 3)", () => {
     expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks: missing })))).toBe(
       "invalid_check_evidence",
     );
+  });
+
+  it("refuses a malformed detail_code but carries a valid one through", () => {
+    const bad = validChecks();
+    bad[6] = { ...bad[6]!, detail_code: "not a code!" };
+    expect(codeOf(() => buildSettlementRegistryItem(validInput({ checks: bad })))).toBe(
+      "invalid_check_detail_code",
+    );
+    const good = validChecks();
+    good[6] = { ...good[6]!, detail_code: "readback_exact" };
+    const item = buildSettlementRegistryItem(validInput({ checks: good }));
+    expect(item.checks[6]?.detail_code).toBe("readback_exact");
+    expect(Object.keys(item.checks[6]!)).toEqual([
+      "name",
+      "required",
+      "passed",
+      "source",
+      "observed_at",
+      "detail_code",
+    ]);
   });
 
   it("refuses a check name violating the frozen grammar", () => {

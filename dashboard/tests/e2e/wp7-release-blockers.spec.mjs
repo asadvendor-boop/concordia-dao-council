@@ -74,12 +74,18 @@ function proposalCard(title = "Risky treasury move", sequence = 1) {
   return { card_type: "ProposalCard", sequence, hash: `hash-proposal-${sequence}`, data: { title, raw_payload: { title } } };
 }
 
+// DELIBERATE MIGRATION (WP7 final blocker 4 — exact action binding): the
+// shared predicate now also requires approval.action_hash === plan
+// data.action_binding_hash. The plan fixture carries the binding hash, and
+// every approval fixture that isolates a DIFFERENT violated dimension (or is a
+// positive control) carries the matching action_hash. No assertion was
+// weakened.
 function planCard(extra = {}) {
   return {
     card_type: "ResponsePlan",
     sequence: 4,
     hash: "plan-hash-abc",
-    data: { envelopes: [{ action_id: "execute_casper_governance_receipt", target: "treasury", parameters: { approved_allocation_bps: 800 } }] },
+    data: { action_binding_hash: "action-hash-def", envelopes: [{ action_id: "execute_casper_governance_receipt", target: "treasury", parameters: { approved_allocation_bps: 800 } }] },
     ...extra,
   };
 }
@@ -92,7 +98,7 @@ function receiptCard(data = {}) {
   return { card_type: "CasperExecutionReceipt", sequence: 6, hash: "receipt-hash", data };
 }
 
-const boundApproval = () => approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" });
+const boundApproval = () => approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" });
 const verifiedReceipt = () => receiptCard({
   actions_taken: [{ action_id: "execute_casper_governance_receipt", status: "success", transaction_hash: "tx-hash" }],
   timeline: [{ event: "casper_transaction_verified", receipt_verified: true, details: [] }],
@@ -102,7 +108,7 @@ const presenceOnlyCards = () => [
   planCard(),
   // Approval WITHOUT any decision and receipt WITHOUT any verification: pure
   // card presence that must never light a success cue anywhere.
-  approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc" }),
+  approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" }),
   receiptCard({ actions_taken: [{ action_id: "execute_casper_governance_receipt", status: "success" }] }),
 ];
 
@@ -162,7 +168,7 @@ test.describe("overview council activity and lifecycle never assert from card pr
 
   test("an approval bound to a DIFFERENT proposal never renders Authorized or a complete Approved step", async ({ page }) => {
     await openOverview(page, {
-      cards: [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc" })],
+      cards: [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })],
       evidenceExtra: { chain_valid: true },
     });
     const activity = page.locator(".agent-mini-list");
@@ -174,7 +180,7 @@ test.describe("overview council activity and lifecycle never assert from card pr
 
   test("a REJECTED approval renders Authorization rejected, never Authorized", async ({ page }) => {
     await openOverview(page, {
-      cards: [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })],
+      cards: [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })],
       evidenceExtra: { chain_valid: true },
     });
     const activity = page.locator(".agent-mini-list");
@@ -185,7 +191,7 @@ test.describe("overview council activity and lifecycle never assert from card pr
 
   test("an approval with a MISMATCHED plan hash never renders Authorized", async ({ page }) => {
     await openOverview(page, {
-      cards: [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash" })],
+      cards: [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash", action_hash: "action-hash-def" })],
       evidenceExtra: { chain_valid: true },
     });
     const activity = page.locator(".agent-mini-list");
@@ -227,9 +233,14 @@ test.describe("agents page truth labels use the same strict predicates", () => {
   });
 
   test("a rejected approval renders Authorization rejected, never Plan authorized", async ({ page }) => {
-    await openAgents(page, [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })]);
+    await openAgents(page, [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     const directory = page.locator(".agent-directory-grid");
-    await expect(directory.getByText("Authorization rejected")).toBeVisible();
+    // First evidence-derived render: the proposals -> selection -> evidence
+    // chain is entirely client-side after hydration, and under cold-start or
+    // parallel-worker load its final render can exceed the 6s expect default
+    // (reproduced 1-in-~200 under --repeat-each; the text was present in the
+    // teardown snapshot). Bounded longer wait, assertion unchanged.
+    await expect(directory.getByText("Authorization rejected")).toBeVisible({ timeout: 15_000 });
     await expect(directory.getByText("Plan authorized")).toHaveCount(0);
   });
 
@@ -252,27 +263,27 @@ test.describe("workspace Review Approval CTA is suppressed only by genuine autho
   const cta = (page) => page.locator(".page-header").getByRole("link", { name: "Review Approval" });
 
   test("a REJECTED approval does not suppress the CTA", async ({ page }) => {
-    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })]);
+    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     await expect(cta(page)).toBeVisible();
   });
 
   test("an approval with an UNKNOWN decision does not suppress the CTA", async ({ page }) => {
-    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "MAYBE_LATER", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })]);
+    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "MAYBE_LATER", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     await expect(cta(page)).toBeVisible();
   });
 
   test("a malformed approval with no decision does not suppress the CTA", async ({ page }) => {
-    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })]);
+    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     await expect(cta(page)).toBeVisible();
   });
 
   test("an UNBOUND approval (wrong plan hash) does not suppress the CTA", async ({ page }) => {
-    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash" })]);
+    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: CANONICAL, plan_hash: "some-other-plan-hash", action_hash: "action-hash-def" })]);
     await expect(cta(page)).toBeVisible();
   });
 
   test("an approval bound to a DIFFERENT proposal does not suppress the CTA", async ({ page }) => {
-    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc" })]);
+    await openWorkspace(page, [proposalCard(), planCard(), approvalCard({ decision: "APPROVED", proposal_id: OTHER, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     await expect(cta(page)).toBeVisible();
   });
 
@@ -333,7 +344,7 @@ test.describe("evidence multisig decisions require an explicit recorded decision
   });
 
   test("an explicit REJECT decision counts as a recorded decision (a denial is still a human decision)", async ({ page }) => {
-    await openEvidence(page, { cards: [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc" })] });
+    await openEvidence(page, { cards: [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })] });
     await expect(decisionsRow(page)).toContainText("1");
   });
 

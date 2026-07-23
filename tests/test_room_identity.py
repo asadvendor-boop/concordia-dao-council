@@ -113,7 +113,8 @@ def test_rm_invalid_key_is_401(client):
 
 
 def test_rm_create_room_matrix(client):
-    # recorder and gateway may create rooms; other agent roles may not.
+    # recorder may create rooms; other agent roles may not. The legacy
+    # gateway secret is unauthenticated (integrated contract), not a creator.
     room_id = _create_room(client, "recorder")
     assert room_id.startswith("room-")
 
@@ -125,7 +126,8 @@ def test_rm_create_room_matrix(client):
     response = client.post(
         "/api/rooms", json={"title": "gw room"}, headers=_gateway_headers()
     )
-    assert response.status_code == 200
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_agent_key"
 
 
 def test_rm_scribe_has_no_room_operations(client):
@@ -304,17 +306,24 @@ def test_rm09_join_matrix_enforced(client):
     assert response.json()["detail"] == "not_a_room_member"
 
 
-def test_rm10_operator_cannot_recruit_and_unknown_participant_rejected(client):
+def test_rm10_operator_cannot_recruit_and_unknown_participant_rejected(client, db):
     room_id = _create_room(client, "recorder")
-    # Gateway may join anyone (matrix); bring the operator in directly.
     response = _add(client, room_id, AGENT_IDS["operator"], role="recorder")
     assert response.status_code == 403  # recorder may only join triage
+
+    # The legacy gateway secret can no longer join anyone: it is
+    # unauthenticated (401) in every environment (integrated contract).
     gateway_join = client.post(
         f"/api/rooms/{room_id}/participants",
         json={"participant_id": AGENT_IDS["operator"]},
         headers=_gateway_headers(),
     )
-    assert gateway_join.status_code == 200
+    assert gateway_join.status_code == 401
+    assert gateway_join.json()["detail"] == "invalid_agent_key"
+
+    # Bring the operator in through the trusted internal server-side helper
+    # (the approval-boundary path) so its own matrix row can be exercised.
+    store_room_participant(db, room_id, AGENT_IDS["operator"], role="operator")
 
     # operator has no join targets at all
     response = _add(client, room_id, AGENT_IDS["diagnosis"], role="operator")
@@ -405,11 +414,12 @@ def test_rm11_list_rooms_scoped_to_authenticated_caller(client):
     assert response.status_code == 200
     assert {room["room_id"] for room in response.json()["rooms"]} == {room_one}
 
-    # Gateway service scope sees both rooms.
+    # The legacy gateway secret cannot enumerate rooms: unauthenticated (401)
+    # in every environment (integrated contract).
     response = client.get("/api/rooms", headers=_gateway_headers())
-    assert response.status_code == 200
-    listed = {room["room_id"] for room in response.json()["rooms"]}
-    assert {room_one, room_two} <= listed
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_agent_key"
+    assert room_one not in response.text and room_two not in response.text
 
 
 # ---------------------------------------------------------------------------
@@ -444,24 +454,33 @@ def test_rm12_internal_helpers_bypass_route_enforcement(client, db):
 
 
 # ---------------------------------------------------------------------------
-# Gateway fallback restrictions
+# Gateway fallback restrictions — integrated contract: the legacy
+# GATEWAY_SECRET → "gateway" full-ACL fallback is UNAUTHENTICATED (401) for
+# every room route in EVERY environment. (Migrated from the earlier
+# production-only 403-after-authentication slice; on the integrated tree the
+# 401 comes from gateway/auth.py itself, which removed the fallback globally.)
 # ---------------------------------------------------------------------------
 
-def test_rm_gateway_can_post_outside_production(client):
+def test_rm_gateway_secret_post_unauthenticated_outside_production(client, db):
     room_id = _create_room(client)
     response = client.post(
         f"/api/rooms/{room_id}/messages",
         json={"content": "gateway service note"},
         headers=_gateway_headers(),
     )
-    assert response.status_code == 200
-    assert response.json()["sender_role"] == "gateway"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_agent_key"
+    # Nothing was stored by the rejected fallback caller.
+    count = db.execute(
+        "SELECT COUNT(*) FROM proposal_room_messages WHERE room_id=?",
+        (room_id,),
+    ).fetchone()[0]
+    assert count == 0
 
 
-def test_rm_gateway_post_forbidden_in_production(client, monkeypatch):
-    """Production agent traffic cannot use the GATEWAY_SECRET full-ACL
-    fallback for room posting (route-level slice; the global fallback
-    removal in gateway/auth.py + submission.py is a Codex handoff)."""
+def test_rm_gateway_secret_post_unauthenticated_in_production(client, monkeypatch):
+    """Production traffic gets the SAME 401 unauthenticated rejection — never
+    a post-authentication 403 special case."""
     room_id = _create_room(client)
     monkeypatch.setenv("APP_ENV", "production")
     response = client.post(
@@ -469,30 +488,94 @@ def test_rm_gateway_post_forbidden_in_production(client, monkeypatch):
         json={"content": "should be rejected"},
         headers=_gateway_headers(),
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "gateway_fallback_forbidden_for_agent_traffic"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_agent_key"
 
 
 # ---------------------------------------------------------------------------
-# WP3-8 — duplicate configured agent IDs must not resolve via set iteration
+# WP3-8 — duplicate configured agent IDs must not resolve via set iteration.
+# Integrated contract (item 4): duplicates present AT STARTUP fail fast in
+# gateway.auth (AgentIdentityConfigurationError); the route-level ambiguity
+# rejections below remain as defense-in-depth for post-startup config drift.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
-def dup_agent_client(monkeypatch, tmp_path):
-    """App whose triage and diagnosis roles are misconfigured to the SAME
-    agent id — principal resolution must fail closed, not pick one by set
+def test_rm_wp3_8_duplicate_agent_ids_fail_fast_contract(monkeypatch, tmp_path):
+    """Primary assertion for the integrated contract: STARTUP with duplicate
+    configured agent IDs fails fast — gateway.auth raises
+    AgentIdentityConfigurationError before any route can see an ambiguous
+    principal. This branch predates the Codex-owned gateway/auth.py change,
+    so when that exception class does not exist yet the PRE-INTEGRATION slice
+    of the same contract is asserted instead: startup succeeds and every
+    route touching the collided principal fails closed
+    (ambiguous_participant / ambiguous_principal), never resolving it by set
     iteration order."""
     for role, key in KEYS.items():
         monkeypatch.setenv(f"{role.upper()}_SUBMISSION_KEY", key)
     for role, agent_id in AGENT_IDS.items():
         monkeypatch.setenv(f"{role.upper()}_AGENT_ID", agent_id)
-    # Collision: diagnosis now shares triage's agent id.
+    # Duplicate configured BEFORE startup: diagnosis shares triage's agent id.
     monkeypatch.setenv("DIAGNOSIS_AGENT_ID", AGENT_IDS["triage"])
     monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
     gateway_auth._reset_for_testing()
+    exc_class = getattr(gateway_auth, "AgentIdentityConfigurationError", None)
+    try:
+        if exc_class is not None:
+            # Integrated tree: fail-fast startup rejection.
+            with pytest.raises(exc_class):
+                with TestClient(create_app(db_path=str(tmp_path / "dup-start.db"))):
+                    pass
+        else:
+            # Pre-integration branch slice of the same contract: fail closed
+            # at every route that touches the collided principal.
+            with TestClient(
+                create_app(db_path=str(tmp_path / "dup-start.db"))
+            ) as test_client:
+                room_id = _create_room(test_client, "recorder")
+                add = test_client.post(
+                    f"/api/rooms/{room_id}/participants",
+                    json={"participant_id": AGENT_IDS["triage"]},
+                    headers=_headers("recorder"),
+                )
+                assert add.status_code == 400
+                assert add.json()["detail"] in {
+                    "unknown_participant",
+                    "ambiguous_participant",
+                }
+                post = test_client.post(
+                    f"/api/rooms/{room_id}/messages",
+                    json={"content": "hi"},
+                    headers=_headers("diagnosis"),
+                )
+                assert post.status_code == 403
+                assert post.json()["detail"] in {
+                    "ambiguous_principal",
+                    "not_a_room_member",
+                }
+    finally:
+        gateway_auth._reset_for_testing()
+
+
+@pytest.fixture()
+def dup_agent_client(monkeypatch, tmp_path):
+    """App whose triage and diagnosis roles drift to the SAME agent id AFTER
+    startup — principal resolution must fail closed, not pick one by set
+    iteration order. The duplicate is introduced post-startup so this
+    defense-in-depth coverage runs on BOTH trees: on the integrated tree a
+    startup-time duplicate is already rejected fail-fast by gateway.auth
+    (see test_rm_wp3_8_duplicate_agent_ids_fail_fast_contract)."""
+    for role, key in KEYS.items():
+        monkeypatch.setenv(f"{role.upper()}_SUBMISSION_KEY", key)
+    for role, agent_id in AGENT_IDS.items():
+        monkeypatch.setenv(f"{role.upper()}_AGENT_ID", agent_id)
+    monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    gateway_auth._reset_for_testing()
     with TestClient(create_app(db_path=str(tmp_path / "dup.db"))) as test_client:
+        # Post-startup config drift: diagnosis now shares triage's agent id.
+        monkeypatch.setenv("DIAGNOSIS_AGENT_ID", AGENT_IDS["triage"])
         yield test_client
     gateway_auth._reset_for_testing()
 
@@ -522,6 +605,156 @@ def test_rm_wp3_8_duplicate_principal_caller_rejected(dup_agent_client):
     )
     assert response.status_code == 403
     assert response.json()["detail"] in {"ambiguous_principal", "not_a_room_member"}
+
+
+# ---------------------------------------------------------------------------
+# Re-audit item 3 — existing room on create: membership or matrix auto-join,
+# never disclosure merely for holding create rights
+# ---------------------------------------------------------------------------
+
+
+def _create_with_proposal(client, role_headers, proposal_id, title="Bound Room"):
+    return client.post(
+        "/api/rooms",
+        json={"title": title, "proposal_id": proposal_id},
+        headers=role_headers,
+    )
+
+
+def _seed_proposal(db, proposal_id):
+    """Satisfy the proposal_rooms.proposal_id foreign key for bound rooms."""
+    db.execute(
+        "INSERT INTO proposals (proposal_id, state, created_at, updated_at) "
+        "VALUES (?, 'CHALLENGED', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z')",
+        (proposal_id,),
+    )
+
+
+def _seed_legacy_room(db, room_id, proposal_id, created_by, title="Legacy Room"):
+    """Seed a durable pre-existing proposal-bound room (e.g. a historical
+    gateway-created row) without going through the create route."""
+    _seed_proposal(db, proposal_id)
+    db.execute(
+        "INSERT INTO proposal_rooms "
+        "(room_id, proposal_id, title, created_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z')",
+        (room_id, proposal_id, title, created_by),
+    )
+
+
+def test_rm_create_existing_room_not_disclosed_to_non_member_create_role(client, db):
+    """A recorder (create rights, NOT a member, no matrix right to join
+    itself, not the room's creator role) re-creating an existing
+    proposal-bound room gets the standard membership 403 and learns nothing —
+    never the room merely because it can create rooms."""
+    room_id = "room-legacy-gw-owned"
+    _seed_legacy_room(db, room_id, "PROP-RM-EXIST-403", "gateway", title="GW Owned")
+
+    probe = _create_with_proposal(
+        client, _headers("recorder"), "PROP-RM-EXIST-403", title="Probe"
+    )
+    assert probe.status_code == 403
+    # Only the existing membership error code — no room identity, title, or
+    # any other existence detail is disclosed.
+    assert probe.json() == {"detail": "not_a_room_member"}
+    assert room_id not in probe.text
+    assert "GW Owned" not in probe.text
+
+    # No membership was granted by the refused create.
+    row = db.execute(
+        "SELECT 1 FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, AGENT_IDS["recorder"]),
+    ).fetchone()
+    assert row is None
+    read = client.get(f"/api/rooms/{room_id}/messages", headers=_headers("recorder"))
+    assert read.status_code == 403
+
+
+def test_rm_create_creator_role_atomically_rejoined_and_can_read(client, db):
+    """The room's creator role re-creating its own proposal-bound room is
+    atomically auto-joined per the frozen create_room contract
+    (creator_auto_joined) — idempotently — and can then read it."""
+    _seed_proposal(db, "PROP-RM-REJOIN-1")
+    first = _create_with_proposal(
+        client, _headers("recorder"), "PROP-RM-REJOIN-1", title="Rec Room"
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "created"
+    room_id = first.json()["room_id"]
+
+    # Simulate lost membership (legacy/repaired data): the creator role is no
+    # longer a participant and can no longer read its member-scoped room.
+    db.execute(
+        "DELETE FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, AGENT_IDS["recorder"]),
+    )
+    read = client.get(f"/api/rooms/{room_id}/messages", headers=_headers("recorder"))
+    assert read.status_code == 403
+
+    again = _create_with_proposal(
+        client, _headers("recorder"), "PROP-RM-REJOIN-1", title="Rec Room"
+    )
+    assert again.status_code == 200
+    assert again.json()["status"] == "already_exists"
+    assert again.json()["room_id"] == room_id
+
+    # Atomically re-joined with the server-derived identity — readable again.
+    row = db.execute(
+        "SELECT role FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, AGENT_IDS["recorder"]),
+    ).fetchone()
+    assert row is not None
+    assert row["role"] == "recorder"
+    read = client.get(f"/api/rooms/{room_id}/messages", headers=_headers("recorder"))
+    assert read.status_code == 200
+
+
+def test_rm_create_existing_member_and_idempotent_recreate_unaffected(client, db):
+    """An existing member is unaffected by re-create and the idempotent
+    re-create path keeps working; the legacy gateway secret stays
+    unauthenticated (401) on the re-create path like everywhere else."""
+    _seed_proposal(db, "PROP-RM-IDEM-1")
+    first = _create_with_proposal(
+        client, _headers("recorder"), "PROP-RM-IDEM-1", title="Idem Room"
+    )
+    assert first.status_code == 200
+    room_id = first.json()["room_id"]
+
+    # Idempotent re-create by the auto-joined creator: same room, still member.
+    again = _create_with_proposal(
+        client, _headers("recorder"), "PROP-RM-IDEM-1", title="Idem Room"
+    )
+    assert again.status_code == 200
+    assert again.json()["status"] == "already_exists"
+    assert again.json()["room_id"] == room_id
+    memberships = db.execute(
+        "SELECT COUNT(*) FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id=?",
+        (room_id, AGENT_IDS["recorder"]),
+    ).fetchone()[0]
+    assert memberships == 1
+    assert _post(client, room_id, "recorder").status_code == 200
+
+    # The legacy gateway secret is unauthenticated on re-create too, and no
+    # gateway participant row is ever fabricated.
+    gw = _create_with_proposal(
+        client, _gateway_headers(), "PROP-RM-IDEM-1", title="Idem Room"
+    )
+    assert gw.status_code == 401
+    assert room_id not in gw.text
+    gw_rows = db.execute(
+        "SELECT COUNT(*) FROM proposal_room_participants "
+        "WHERE room_id=? AND participant_id='gateway'",
+        (room_id,),
+    ).fetchone()[0]
+    assert gw_rows == 0
+
+    # The existing member's access is unchanged.
+    read = client.get(f"/api/rooms/{room_id}/messages", headers=_headers("recorder"))
+    assert read.status_code == 200
 
 
 # ---------------------------------------------------------------------------

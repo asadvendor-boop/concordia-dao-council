@@ -146,6 +146,15 @@ _STALE_RUNNING_RECONCILE_BATCH = 25   # bounded RUNNING→FAILED recovery per is
 # never-consumed row is rejected as capability_expired.
 _RUNNING_LEASE_SECONDS = 180
 
+# Hard execution bound for one activation pipeline (product-security re-audit
+# item 2): STRICTLY below the 180s RUNNING recovery lease, so a legitimate
+# slow run is CANCELLED — its remaining side effects stop — before any
+# crash-recovery path could ever terminalize its still-active RUNNING claim
+# to FAILED mid-flight. On timeout the pipeline task is cancelled
+# (asyncio.wait_for) and the claim records an honest terminal FAILED that
+# replays on retry like every other terminal result.
+_EXECUTION_TIMEOUT_SECONDS = 150
+
 # Durable lifecycle state values (ISSUED -> RUNNING -> SUCCEEDED|FAILED).
 _STATE_ISSUED = "ISSUED"
 _STATE_RUNNING = "RUNNING"
@@ -1163,13 +1172,38 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
         raise
 
     # This request now exclusively owns the RUNNING claim. The pipeline runs
-    # OUTSIDE the write lock; provenance is reserved inside it (WP3-3).
-    status_code, trigger_payload = await _execute_demo_trigger(
-        db,
-        payload["scenario_id"],
-        demo_run_id=demo_run_id,
-        enforce_cooldown=False,
-    )
+    # OUTSIDE the write lock; provenance is reserved inside it (WP3-3). The
+    # hard execution timeout sits strictly below the RUNNING lease: a slow
+    # legitimate run is cancelled (its remaining side effects stop) while its
+    # lease is still active, and its claim is terminalized FAILED honestly —
+    # it can never still be executing when lease-based crash recovery becomes
+    # possible.
+    try:
+        status_code, trigger_payload = await asyncio.wait_for(
+            _execute_demo_trigger(
+                db,
+                payload["scenario_id"],
+                demo_run_id=demo_run_id,
+                enforce_cooldown=False,
+            ),
+            timeout=_EXECUTION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        # The pipeline task was cancelled by wait_for; record the honest
+        # degraded terminal — never a fabricated success, never a re-run.
+        logger.error(
+            "Demo activation exceeded the %ss execution timeout for scenario=%s",
+            _EXECUTION_TIMEOUT_SECONDS,
+            payload["scenario_id"],
+        )
+        status_code, trigger_payload = 503, {
+            "success": False,
+            "error": "Demo run exceeded the execution timeout and was cancelled",
+            "error_code": "execution_timeout",
+            "demo_run_id": demo_run_id,
+            "scenario_id": payload["scenario_id"],
+            "is_demo": True,
+        }
 
     if status_code == 200 and trigger_payload.get("success"):
         response_body: dict[str, Any] = {

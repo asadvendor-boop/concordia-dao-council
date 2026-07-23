@@ -26,6 +26,7 @@ import {
   api,
   cx,
   humanizeWalletError,
+  isCasperLiveReadComplete,
   isWalletIntentSignable,
   pctFromBps,
   proofTabFromLocation,
@@ -37,7 +38,7 @@ import {
 import { Avatar, CodePreview, EmptyState, HashChip, Icon, PageHeader, Panel, PendingNote, PrimaryButton, StatusPill } from "../primitives";
 import { ProofActionBar } from "../proof-actions";
 import { EnforcementClimaxPanel, LeashMeter, ProposalSelector } from "../shared";
-import { ProofRegistryPanel, findRegistryItem } from "../provenance";
+import { ProofRegistryPanel, findRegistryItem, findRegistryItemByProofId, itemGreenVerified } from "../provenance";
 import { V3Sequence } from "../V3Sequence";
 import { OfficialX402Panel, SafePayPanel } from "../payments";
 import { signWithCasperWalletDirect } from "../wallet";
@@ -254,12 +255,29 @@ export function ProofCenterPage({ data }) {
     }
   }, [proposalId, quorumSigningAvailable, rememberQuorumFinalReceiptHash]);
 
-  const receipt = proof?.casper_receipt || data.evidence?.casper_receipt || CANONICAL_RECEIPT_FACTS;
-  const receiptIsLive = Boolean(proof?.casper_receipt || data.evidence?.casper_receipt);
+  // WP7 final fail-open kill: CANONICAL_RECEIPT_FACTS is recorded display
+  // history and NEVER backs a verified-receipt claim. Only a live/registry
+  // proof payload makes receiptIsLive true; when it is false the recorded
+  // facts render exclusively under explicit recorded/historical labeling with
+  // neutral tone (see the receipts panel below).
+  const liveReceipt = proof?.casper_receipt || data.evidence?.casper_receipt || null;
+  const receiptIsLive = Boolean(liveReceipt);
+  const receipt = liveReceipt || CANONICAL_RECEIPT_FACTS;
   const policy = proof?.policy_leash_meter || CANONICAL_POLICY_FACTS;
   const policyIsLive = Boolean(proof?.policy_leash_meter);
   const firewall = proof?.locke_execution_firewall || null;
   const compactRows = proof?.compact_proof_table?.length ? proof.compact_proof_table : RECORDED_PROOF_CLAIMS;
+  // A compact proof-table row can NEVER turn green from status === "verified"
+  // alone. Green requires the provenance-aware registry item backing the row
+  // (matched by the row's proof_id or proof_type) to pass the strict
+  // provenance.js validation with every required check explicitly passed:true.
+  // Missing/failed/unknown registry backing renders a non-green row.
+  const compactRowGreen = (row) => {
+    if (String(row?.status || "").toLowerCase() !== "verified") return false;
+    const registryItem = findRegistryItemByProofId(registry, row?.proof_id)
+      || (row?.proof_type ? findRegistryItem(registry, row.proof_type) : null);
+    return Boolean(registryItem) && itemGreenVerified(registryItem);
+  };
   const safetyProof = safety || proof?.adversarial_safety_demo || null;
   const outcomeRows = proof?.outcome_gallery?.length ? proof.outcome_gallery : OUTCOME_GALLERY;
   const reputation = proof?.council_reputation?.length ? proof.council_reputation : null;
@@ -267,10 +285,8 @@ export function ProofCenterPage({ data }) {
   const liveRead = proof?.mercer_live_casper_read || null;
   // A live-read object is only a "Live data source" when its asserting fields
   // are explicitly present: a block height AND a state root. Object presence
-  // alone proves nothing.
-  const liveReadComplete = Boolean(liveRead)
-    && liveRead.latest_block_height !== undefined && liveRead.latest_block_height !== null && liveRead.latest_block_height !== ""
-    && Boolean(liveRead.state_root_hash);
+  // alone proves nothing (shared strict predicate in lib.js).
+  const liveReadComplete = isCasperLiveReadComplete(liveRead);
   const ipfsEvidence = proof?.ipfs_evidence || data.evidence?.ipfs_evidence || null;
   // "Pinned" requires an explicit, positive pin observation in the payload —
   // a CID alone is never a verified pin.
@@ -356,11 +372,16 @@ export function ProofCenterPage({ data }) {
     {activeProofTab === "summary" && <div role="tabpanel" id="proof-tabpanel-summary" aria-labelledby="proof-tab-summary" tabIndex={0}>
       <EnforcementClimaxPanel />
       <div className="proof-hero-grid">
-        <Panel title="Canonical proof table" eyebrow="Judge checklist"><div className="proof-table">{compactRows.map((row) => { const rowStatus = String(row.status || "").toLowerCase(); const rowTone = rowStatus === "verified" ? "success" : rowStatus === "recorded" ? "info" : statusTone(row.status, "warning"); return <div key={row.claim}><span><Icon name={rowTone === "success" ? "check" : rowTone === "info" ? "evidence" : "clock"} size={16} /></span><div><strong>{row.claim}</strong><small>{row.evidence || "Inspect evidence chain"}</small></div><StatusPill tone={rowTone} compact>{row.status}</StatusPill></div>; })}</div>{!proof?.compact_proof_table?.length && <p className="proof-table-note">Live verification statuses load from the gateway; until then the rows above link to the recorded evidence without asserting live verification.</p>}</Panel>
+        <Panel title="Canonical proof table" eyebrow="Judge checklist"><div className="proof-table">{compactRows.map((row) => { const rowStatus = String(row.status || "").toLowerCase(); const rowGreen = compactRowGreen(row); const rowTone = rowGreen ? "success" : rowStatus === "verified" || rowStatus === "recorded" ? "info" : statusTone(row.status, "warning"); const rowLabel = rowStatus === "verified" && !rowGreen ? "unconfirmed" : row.status; return <div key={row.claim}><span><Icon name={rowTone === "success" ? "check" : rowTone === "info" ? "evidence" : "clock"} size={16} /></span><div><strong>{row.claim}</strong><small>{row.evidence || "Inspect evidence chain"}</small></div><StatusPill tone={rowTone} compact>{rowLabel}</StatusPill></div>; })}</div>{!proof?.compact_proof_table?.length && <p className="proof-table-note">Live verification statuses load from the gateway; until then the rows above link to the recorded evidence without asserting live verification.</p>}{proof?.compact_proof_table?.length && compactRows.some((row) => String(row?.status || "").toLowerCase() === "verified" && !compactRowGreen(row)) ? <p className="proof-table-note">Rows the gateway marks verified render green only when the provenance registry independently verifies them (every required check passed). Unconfirmed rows stay neutral.</p> : null}</Panel>
         <Panel title="Policy leash meter" eyebrow={policyIsLive ? "LLM cannot inject numbers" : "Recorded canonical run · LLM cannot inject numbers"}>
           <LeashMeter requestedBps={policy.requested_bps} approvedBps={policy.approved_bps} requestedLabel={policy.requested_label} approvedLabel={policy.approved_label} lead="An AI requested 30%. Concordia authorized at most 8%." />
         </Panel>
-        <Panel title="Verified receipts" eyebrow="Completed proof, not pending actions"><div className="verified-receipts"><HashChip label="Canonical receipt" value={receipt.deploy_hash || DEFAULT_CASPER_DEPLOY_HASH} href={receipt.explorer_url || DEFAULT_CASPER_EXPLORER_URL} tone="success" /><HashChip label="Wallet receipt" value={DEFAULT_WALLET_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} /><HashChip label="Quorum approval" value={DEFAULT_QUORUM_APPROVAL_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_APPROVAL_HASH}`} /><HashChip label="Final quorum receipt" value={DEFAULT_QUORUM_FINAL_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_FINAL_RECEIPT_HASH}`} /><HashChip label="SafePay Lite payment (historical)" value={HISTORICAL_SAFEPAY_PAYMENT_HASH} /></div><p className="technical-note-lede">Primary reviewer actions stay in the header. This card only lists completed receipts so a judge never confuses recorded proof with a pending transaction.</p></Panel>
+        {/* WP7 final: "Verified receipts" (and any success tone) renders ONLY
+            when a live/registry receipt payload was observed (receiptIsLive).
+            Without it the same recorded hashes render under an explicit
+            recorded/historical title with neutral tone — recorded facts are
+            never presented as a verified receipt. */}
+        <Panel className="receipts-panel" title={receiptIsLive ? "Verified receipts" : "Recorded receipts · historical"} eyebrow={receiptIsLive ? "Completed proof, not pending actions" : "Recorded on Casper Testnet · live verification unavailable"}><div className="verified-receipts"><HashChip label={receiptIsLive ? "Canonical receipt" : "Canonical receipt (recorded)"} value={receipt.deploy_hash || DEFAULT_CASPER_DEPLOY_HASH} href={receipt.explorer_url || DEFAULT_CASPER_EXPLORER_URL} tone={receiptIsLive ? "success" : "info"} /><HashChip label="Wallet receipt" value={DEFAULT_WALLET_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} /><HashChip label="Quorum approval" value={DEFAULT_QUORUM_APPROVAL_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_APPROVAL_HASH}`} /><HashChip label="Final quorum receipt" value={DEFAULT_QUORUM_FINAL_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_FINAL_RECEIPT_HASH}`} /><HashChip label="SafePay Lite payment (historical)" value={HISTORICAL_SAFEPAY_PAYMENT_HASH} /></div><p className="technical-note-lede">{receiptIsLive ? "Primary reviewer actions stay in the header. This card only lists completed receipts so a judge never confuses recorded proof with a pending transaction." : "These are recorded historical receipt hashes on Casper Testnet. No live verification is asserted while the live proof payload is unavailable."}</p></Panel>
       </div>
       <V3Sequence item={v3Item} />
       <div className="proof-two-column payments-row">
@@ -384,7 +405,7 @@ export function ProofCenterPage({ data }) {
     </div>}
 
     {activeProofTab === "onchain" && <div className="proof-two-column" role="tabpanel" id="proof-tabpanel-onchain" aria-labelledby="proof-tab-onchain" tabIndex={0}>
-      <Panel title="Typed Casper payload" eyebrow="ByteArray(32) + U32"><div className="intent-grid"><div><span>Contract</span><HashChip value={receipt.contract_hash || DEFAULT_CASPER_CONTRACT_HASH} /></div><div><span>Entry point</span><strong>{receipt.entry_point || "store_governance_receipt"}</strong></div><div><span>Typed args</span><strong>{typedArgsCount || "—"}</strong></div><div><span>Argument source</span><strong>{walletArgumentSourceLabel}</strong>{walletArgumentSource && <code>{walletArgumentSource}</code>}</div></div><CodePreview summary="Show typed runtime args" value={unsignedIntent?.typed_runtime_args || receipt.typed_args || CANONICAL_RECEIPT_FACTS.typed_args} /></Panel>
+      <Panel title="Typed Casper payload" eyebrow={receiptIsLive || unsignedIntent?.typed_runtime_args ? "ByteArray(32) + U32" : "Recorded canonical payload · ByteArray(32) + U32"}><div className="intent-grid"><div><span>Contract</span><HashChip value={receipt.contract_hash || DEFAULT_CASPER_CONTRACT_HASH} /></div><div><span>Entry point</span><strong>{receipt.entry_point || "store_governance_receipt"}</strong></div><div><span>Typed args</span><strong>{typedArgsCount || "—"}</strong></div><div><span>Argument source</span><strong>{walletArgumentSourceLabel}</strong>{walletArgumentSource && <code>{walletArgumentSource}</code>}</div></div><CodePreview summary="Show typed runtime args" value={unsignedIntent?.typed_runtime_args || receipt.typed_args || CANONICAL_RECEIPT_FACTS.typed_args} /></Panel>
       <Panel title="Judge Sandbox" eyebrow="Safe testnet intent preview"><div className="judge-sandbox"><StatusPill tone="info" icon="shield">Preview only</StatusPill><p>No wallet is required. This sandbox never mutates {DEFAULT_REVIEW_PROPOSAL_ID}; it only previews how invariants cap requested allocation before a typed Casper intent is built.</p><label><span>Requested allocation bps</span><input value={sandboxBps} onChange={(event) => setSandboxBps(event.target.value)} inputMode="numeric" /></label><PrimaryButton icon="shield" onClick={runSandboxPreview}>Run invariant preview</PrimaryButton>{sandboxResult && <div className="safety-demo-grid"><div><span>Requested</span><strong>{pctFromBps(sandboxResult.requested)}</strong></div><div><span>Approved</span><strong>{pctFromBps(sandboxResult.approved)}</strong></div><div><span>Invariant</span><strong>{sandboxResult.blocked ? "capped by DAO Constitution" : "within cap"}</strong></div><div><span>Mode</span><strong>preview only</strong></div><div className="wide"><span>Typed args preview</span><CodePreview summary="Show preview args" value={sandboxResult.typedArgs} /></div></div>}</div></Panel>
       <Panel title="Advanced signing demo" eyebrow="Optional testnet actions"><details className="advanced-actions" open={showAdvancedSigning} onToggle={(event) => setShowAdvancedSigning(event.currentTarget.open)}><summary>Advanced: re-run signing demo</summary><div className="inline-notice warning"><Icon name="signal" size={16} />Advanced testnet action — not required for reviewing canonical proof.</div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signWithWallet} disabled={!walletSigningAvailable}>Request Casper Wallet Signature</PrimaryButton><StatusPill tone={walletStatusTone(walletStatus)} compact>{walletStatus}</StatusPill></div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signQuorumApprovalWithWallet} disabled={!quorumSigningAvailable}>Request Quorum Approval</PrimaryButton><StatusPill tone={walletStatusTone(quorumWalletStatus)} compact>{quorumWalletStatus}</StatusPill></div><div className="wallet-action-row"><PrimaryButton tone="secondary" icon="lock" onClick={signFinalQuorumReceiptWithWallet} disabled={!quorumSigningAvailable}>Request Final Quorum Receipt</PrimaryButton><StatusPill tone={walletStatusTone(quorumFinalStatus)} compact>{quorumFinalStatus}</StatusPill></div><div id="csprclick-ui" className="csprclick-ui-host" /></details></Panel>
     </div>}

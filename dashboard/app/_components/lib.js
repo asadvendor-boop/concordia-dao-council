@@ -461,6 +461,13 @@ export function isDeniedApproval(card) {
   const data = getCardData(card);
   return data.denied === true || DENIED_DECISIONS.has(String(data.decision || "").trim().toUpperCase());
 }
+// A safety review is "complete" ONLY from an explicitly recorded decision
+// field on the Verdict card — Verdict-card presence alone proves nothing and
+// never renders a "Review complete" success cue.
+export function isDecidedVerdict(card) {
+  if (!card || card.card_type !== "Verdict") return false;
+  return Boolean(String(getCardData(card).decision || "").trim());
+}
 export function isReceiptVerified(card) {
   if (!card || card.card_type !== "CasperExecutionReceipt") return false;
   const data = getCardData(card);
@@ -487,15 +494,36 @@ export function isApprovalBoundToPlan(card, planCard) {
   const planHash = data.plan_hash || data.plan_hash_hex;
   return Boolean(planHash) && String(planHash) === String(planCard.hash);
 }
+// Exact action binding (WP7 final): the approval's action_hash must exactly
+// equal the plan's client-visible data.action_binding_hash. A MISSING field on
+// either side is NOT a match — an approval that cannot prove which exact action
+// set it authorized never authorizes anything.
+export function isApprovalBoundToAction(card, planCard) {
+  if (!card || !planCard) return false;
+  const data = getCardData(card);
+  const planActionBinding = getCardData(planCard).action_binding_hash;
+  const actionHash = data.action_hash;
+  return Boolean(planActionBinding) && Boolean(actionHash) && String(actionHash) === String(planActionBinding);
+}
 // Single shared authorization predicate used by every page and by
 // deriveWorkflow/deriveLifecycle: an approval authorizes execution ONLY from an
-// explicit affirmative decision that is bound to THIS proposal and to the exact
-// sealed plan hash. Unknown, rejected, unbound or malformed approvals never
-// authorize — card presence proves nothing.
+// explicit affirmative decision that is bound to THIS proposal, to the exact
+// sealed plan hash, AND to the plan's exact action binding hash. Unknown,
+// rejected, unbound or malformed approvals never authorize — card presence
+// proves nothing, and a missing binding field on either side is a refusal.
 export function isAuthorizedApproval(card, proposalId, planCard) {
   return isAffirmativeApproval(card)
     && isApprovalBoundToProposal(card, proposalId)
-    && isApprovalBoundToPlan(card, planCard);
+    && isApprovalBoundToPlan(card, planCard)
+    && isApprovalBoundToAction(card, planCard);
+}
+// Shared strict Casper live-read predicate: a live-read object asserts a live
+// Casper observation ONLY when its asserting fields are explicitly present —
+// a block height AND a state root. Object presence alone proves nothing.
+export function isCasperLiveReadComplete(liveRead) {
+  return Boolean(liveRead)
+    && liveRead.latest_block_height !== undefined && liveRead.latest_block_height !== null && liveRead.latest_block_height !== ""
+    && Boolean(liveRead.state_root_hash);
 }
 
 export function cardSummary(card) {
@@ -505,7 +533,9 @@ export function cardSummary(card) {
     case "ProposalCard": return firstDefined(data.title, "A DAO treasury signal was normalized into a sealed proposal card.");
     case "TriageDecision": return firstDefined(data.reasoning, data.decision ? `Proposal routing: ${data.decision}.` : null, "The proposal was routed for specialist analysis.");
     case "Assessment": return firstDefined(data.root_cause_hypothesis && data.recommended_action ? `${data.root_cause_hypothesis} Recommended action: ${data.recommended_action}` : null, data.root_cause_hypothesis, data.recommended_action, "Treasury intelligence submitted an evidence-backed assessment.");
-    case "Verdict": return firstDefined(data.challenge_request, data.reasoning, data.decision ? `Safety review decision: ${data.decision}.` : null, "Safety review completed.");
+    // A Verdict without any recorded decision/reasoning is recorded work, not
+    // a completed review — the fallback never claims completion.
+    case "Verdict": return firstDefined(data.challenge_request, data.reasoning, data.decision ? `Safety review decision: ${data.decision}.` : null, "Safety review recorded · no decision field present.");
     case "ResponsePlan": {
       const envelopes = data.envelopes || [];
       if (!envelopes.length) return "Protocol Strategy Agent prepared a typed response plan.";
@@ -748,7 +778,9 @@ export function downloadEvidence(evidence, proposalId) {
 }
 
 export function replayEventTitle(card) {
-  if (!card) return "Verified proposal replay";
+  // Honest fallbacks: a missing/unknown card is recorded history, never a
+  // "verified" claim (verification cues render only from observed predicates).
+  if (!card) return "Recorded proposal replay";
   const data = getCardData(card);
   if (card.card_type === "ProposalCard") return "Proposal detected and normalized";
   if (card.card_type === "TriageDecision") return "Rowan routes the proposal for specialist treasury intelligence";
@@ -760,7 +792,7 @@ export function replayEventTitle(card) {
   if (["StructuredApproval", "PolicyAuthorization"].includes(card.card_type)) return "The exact action is authorized";
   if (card.card_type === "CasperExecutionReceipt") return "Locke anchors the approved receipt on Casper";
   if (card.card_type === "GovernanceSummary") return "Governance archive view is presented (deterministic archive produced by Concordia Core and Locke)";
-  return CARD_LABELS[card.card_type] || "Verified workflow event";
+  return CARD_LABELS[card.card_type] || "Recorded workflow event";
 }
 
 export function proofTabFromLocation() {
