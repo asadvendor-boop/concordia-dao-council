@@ -174,6 +174,54 @@ readback.
   site, and an npm verifier package — each carries its own proof status; nothing
   pending is presented as done.
 
+## Built on the Casper AI Toolkit
+
+Concordia directly implements Casper's example direction #3,
+**Multi-Agent DAO Governance & Execution** — then adds constitutional
+exact-envelope enforcement and public refusal receipts. The integration map is
+concrete:
+
+- **Odra:** the sibling GovernanceReceipt v3 contract enforces quorum,
+  proposal-independent action uniqueness, and exact-envelope authorization on
+  Casper Testnet once its live gate below passes.
+- **Official x402 + Casper EIP-712:** WCSPR
+  `transfer_with_authorization` uses the pinned official Casper x402 and typed
+  signing implementations; settlement cannot start until the separate v3
+  governance envelope is finalized.
+- **CSPR.cloud:** bounded Casper reads and the official facilitator provide the
+  middleware and settlement boundary; `/supported` and `/verify` are never
+  mistaken for finalized payment evidence.
+- **CSPR.click / Casper Wallet:** a real browser-wallet signer already
+  participates in the historical quorum proof; the official-x402 finals path
+  uses the supported tagged Casper signing formats and independently recomputes
+  their account hashes.
+- **Casper RPC and MCP-readable proof:** raw deploy, block, state, and transfer
+  observations are exposed through proof surfaces and a judge tool rather than
+  hidden behind dashboard status labels.
+
+Transaction rails make autonomous agents capable of spending. Concordia makes
+the exact financial action constitutionally governable.
+
+## Long-term launch and Casper ecosystem impact
+
+- Community presence is already public at
+  [@ConcordiaDAO](https://x.com/ConcordiaDAO), including the
+  [launch post](https://x.com/ConcordiaDAO/status/2074438324769689653).
+- The purchased `concordiadao.xyz` domain, public documentation portal, and
+  `@concordia-dao/verify` package make the policy templates and proof verifier
+  reusable outside this demo. Their publication gates remain explicit below.
+- **30 days:** onboard one Casper DAO or treasury-design partner, publish three
+  reusable policy packs (treasury allocation, RWA onboarding, protocol
+  parameters), and open public milestones/issues.
+- **60 days:** pilot the exact-envelope controller with one Casper DAO and one
+  RWA review workflow, publish latency/refusal/recovery metrics, and expand
+  CSPR.click custody guidance.
+- **90 days:** ship organization deployment templates, audited policy
+  administration, event-stream finality monitoring, and a separately versioned
+  Mainnet canary without rewriting the Testnet proof lineage.
+- **Six months:** offer Concordia as open governance middleware plus hosted
+  evidence/compliance operations for Casper DAOs and RWA protocols.
+
 ## Verify everything yourself
 
 - Live Judge Walkthrough: https://concordia.47.84.232.193.sslip.io/dashboard/judge

@@ -6,6 +6,31 @@ Product framing: Concordia DAO Council is the Casper governance firewall for AI-
 
 Demo hook: a malicious AI tries to push an unsafe 30% treasury allocation. Concordia catches the violation, Verity challenges it with Dissent Receipts, the DAO Mandate caps it to 8%, Locke can execute only the exact approved hash, and browser-wallet quorum proves the same action is reverted before quorum and accepted after quorum.
 
+## Organizer-mandated finals release gate
+
+The release is blocked until all of these checks pass against the exact public
+release commit:
+
+- the GitHub repository is public and correctly named, with its description,
+  website, and topics configured; topics include `casper-blockchain`,
+  `casper-network`, and `buildathon`;
+- the GitHub community profile is complete, CodeQL and Dependabot alerts are
+  enabled, CI/security workflows are green, and no High or Critical alert is
+  open;
+- the deployed MVP is fully functional on Casper Testnet;
+- the judge playbook is concise, step-by-step, and operational rather than
+  marketing copy;
+- the BUIDL page names every current contract package hash and describes the
+  sample Testnet transactions it links; and
+- a fresh incognito crawl checks every application route, anchor, redirect,
+  explorer receipt, documentation link, repository link, video link, and BUIDL
+  link. Any dead link, doubled dashboard base path, unavailable anchor, console
+  error, or failed required request blocks publication.
+
+The qualification-round proof below remains historical context. Finals v3,
+treasury, SafePay v2, and official-x402 claims are published only after their
+separately versioned live artifacts and release gates pass.
+
 ## Core proof path
 
 The final proof is Locke submitting the approved governance receipt to a deployed Casper Testnet contract. A mock receipt hash is only for rehearsal.

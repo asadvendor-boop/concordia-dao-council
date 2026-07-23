@@ -17,8 +17,9 @@ publish while any shot in the final edit depends on an unflipped gate.
 Concordia DAO Council is the constitutional execution firewall for AI-run DAOs
 on Casper: four deliberative agents advise, a deterministic core owns every
 state transition and binds execution to the exact approved envelope, dissent is
-preserved as an on-chain receipt, and the chain itself refuses anything that is
-not byte-exactly what quorum approved.
+preserved in the evidence chain whose hash is anchored by the on-chain receipt,
+and the chain itself refuses anything that is not byte-exactly what quorum
+approved.
 
 ## Who is on screen — the truthful taxonomy
 
