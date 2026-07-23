@@ -1,10 +1,30 @@
 # INTERFACE MANIFEST — WP5 (official CSPR.cloud x402 settlement service)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `1bf4890` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item → `1bf4890` clean-install reproducibility)
+- Producer commit: `651f90a` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item → `1bf4890` clean-install reproducibility → `0ce907d` validator-parity boundary pins (96-char names, calendar round-trip, pinned registry authority `7170c873fd20c1ff2e9e3115ec1523b9b1ea2c9b`) → `651f90a` truth pass #2: exact-microsecond timestamp parity + prototype-safe proof-type lookup)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §6, §11, §12 "Official x402 local service v1", §13
-- Lane status: proven at `1bf4890` from a BRAND-NEW detached checkout in which ONLY `services/x402-official` ran `npm ci` (verified: no `dashboard/node_modules`, no root `node_modules`, `NODE_PATH` unset, isolation re-checked after the runs): typecheck clean; 354/354 vitest green x3 consecutive; `npm audit --audit-level=high` 0 vulnerabilities. Codex independently reproduced the same result at `1bf4890`. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+- Lane status: proven at `1bf4890` from a BRAND-NEW detached checkout in which ONLY `services/x402-official` ran `npm ci` (verified: no `dashboard/node_modules`, no root `node_modules`, `NODE_PATH` unset, isolation re-checked after the runs): typecheck clean; 354/354 vitest green x3 consecutive; `npm audit --audit-level=high` 0 vulnerabilities. Codex independently reproduced the same result at `1bf4890`. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference. At `651f90a`: typecheck clean, **363/363**, audit 0 vulnerabilities.
+
+## Truth pass #2 (reviewer NO-GO on `f7c6f18`) — fixed at `651f90a`
+- **`parseRfc3339Utc` SEMANTIC CHANGE (Codex: re-audit any consumer):** it now
+  returns exact **MICROSECONDS** since the Unix epoch, not milliseconds.
+  Python compares full-microsecond `fromisoformat` datetimes, so a
+  millisecond return collapsed `.000001Z`/`.000999Z` into one instant and
+  silently skipped `check_observed_after_capture` violations Python reports.
+  Callers must treat the return as an opaque ordinal (both in-repo consumers
+  — the chronology comparison and the boundary suite — already do).
+- Year `0000` is rejected (fromisoformat's calendar starts at 0001); years
+  `0001`–`0099` remain accepted with positive-control vectors.
+- Proof-type map lookups use `Object.hasOwn`: a hostile
+  `proof_type="toString"/"__proto__"` now fails closed as
+  `proof_type_invalid` on the dashboard exactly like Python's dict
+  membership — previously it resolved Object.prototype members and threw.
+- 4 new cross-language boundary tests (suite 359 → 363), each asserting the
+  identical verdict from the pinned Python registry and the dashboard
+  validator: year-0000 reject, low-years accept, exact-microsecond
+  chronology both directions, prototype-key proof types for four hostile
+  names. Failing-first: 3 of 4 were red against `f7c6f18`.
 
 ## Clean-install reproducibility (Codex blocker at `91b5498`) — fixed at `1bf4890`
 Codex proved `91b5498` was NOT clean-install reproducible: the cross-language

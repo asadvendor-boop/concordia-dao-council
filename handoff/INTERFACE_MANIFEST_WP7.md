@@ -1,7 +1,45 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `0dde3ae` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` → `a78d103` dependency gate → `60ee252` exact-commit-audit predicates → `72f1747` flake fix → `03863a4` final-audit fail-open closures → `1bf4890` provenance-pure extraction (re-exported, consumers unchanged) → `0dde3ae` two remaining e2e flake fixes; at `0dde3ae` from a fresh production build: Playwright 133 x3 consecutive + collapse test x25 + wp7-release-blockers x6 twice (210/210, 210/210) + contract 17/17 + `npm audit --audit-level=high` exit 0. Codex independently reproduced dashboard clean install/build with 132/133 at `1bf4890` — the single failure was the pre-hydration collapse click fixed in `0dde3ae`.)
+- Producer commit: `651f90a` — truth pass #2 (reviewer NO-GO on `f7c6f18`), on top of `0ce907d` (five truth-contract fixes: replay binding, policy summary, live-read strictness, display fallbacks, pinned test authority) → `f7c6f18` (WP2/WP3 manifests). At `651f90a` from a fresh production build: **Playwright 155/155 x3 consecutive**, dashboard contract **17/17**, `npm audit --audit-level=high` exit 0, `git diff --check` clean.
+
+## Truth pass #2 (at `651f90a`) — six same-class gaps closed
+1. **PolicyAuthorization detail rows** (`lib.js` cardDetailRows) no longer
+   hardcode "Decision: Policy authorized": they render `Refused · <DECISION>`
+   for explicit denials, `Policy authorized · <DECISION>` only for the strict
+   affirmative predicate, and "No explicit decision recorded" otherwise.
+2. **Execution telemetry uses the bound replay predicate**: "Execution
+   verified" / "Casper receipt anchored · evidence chain valid" require
+   `replayVerified` (chain_valid === true AND payload proposal binding) AND
+   the verified-receipt predicate; a verified receipt alone reads "Receipt
+   recorded" with an honest no-bound-chain note; the anchored/verified metric
+   sublabels follow the same gate.
+3. **Recording receipt surfaces are payload-derived**: both the recording
+   chip (now "Casper receipt") and the recording header's receipt shortcut
+   render ONLY from a positively verified CasperExecutionReceipt in the bound
+   payload with a 64-lowercase-hex transaction hash, linking
+   `https://testnet.cspr.live/deploy/<payload hash>`. The static
+   `DEFAULT_CASPER_DEPLOY_HASH` literal never renders in recording mode.
+   `ProofActionBar` gained an additive `overridesById` prop for this.
+   NOTE for review scope: the Judge Walkthrough, Technical Jury Note, and
+   Proof Center pages still cite the canonical deploy hash as LABELED
+   historical references (previously reviewed framing) — flagged for the
+   reviewer, unchanged here.
+4. **`isCasperLiveReadComplete` allowlists exact producer provenance**:
+   status must be `visible_in_evidence` and source must be
+   `Casper Node RPC / CSPR.live public status` (the only producer,
+   `shared/proof_pack.py`); `failed`/arbitrary strings never satisfy it.
+5. **Timestamp parity** and 6. **prototype-safe lookups** are WP5-shared
+   (`provenance-pure.js`) — see INTERFACE_MANIFEST_WP5.md truth pass #2.
+- Failing-first: 10 Playwright tests red against the `f7c6f18` build; 11 net
+  new tests (5 recording-receipt, 3 telemetry-binding, 3 policy-detail) plus
+  2 live-read allowlist negatives (144 → 155). Deliberate migrations, none
+  weakened: `COMPLETE_LIVE_READ` + fail-open live-read negative fixtures
+  carry the recognized producer source so each still isolates exactly one
+  malformed dimension; the recording-chip positive control now supplies the
+  payload receipt it asserts.
+
+Pre-pass-2 correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` → `a78d103` dependency gate → `60ee252` exact-commit-audit predicates → `72f1747` flake fix → `03863a4` final-audit fail-open closures → `1bf4890` provenance-pure extraction (re-exported, consumers unchanged) → `0dde3ae` two remaining e2e flake fixes; at `0dde3ae` from a fresh production build: Playwright 133 x3 consecutive + collapse test x25 + wp7-release-blockers x6 twice (210/210, 210/210) + contract 17/17 + `npm audit --audit-level=high` exit 0. Codex independently reproduced dashboard clean install/build with 132/133 at `1bf4890` — the single failure was the pre-hydration collapse click fixed in `0dde3ae`.
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §13 (provenance-aware proof registry), §12 (SafePay v2 / official x402)
 - Lane status: see the producer-commit line above for the CURRENT fresh counts (the per-pass sections below record each pass's own historical counts); `tests/test_dashboard_contract.py` fully migrated, nothing deleted; `git diff --check` clean.
