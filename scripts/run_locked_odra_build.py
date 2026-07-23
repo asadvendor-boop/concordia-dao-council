@@ -31,6 +31,22 @@ HISTORICAL_INVENTORY_PATH = "handoff/HISTORICAL_ODRA_RECEIPTS_V1.json"
 DEPLOYMENT_MANIFEST_PATH = f"{CRATE_PATH}/deployment.manifest.json"
 WASM_PATH = "wasm/GovernanceReceiptV3.wasm"
 SCHEMA_PATH = "resources/casper_contract_schemas/governance_receiptv3_schema.json"
+BUILD_COMMAND = (
+    "cargo",
+    "--locked",
+    "odra",
+    "build",
+    "-c",
+    "GovernanceReceiptV3",
+)
+SCHEMA_COMMAND = (
+    "cargo",
+    "--locked",
+    "odra",
+    "schema",
+    "-c",
+    "GovernanceReceiptV3",
+)
 _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _MAX_COMMAND_OUTPUT = 64 * 1024 * 1024
@@ -592,10 +608,14 @@ def verify_locked_odra_build(
                 "v3 deployment manifest toolchain differs from the frozen contract"
             )
         if (
-            build.get("wasm_path") != WASM_PATH
+            build.get("command") != " ".join(BUILD_COMMAND)
+            or build.get("schema_command") != " ".join(SCHEMA_COMMAND)
+            or build.get("wasm_path") != WASM_PATH
             or build.get("schema_path") != SCHEMA_PATH
         ):
-            raise LockedOdraBuildError("v3 output paths differ from the build contract")
+            raise LockedOdraBuildError(
+                "v3 commands or output paths differ from the build contract"
+            )
         expected_wasm = _sha256(build.get("wasm_sha256"), "v3 Wasm SHA-256")
         expected_schema = _sha256(build.get("schema_sha256"), "v3 schema SHA-256")
         expected_lock = _sha256(source.get("cargo_lock_sha256"), "Cargo.lock SHA-256")
@@ -664,7 +684,7 @@ def verify_locked_odra_build(
             raise LockedOdraBuildError("Cargo.lock changed during offline metadata")
         built = _run_cargo(
             executor,
-            ("cargo", "odra", "build"),
+            BUILD_COMMAND,
             cwd=crate,
             environment=environment,
             offline=True,
@@ -677,13 +697,37 @@ def verify_locked_odra_build(
             )
         if hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock_before:
             raise LockedOdraBuildError("Cargo.lock changed during cargo-odra build")
+        generated_schema = _run_cargo(
+            executor,
+            SCHEMA_COMMAND,
+            cwd=crate,
+            environment=environment,
+            offline=True,
+            timeout=1800,
+        )
+        fatal_diagnostic = _fatal_cargo_diagnostic(
+            generated_schema.stdout,
+            generated_schema.stderr,
+        )
+        if fatal_diagnostic is not None:
+            raise LockedOdraBuildError(
+                "cargo-odra schema printed "
+                f"{fatal_diagnostic} despite returning exit code zero"
+            )
+        if hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock_before:
+            raise LockedOdraBuildError(
+                "Cargo.lock changed during cargo-odra schema generation"
+            )
         generated_wasm = _read_regular(archive_root, f"{CRATE_PATH}/{WASM_PATH}")
-        generated_schema = _read_regular(archive_root, f"{CRATE_PATH}/{SCHEMA_PATH}")
+        generated_schema_bytes = _read_regular(
+            archive_root,
+            f"{CRATE_PATH}/{SCHEMA_PATH}",
+        )
         if hashlib.sha256(generated_wasm).hexdigest() != expected_wasm or len(
             generated_wasm
         ) != build.get("wasm_size_bytes"):
             raise LockedOdraBuildError("regenerated Wasm digest or size differs")
-        if hashlib.sha256(generated_schema).hexdigest() != expected_schema:
+        if hashlib.sha256(generated_schema_bytes).hexdigest() != expected_schema:
             raise LockedOdraBuildError("regenerated schema digest differs")
 
     if _git_text(root, "rev-parse", "HEAD^{commit}") != source_commit:

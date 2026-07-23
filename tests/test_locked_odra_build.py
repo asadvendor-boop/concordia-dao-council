@@ -117,6 +117,10 @@ def _repository(tmp_path: Path) -> tuple[Path, bytes, bytes, bytes]:
         _canonical(
             {
                 "build": {
+                    "command": ("cargo --locked odra build -c GovernanceReceiptV3"),
+                    "schema_command": (
+                        "cargo --locked odra schema -c GovernanceReceiptV3"
+                    ),
                     "wasm_path": WASM_PATH,
                     "wasm_sha256": hashlib.sha256(wasm).hexdigest(),
                     "wasm_size_bytes": len(wasm),
@@ -207,53 +211,80 @@ class _BuildExecutor:
         ):
             assert env["CARGO_NET_OFFLINE"] == "true"
             return subprocess.CompletedProcess(argv, 0, b'{"packages":[]}\n', b"")
-        assert argv == ("cargo", "odra", "build")
-        assert env["CARGO_NET_OFFLINE"] == "true"
-        assert not (cwd / WASM_PATH).exists()
-        assert not (cwd / SCHEMA_PATH).exists()
-        (cwd / WASM_PATH).parent.mkdir(parents=True, exist_ok=True)
-        (cwd / SCHEMA_PATH).parent.mkdir(parents=True, exist_ok=True)
-        (cwd / WASM_PATH).write_bytes(
-            b"wrong" if self.mode == "wrong_hash" else self.wasm
+        if argv == (
+            "cargo",
+            "--locked",
+            "odra",
+            "build",
+            "-c",
+            "GovernanceReceiptV3",
+        ):
+            assert env["CARGO_NET_OFFLINE"] == "true"
+            assert not (cwd / WASM_PATH).exists()
+            assert not (cwd / SCHEMA_PATH).exists()
+            (cwd / WASM_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (cwd / WASM_PATH).write_bytes(
+                b"wrong" if self.mode == "wrong_hash" else self.wasm
+            )
+            if self.mode == "lock_mutation":
+                (cwd / "Cargo.lock").write_bytes(self.lock + b"mutated\n")
+            stdout = b"built\n"
+            stderr = b""
+            if self.mode == "error":
+                stdout = b"ERROR build failed but cargo-odra returned zero\n"
+            elif self.mode == "ansi_error":
+                stdout = b"\x1b[1;31mERROR\x1b[0m build failed but cargo-odra returned zero\n"
+            elif self.mode == "prefixed_error":
+                stdout = (
+                    b"\xf0\x9f\xa4\xa6  \x1b[1;31mERROR :\x1b[0m "
+                    b"build failed but cargo-odra returned zero\n"
+                )
+            elif self.mode == "dcs_error":
+                stdout = (
+                    b"\x1bP0;1|terminal-prefix\x1b\\ERROR "
+                    b"build failed but cargo-odra returned zero\n"
+                )
+            elif self.mode == "c1_dcs_error":
+                stdout = (
+                    b"\x90terminal-prefix\x9cERROR "
+                    b"build failed but cargo-odra returned zero\n"
+                )
+            elif self.mode == "long_prefixed_error":
+                stdout = (
+                    b"x" * 1024 + b" ERROR build failed but cargo-odra returned zero\n"
+                )
+            elif self.mode == "fatal":
+                stderr = b"fatal: cargo-odra could not produce the contract\n"
+            elif self.mode == "routine_error_crate_names":
+                stderr = (
+                    b"   Compiling proc-macro-error-attr v1.0.4\n"
+                    b"   Compiling proc-macro-error v1.0.4\n"
+                    b"   Compiling proc-macro-error2 v2.0.1\n"
+                    b"   Compiling thiserror v1.0.69\n"
+                )
+            return subprocess.CompletedProcess(argv, 0, stdout, stderr)
+
+        assert argv == (
+            "cargo",
+            "--locked",
+            "odra",
+            "schema",
+            "-c",
+            "GovernanceReceiptV3",
         )
+        assert env["CARGO_NET_OFFLINE"] == "true"
+        assert (cwd / WASM_PATH).exists()
+        assert not (cwd / SCHEMA_PATH).exists()
+        (cwd / SCHEMA_PATH).parent.mkdir(parents=True, exist_ok=True)
         (cwd / SCHEMA_PATH).write_bytes(self.schema)
-        if self.mode == "lock_mutation":
-            (cwd / "Cargo.lock").write_bytes(self.lock + b"mutated\n")
-        stdout = b"built\n"
-        stderr = b""
-        if self.mode == "error":
-            stdout = b"ERROR build failed but cargo-odra returned zero\n"
-        elif self.mode == "ansi_error":
-            stdout = (
-                b"\x1b[1;31mERROR\x1b[0m build failed but cargo-odra returned zero\n"
-            )
-        elif self.mode == "prefixed_error":
-            stdout = (
-                b"\xf0\x9f\xa4\xa6  \x1b[1;31mERROR :\x1b[0m "
-                b"build failed but cargo-odra returned zero\n"
-            )
-        elif self.mode == "dcs_error":
-            stdout = (
-                b"\x1bP0;1|terminal-prefix\x1b\\ERROR "
-                b"build failed but cargo-odra returned zero\n"
-            )
-        elif self.mode == "c1_dcs_error":
-            stdout = (
-                b"\x90terminal-prefix\x9cERROR "
-                b"build failed but cargo-odra returned zero\n"
-            )
-        elif self.mode == "long_prefixed_error":
-            stdout = b"x" * 1024 + b" ERROR build failed but cargo-odra returned zero\n"
-        elif self.mode == "fatal":
-            stderr = b"fatal: cargo-odra could not produce the contract\n"
-        elif self.mode == "routine_error_crate_names":
-            stderr = (
-                b"   Compiling proc-macro-error-attr v1.0.4\n"
-                b"   Compiling proc-macro-error v1.0.4\n"
-                b"   Compiling proc-macro-error2 v2.0.1\n"
-                b"   Compiling thiserror v1.0.69\n"
-            )
-        return subprocess.CompletedProcess(argv, 0, stdout, stderr)
+        if self.mode == "schema_lock_mutation":
+            (cwd / "Cargo.lock").write_bytes(self.lock + b"schema mutated\n")
+        stdout = (
+            b"ERROR schema failed but cargo-odra returned zero\n"
+            if self.mode == "schema_error"
+            else b"schema generated\n"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout, b"")
 
 
 def test_locked_odra_build_uses_fresh_archive_and_proves_exact_outputs(
@@ -278,7 +309,22 @@ def test_locked_odra_build_uses_fresh_archive_and_proves_exact_outputs(
             "1",
             "--no-deps",
         ),
-        ("cargo", "odra", "build"),
+        (
+            "cargo",
+            "--locked",
+            "odra",
+            "build",
+            "-c",
+            "GovernanceReceiptV3",
+        ),
+        (
+            "cargo",
+            "--locked",
+            "odra",
+            "schema",
+            "-c",
+            "GovernanceReceiptV3",
+        ),
     ]
     assert summary == {
         "cargo_lock_sha256": hashlib.sha256(lock).hexdigest(),
@@ -329,8 +375,10 @@ def test_locked_odra_git_ignores_repository_fsmonitor_configuration(
         ("c1_dcs_error", "ERROR"),
         ("long_prefixed_error", "ERROR"),
         ("fatal", "fatal"),
+        ("schema_error", "ERROR"),
         ("wrong_hash", "Wasm|digest|hash"),
         ("lock_mutation", "Cargo.lock"),
+        ("schema_lock_mutation", "Cargo.lock"),
     ],
 )
 def test_locked_odra_build_rejects_false_green_or_mutated_outputs(
@@ -394,6 +442,24 @@ def test_locked_odra_build_rejects_manifest_toolchain_mismatch(
 
     with pytest.raises(LockedOdraBuildError, match="toolchain|cargo-odra"):
         verify_locked_odra_build(repository, executor=executor)
+
+
+def test_locked_odra_build_rejects_manifest_command_mismatch(
+    tmp_path: Path,
+) -> None:
+    repository, lock, wasm, schema = _repository(tmp_path)
+    manifest_path = repository / f"{CRATE_PATH}/deployment.manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["build"]["schema_command"] = "cargo odra schema"
+    manifest_path.write_bytes(_canonical(manifest))
+    _git(repository, "add", str(manifest_path.relative_to(repository)))
+    _git(repository, "commit", "-m", "forge manifest command")
+    executor = _BuildExecutor(lock=lock, wasm=wasm, schema=schema)
+
+    with pytest.raises(LockedOdraBuildError, match="commands|build contract"):
+        verify_locked_odra_build(repository, executor=executor)
+
+    assert executor.calls == []
 
 
 def test_locked_odra_build_rejects_observed_toolchain_mismatch(
