@@ -2184,12 +2184,11 @@ def _verify_journal(
         / "migrations"
         / "0002_upstream_settle_journal.sql"
     )
-    if repository_migration.exists():
-        try:
-            if repository_migration.read_bytes() != migration:
-                _fail(check, "artifact migration differs from repository migration")
-        except OSError as exc:
-            _fail(check, f"repository migration cannot be read: {exc}")
+    try:
+        if repository_migration.read_bytes() != migration:
+            _fail(check, "artifact migration differs from repository migration")
+    except OSError as exc:
+        _fail(check, f"repository migration cannot be read: {exc}")
     snapshots = _mapping(journal.get("snapshots"), "journal snapshots")
     values = [
         _verify_journal_snapshot(

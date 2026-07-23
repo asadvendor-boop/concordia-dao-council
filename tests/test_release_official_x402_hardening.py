@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import shared.official_x402_release_adapter as official_adapter
 from shared.release_proof_adapters import (
     ReleaseProofAdapterError,
     verify_official_x402_artifact,
@@ -227,6 +228,23 @@ def test_truthful_restart_then_retry_chronology_is_accepted() -> None:
     result = _verify(artifact)
 
     assert result["internal_record"]["verification_status"] == "verified"
+
+
+def test_repository_journal_migration_is_mandatory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact()
+    monkeypatch.setattr(official_adapter, "_ROOT", tmp_path)
+
+    with pytest.raises(
+        ReleaseProofAdapterError,
+        match=(
+            r"^exact_retry_returned_stored_fulfillment_without_second_settlement:"
+            r" repository migration cannot be read:"
+        ),
+    ):
+        _verify(artifact)
 
 
 def test_execution_result_must_explicitly_contain_no_error() -> None:
