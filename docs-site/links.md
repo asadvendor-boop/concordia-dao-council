@@ -18,8 +18,20 @@
 | Item | Link |
 |---|---|
 | GitHub repository | <https://github.com/asadvendor-boop/concordia-dao-council> |
-| DoraHacks BUIDL | Published on the DoraHacks Casper buildathon track (direct link added on publication) |
+| DoraHacks BUIDL | On the DoraHacks Casper buildathon track (`PENDING_PROOF`: direct BUIDL link added on publication) |
 | Demo video | <https://www.youtube.com/watch?v=GU01V83Jrko> |
+
+## Finals launch surfaces (pending publication)
+
+These surfaces ship inside the final round. They are listed here as the planned
+public endpoints and are **not yet live** — the existing sslip links above
+remain the working, submitted aliases and never change.
+
+| Surface | Planned endpoint | Status |
+|---|---|---|
+| Production domain | `concordiadao.xyz` (+ `www`, `x402` subdomain) | `PENDING_PROOF`: production domain live, sslip aliases intact |
+| Documentation site | `docs.concordiadao.xyz` | `PENDING_PROOF`: docs site live over HTTPS |
+| Verifier package | `npm install @concordia-dao/verify` | `PENDING_PROOF`: npm publish + clean-room install |
 
 ## On-chain references
 

@@ -6,13 +6,15 @@ Concordia integrates the **official Casper x402 payment standard**: WCSPR
 CSPR.cloud x402 facilitator.
 
 !!! warning "Status: integration in progress — no live settlement evidence yet"
-    The official x402 service described here is current work. It depends on
-    the v3 exact-envelope receipt contract (see
-    [On-Chain Governance Receipts](governance-receipts.md)), which is not yet
-    live. No live official-x402 settlement transaction exists to cite. The
-    design below is what is being built, and it is fail-closed at every step:
+    The official x402 service described here is current work (its WP5 corrected
+    commit is not yet integrated). It depends on the v3 exact-envelope receipt
+    contract (see [On-Chain Governance Receipts](governance-receipts.md)), which
+    is not yet live. No live official-x402 settlement transaction exists to cite.
+    The design below is what is being built, and it is fail-closed at every step:
     until its own proofs pass, the honest status is *not proven live* — never
-    "assumed working".
+    "assumed working". `PENDING_PROOF`: official x402 settlement — facilitator
+    `success:true` + finalized WCSPR `transfer_with_authorization` +
+    post-settlement on-chain readback.
 
 ## What it is
 

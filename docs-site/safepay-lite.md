@@ -9,11 +9,21 @@ bought, for how much, and that the same payment cannot be redeemed twice.
 SafePay Lite is deliberately **not** described as full escrow, a refund
 contract, or a marketplace.
 
-## Current implementation: the v2 quote / consumption model
+!!! warning "Status: SafePay Lite v2 is finals work in progress — no live v2 evidence yet"
+    The v2 quote/consumption model described on this page is the **finals
+    implementation being integrated**; its corrected commit is not yet merged
+    and no live on-chain v2 payment, quote, or fulfillment hash is citable. Every
+    guarantee below describes the **intended** design and is `PENDING_PROOF`
+    until the live v2 exercise is captured and reconciled into the release
+    manifest. Only the **historical v1** SafePay payment (bottom of this page) is
+    live, frozen proof today.
 
-The current SafePay implementation is the **v2 quote/consumption model**
-(`schema_version: safepay-v2`). The provider is the only consumption
-authority, and every step is fail-closed:
+## v2 quote / consumption model (implementation in progress)
+
+The finals SafePay implementation is the **v2 quote/consumption model**
+(`schema_version: safepay-v2`). By design the provider is the only consumption
+authority, and every step is fail-closed. The behavior described below is the
+target design (`PENDING_PROOF` until live v2 evidence is published):
 
 ### 1. Provider-issued immutable quotes
 
@@ -72,12 +82,15 @@ failure degrades to a generic 503 rather than leaking detail.
 ## Evidence status
 
 !!! note "Live v2 evidence pending"
-    The v2 quote/consumption model described above is the current
-    implementation, and its duplicate-rejection guarantees are enforced by the
-    provider's durable ledger. A **live on-chain v2 evidence packet has not
-    been published yet** — no v2 payment hash, quote hash, or fulfillment hash
-    is citable at this time. When the live v2 exercise completes, its
-    evidence will be published with exact values.
+    The v2 quote/consumption model described above is the finals implementation
+    in progress, and its duplicate-rejection guarantees are the intended
+    property of the provider's durable ledger. A **live on-chain v2 evidence
+    packet has not been published yet** — no v2 payment hash, quote hash, or
+    fulfillment hash is citable at this time. When the live v2 exercise completes
+    and reconciles into the release manifest, its evidence will be published with
+    exact values. `PENDING_PROOF`: SafePay Lite v2 replay-safe live artifact
+    (idempotent same-resource retry + terminal cross-resource rejection, both
+    surviving provider restart).
 
 **Historical proof (v1 flow).** The Buildathon proof pack includes a real
 SafePay Lite payment verified under the earlier v1 flow:

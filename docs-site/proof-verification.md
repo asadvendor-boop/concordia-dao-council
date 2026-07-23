@@ -6,8 +6,14 @@ from public surfaces.
 
 ## Canonical proof hierarchy
 
-Use these values for public review. Older hashes may appear in artifacts only
-as clearly labeled historical or superseded evidence.
+Every value in the table below is **frozen historical proof** already live on
+Casper Testnet — use these for public review. Older hashes may appear in
+artifacts only as clearly labeled historical or superseded evidence. Values for
+the finals **current work** (GovernanceReceipt v3, SafePay Lite v2, official
+x402, native-transfer execution) are **not** in this table: they are sourced
+from a generated, schema-validated release manifest after live capture and are
+`PENDING_PROOF` until then — see
+[On-Chain Governance Receipts](governance-receipts.md).
 
 | Proof item | Canonical value |
 |---|---|
@@ -52,13 +58,16 @@ field by field.
 
 ## Evidence chain
 
-The public evidence endpoint recomputes the SHA-256 card chain on request and
-reports verification status:
+The public evidence endpoint recomputes the SHA-256 card chain server-side on
+request and reports verification status:
 
 - <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C>
 
 Changing any historical card would break the chain, so a passing recomputation
-is evidence the deliberation record is intact.
+is evidence the deliberation record is internally intact. Note the observation
+source: this recomputation is performed by Concordia's own hosted endpoint. The
+independent, trust-nothing check is comparing the on-chain deploys on CSPR.live
+(below) against the evidence chain and proof pack field by field.
 
 ## Certificate
 
@@ -77,9 +86,12 @@ and receipt references:
 The archive is also pinned to IPFS under CID
 `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq`.
 
-## Independent verifier script
+## Verifier script — scope and honest limits
 
-The standalone verifier is dependency-free and runs against the public API:
+`scripts/verify_concordia_receipt.py` is a dependency-free consistency checker
+for a Concordia proof pack or the hosted proof endpoints. It is deliberately
+**narrow**, and its output declares its own `verification_scope` and
+`observation_sources` so a reader never has to guess what was actually checked.
 
 ```bash
 python scripts/verify_concordia_receipt.py \
@@ -87,12 +99,24 @@ python scripts/verify_concordia_receipt.py \
   --proposal-id DAO-PROP-6CB25C
 ```
 
-It checks evidence-chain validity, the Casper deploy hash, the receipt
-contract hash, the `store_governance_receipt` entry point, the
-`policy_hash`/`dissent_hash`/`final_card_hash`/`plan_hash` roots, the typed
-Casper arguments, and the blocked-rogue-execution proof.
+What it checks (artifact/transcript scope):
 
-With network access, add live-chain mode:
+- the evidence packet's self-reported chain-validity flag and required root
+  fields (`policy_hash`, `dissent_hash`, `final_card_hash`, `plan_hash`) are
+  present and well-formed;
+- the receipt's deploy/transaction hash and contract hash are well-formed, the
+  entry point is `store_governance_receipt`, and the typed args carry
+  `ByteArray(32)` roots and `U32` numeric fields;
+- the compact proof table, execution-firewall flag, and quorum outcome are
+  internally consistent.
+
+What it does **not** do: it does not independently reconstruct the exact stored
+card preimages, and it does not by itself recompute the full SHA-256 evidence
+chain from raw card contents — it trusts the artifact's declared roots and
+booleans. Its `verification_scope` is therefore *artifact/transcript
+consistency*, not *independent chain recomputation*.
+
+With network access, `--live-chain` adds an on-chain cross-check:
 
 ```bash
 python scripts/verify_concordia_receipt.py \
@@ -101,9 +125,27 @@ python scripts/verify_concordia_receipt.py \
   --live-chain
 ```
 
-Live-chain mode additionally queries Casper Testnet/CSPR.live, confirms the
-deploy finalized successfully, and diffs the live contract hash, entry point,
-and typed runtime arguments against the local proof pack.
+Live mode looks the deploy up on a **trusted, operator-configured** Casper node
+RPC and the public CSPR.live explorer, confirms the deploy finalized, and diffs
+the deploy hash, contract hash, entry point, and the typed runtime arguments it
+reads there against the local pack. Those RPC/explorer endpoints must be
+explicitly trusted HTTPS endpoints — never URLs taken from the artifact. Run
+**without** `--live-chain`, the tool performs offline artifact review only and
+reports it as such (`observation_sources: [artifact]`); offline output is never
+described as a current-chain observation.
+
+!!! note "Independent recompute-from-scratch verifier — PENDING_PROOF"
+    A verifier that independently reconstructs the exact card preimages and
+    recomputes the whole evidence chain from your own machine — the
+    `@concordia-dao/verify` CLI (`npm install @concordia-dao/verify`) — is a
+    finals deliverable that is **not yet published**. Until it passes its card,
+    historical-receipt, v3, treasury, SafePay, official-x402, freshness,
+    provenance, and safe live-observer gates, no tool here should be read as an
+    independent recomputation of the chain.
+    `PENDING_PROOF`: `@concordia-dao/verify` published + clean-room recompute.
+    The strongest independent surface today is the public CSPR.live deploys
+    linked above — compare their entry point and typed runtime arguments against
+    the evidence chain and proof pack yourself.
 
 ## MCP judge bridge (optional)
 

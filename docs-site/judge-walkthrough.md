@@ -54,7 +54,7 @@ Concordia freezes the canonical proof for reproducibility and states its
 boundaries explicitly: what is live, what is supplemental, and what is
 roadmap. Nothing is presented as production that is not.
 
-## 7. (Optional) Run the independent verifier locally
+## 7. (Optional) Run the consistency checker locally
 
 ```bash
 python scripts/verify_concordia_receipt.py \
@@ -63,10 +63,18 @@ python scripts/verify_concordia_receipt.py \
   --live-chain
 ```
 
-The verifier is dependency-free Python. With `--live-chain` it queries Casper
-Testnet/CSPR.live directly and diffs the live deploy, contract hash, entry
-point, and typed runtime arguments against the published proof pack — so the
-final check does not depend on Concordia's own servers telling the truth.
+This dependency-free Python tool is a **narrow consistency checker**, not an
+independent recomputation of the chain (see
+[Proof & Verification](proof-verification.md) for its exact
+`verification_scope`). With `--live-chain` it looks the deploy up on a trusted,
+operator-configured Casper node RPC and CSPR.live and diffs the deploy hash,
+contract hash, entry point, and typed runtime arguments it reads there against
+the local proof pack; run without `--live-chain` it is offline artifact review
+only. A verifier that reconstructs the card preimages and recomputes the whole
+evidence chain from your own machine — the `@concordia-dao/verify` CLI — is a
+finals deliverable and is not yet published (`PENDING_PROOF`). The strongest
+independent check today is step 4 above: compare the public CSPR.live deploys
+against the evidence chain yourself.
 
 ## What you have verified
 

@@ -8,8 +8,9 @@ site_name: Concordia DAO Council
 site_url: https://docs.concordiadao.xyz/
 site_description: >-
   Concordia DAO Council is the Casper governance firewall for AI-run DAOs:
-  advisory agents deliberate, a deterministic core seals evidence, and only the
-  exact approved envelope can execute on-chain.
+  deliberative agents advise, a deterministic core owns every state transition
+  and seals evidence, and approved decisions are anchored as verifiable receipts
+  on Casper Testnet.
 
 repo_url: https://github.com/asadvendor-boop/concordia-dao-council
 repo_name: concordia-dao-council
@@ -35,6 +36,10 @@ validation:
 
 theme:
   name: material
+  # Custom 404 lives in a dot-directory inside docs_dir. MkDocs ignores
+  # dot-directories when collecting docs, so it is used only as a theme
+  # override source and is never published as a content page.
+  custom_dir: docs-site/.overrides
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -73,11 +78,18 @@ markdown_extensions:
   - pymdownx.superfences
 
 nav:
-  - Overview: index.md
-  - Architecture: architecture.md
-  - On-Chain Governance Receipts: governance-receipts.md
-  - Proof & Verification: proof-verification.md
+  - Product Overview: index.md
+  - Judge Quickstart: judge-walkthrough.md
+  - Architecture & Trust Boundaries: architecture.md
+  - Agent & Role Taxonomy: agent-taxonomy.md
+  - v1/v2/v3 Lineage: governance-receipts.md
+  - v3 Envelope Specification: v3-envelope.md
   - SafePay Lite: safepay-lite.md
   - Official x402: official-x402.md
-  - Judge Walkthrough Quickstart: judge-walkthrough.md
-  - Links: links.md
+  - Treasury Execution: treasury-execution.md
+  - Proof Provenance: proof-verification.md
+  - Verifier SDK / CLI: verifier-cli.md
+  - Policy Matrix: policy-matrix.md
+  - Deployment & Security: deployment-security.md
+  - Public Receipts: links.md
+  - Launch Roadmap: launch-roadmap.md

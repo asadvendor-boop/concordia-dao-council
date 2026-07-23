@@ -55,9 +55,14 @@ productized four-contract suite — that remains roadmap.
     Everything in this section describes the v3 design currently being
     implemented. v3 is a **new sibling contract crate and a new Testnet
     package**; it does not modify or retroactively re-protect the historical
-    v1/v2 receipts above. No v3 package hash, contract hash, or receipt exists
-    to cite yet — when v3 goes live, its proofs will be published with their
-    own on-chain references.
+    v1/v2 receipts above, and an old receipt never proves a v3 property. No v3
+    package hash, contract hash, or receipt exists to cite yet — when v3 goes
+    live, its proofs are written to the generated release manifest and published
+    with their own on-chain references. `PENDING_PROOF`: v3 install (package /
+    contract hash + install deploy) and the four-outcome live proof
+    (`QuorumNotMet`, `EnvelopeHashMismatch`, exact acceptance, `AlreadyFinalized`
+    deploy hashes + block heights + `action_authorized=true` readback), plus the
+    native-transfer treasury execution (625 → 50 CSPR, bound transfer ID).
 
 v3 moves the exact-envelope guarantee from Gateway code into the contract
 itself. Key properties of the frozen v3 interface:

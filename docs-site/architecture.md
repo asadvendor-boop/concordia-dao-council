@@ -15,11 +15,12 @@ FastAPI Gateway / Concordia Core        <- deterministic authority
   - authorization lifecycle
         |
         +--> Rowan  / Proposal Sentinel            \
-        +--> Mercer / Treasury Intelligence Agent   |
-        +--> Verity / Risk & Legal Agent            |  Council Chamber
-        +--> Alden  / Protocol Strategy Agent       |  (advisory layer)
-        +--> Locke  / Casper Execution Agent        |
-        +--> Wells  / Governance Archivist         /
+        +--> Mercer / Treasury Intelligence Agent    |  Deliberative agents
+        +--> Verity / Risk & Legal Agent             |  (advisory only)
+        +--> Alden  / Protocol Strategy Agent        /
+        |
+        +--> Locke  / Casper Execution Role   <- authorization-bound, not advisory
+        +--> Wells  / Archival persona        <- non-reasoning presentation
         |
         v
 Casper Testnet governance receipt contract   <- on-chain anchor
@@ -27,12 +28,16 @@ Casper Testnet governance receipt contract   <- on-chain anchor
 
 ## Council Chamber (advisory layer)
 
-The Council Chamber is where the personas deliberate. The five reasoning
-agents (Rowan, Mercer, Verity, Alden, Locke) can explain routing, assess
-evidence, challenge proposals, and draft plans — but nothing they say can
-authorize or execute anything. Wells, the Governance Archivist, closes each
-session with a deterministic archival pipeline. Chamber identity is
-authenticated: message sender identity comes from the authenticated key
+The Council Chamber is where the four **deliberative agents** — Rowan, Mercer,
+Verity, and Alden — reason over a proposal. They can explain routing, assess
+evidence, challenge proposals, and draft plans, but nothing they say can
+authorize or execute anything. **Locke** is not a deliberative voice: it is an
+authorization-bound execution role that can only submit the exact envelope the
+deterministic core has already authorized. **Wells** is a non-reasoning
+archival/presentation persona; it presents the sealed record but does not
+reason, summarize, or close the session — session closure and the deterministic
+archive are owned by Concordia Core (see below), not by Wells. Chamber identity
+is authenticated: message sender identity comes from the authenticated key
 mapping, never from caller-supplied fields, and agent keys cannot impersonate
 human or system senders. Human approval enters only through a separately
 hardened approval boundary.
@@ -99,7 +104,8 @@ comparison is exact rather than textual.
   labelled mock otherwise).
 - **x402 payment rails** — the supplemental [SafePay Lite](safepay-lite.md)
   native-CSPR rail and the [Official x402](official-x402.md) WCSPR facilitator
-  integration.
+  integration. Both are finals work in progress; see each page for its exact
+  proof status (`PENDING_PROOF` until live evidence is captured).
 - **IPFS evidence pinning** via a Concordia-hosted Kubo node with a public
   gateway route.
 
