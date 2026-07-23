@@ -1038,9 +1038,29 @@ def assemble_proof_registry(
         if historical_v1_path is not None
         else None
     )
+    release_roots: _Artifact | None = None
     if release and card_chain_roots_path is None:
         raise AssemblyError(
             "release requires verifier-derived card-chain roots"
+        )
+    if release:
+        canonical_roots_path = root / "artifacts/live/card-chain-roots-v1.json"
+        provided_roots_path = Path(card_chain_roots_path).absolute()
+        try:
+            canonical_resolved = canonical_roots_path.resolve(strict=True)
+            provided_resolved = provided_roots_path.resolve(strict=True)
+        except OSError as exc:
+            raise AssemblyError(
+                "release canonical card-chain roots are unavailable"
+            ) from exc
+        if provided_resolved != canonical_resolved:
+            raise AssemblyError(
+                "release requires the canonical card-chain roots path"
+            )
+        release_roots = _read_artifact(
+            provided_roots_path,
+            bundle_root=root,
+            label="card-chain roots",
         )
     artifacts = [artifact for artifact in (historical, exact, treasury) if artifact]
     if len({artifact.path for artifact in artifacts}) != len(artifacts):
@@ -1061,7 +1081,12 @@ def assemble_proof_registry(
         historical_item, historical_facts = _historical_item(historical)
         try:
             expected_roots = derive_card_chain_release_roots(historical.raw)
-            if card_chain_roots_path is not None:
+            if release_roots is not None:
+                if release_roots.raw != expected_roots:
+                    raise ReleaseRootsError(
+                        "card-chain release roots does not equal verified historical receipt"
+                    )
+            elif card_chain_roots_path is not None:
                 verify_existing_release_roots(
                     Path(card_chain_roots_path), expected_roots
                 )
@@ -1125,18 +1150,29 @@ def assemble_proof_registry(
         if any(not _git_commit_exists(root, commit) for commit in commits):
             raise AssemblyError("release artifact references an unavailable Git commit")
 
-    for artifact, label in (
-        (exact, "exact-envelope v3 artifact"),
-        (treasury, "native treasury artifact"),
-        *(([(historical, "historical v1 artifact")]) if historical is not None else []),
-    ):
-        _assert_artifact_unchanged(artifact, bundle_root=bundle_root, label=label)
+    unchanged_checks: list[tuple[_Artifact, Path, str]] = [
+        (exact, bundle_root, "exact-envelope v3 artifact"),
+        (treasury, bundle_root, "native treasury artifact"),
+    ]
+    if historical is not None:
+        unchanged_checks.append((historical, bundle_root, "historical v1 artifact"))
+    if release_roots is not None:
+        unchanged_checks.append((release_roots, root, "card-chain roots"))
+    for artifact, artifact_root, label in unchanged_checks:
+        _assert_artifact_unchanged(
+            artifact, bundle_root=artifact_root, label=label
+        )
 
     document = {
         "schema_version": 1,
         "public_items": public_items,
         "internal_records": [internal],
     }
+    if release_roots is not None:
+        document["card_chain_roots"] = {
+            "artifact_path": release_roots.relative_path,
+            "artifact_sha256": release_roots.sha256,
+        }
     _atomic_write_document(output, document)
 
     # Exercise the same strict loader used by Gateway routes before returning.

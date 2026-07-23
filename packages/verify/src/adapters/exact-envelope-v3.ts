@@ -127,6 +127,7 @@ type DeploymentFacts = Readonly<{
   installDeployHash: string;
   installBlockHash: string;
   installBlockHeight: number;
+  installObservedAt: string;
   sourceCommit: string;
   deploymentCommit: string;
 }>;
@@ -414,6 +415,9 @@ function executionOutcome(value: unknown, expectedPublicKey: string, label: stri
 
 function verifyDeployment(value: unknown): DeploymentFacts {
   const manifest = record(value, "v3 deployment manifest");
+  if (!Object.hasOwn(manifest, "two_node_finality")) {
+    throw new Error("v3 deployment two-node finality is required");
+  }
   const packaged = loadPackagedRelease();
   const dynamicFields = [
     "installer_public_key",
@@ -423,9 +427,9 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     "install_ttl",
     "finality",
     "verified_install_deploy",
+    "two_node_finality",
     "raw_rpc",
   ];
-  if (Object.hasOwn(manifest, "two_node_finality")) dynamicFields.push("two_node_finality");
   exactOwnKeys(manifest, [...Object.keys(packaged), ...dynamicFields], "v3 deployment manifest");
   for (const name of ["schema_id", "network", "package_key_name", "contract_name", "locked_install", "toolchain", "build", "source", "historical_isolation", "abi", "note"] as const) {
     equalCanonical(own(manifest, name), own(packaged, name), `v3 deployment ${name}`);
@@ -465,7 +469,6 @@ function verifyDeployment(value: unknown): DeploymentFacts {
   exactOwnKeys(raw, ["broadcast_response", "install_deploy", "state_root", "installer_account", "package", "contract"], "v3 deployment raw RPC");
   const installDeployHash = hash32Insensitive(own(manifest, "install_deploy_hash"), "v3 install deploy hash");
   const broadcast = record(own(raw, "broadcast_response"), "v3 install broadcast response");
-  let installBroadcastWasReconciled = false;
   if (Object.hasOwn(broadcast, "jsonrpc")) {
     exactOwnKeys(broadcast, ["jsonrpc", "id", "result"], "v3 install broadcast response");
     if (own(broadcast, "jsonrpc") !== "2.0" || own(broadcast, "id") !== "concordia-v3-install") {
@@ -487,7 +490,6 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     ) {
       throw new Error("v3 reconciled install broadcast evidence is invalid");
     }
-    installBroadcastWasReconciled = true;
   }
   const installRpc = exactRpc(own(raw, "install_deploy"), "info_get_deploy", "v3 install finality RPC");
   const installRequest = record(own(installRpc, "request"), "v3 install finality request");
@@ -559,28 +561,23 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     throw new Error("v3 install finality summary differs from raw finality evidence");
   }
 
-  let installTwoNode: StepOutcome | null = null;
-  if (Object.hasOwn(manifest, "two_node_finality")) {
-    installTwoNode = verifyFinalityBlockEvidence(
-      own(manifest, "two_node_finality"),
-      {
+  const installTwoNode = verifyFinalityBlockEvidence(
+    own(manifest, "two_node_finality"),
+    {
+      deployHash: installDeployHash,
+      recordedDeploy: own(installResult, "deploy"),
+      publicKey: installerPublicKey,
+      expectedUserError: null,
+      rawOutcome: Object.freeze({
         deployHash: installDeployHash,
-        recordedDeploy: own(installResult, "deploy"),
-        publicKey: installerPublicKey,
-        expectedUserError: null,
-        rawOutcome: Object.freeze({
-          deployHash: installDeployHash,
-          success: true,
-          userError: null,
-          blockHash: installBlockHash,
-          blockHeight: installBlockHeight,
-        }),
-        label: "v3 install",
-      },
-    );
-  } else if (installBroadcastWasReconciled) {
-    throw new Error("v3 reconciled install broadcast requires two-node finality evidence");
-  }
+        success: true,
+        userError: null,
+        blockHash: installBlockHash,
+        blockHeight: installBlockHeight,
+      }),
+      label: "v3 install",
+    },
+  );
 
   const stateRootRpc = exactRpc(own(raw, "state_root"), "chain_get_state_root_hash", "v3 install state-root RPC");
   const stateRootRequest = record(own(stateRootRpc, "request"), "v3 install state-root request");
@@ -593,7 +590,7 @@ function verifyDeployment(value: unknown): DeploymentFacts {
   }
   const stateRoot = hash32(own(stateRootResult, "state_root_hash"), "v3 install state root");
   if (own(manifest, "install_state_root_hash") !== stateRoot) throw new Error("v3 install state root summary mismatch");
-  if (installTwoNode !== null && installTwoNode.stateRootHash !== stateRoot) {
+  if (installTwoNode.stateRootHash !== stateRoot) {
     throw new Error("v3 install two-node finality state root disagrees with block-pinned state readback");
   }
   const stateIdentifier = { StateRootHash: stateRoot };
@@ -651,6 +648,7 @@ function verifyDeployment(value: unknown): DeploymentFacts {
     installDeployHash,
     installBlockHash,
     installBlockHeight,
+    installObservedAt: installTwoNode.observedAt,
     sourceCommit,
     deploymentCommit,
   });
@@ -1178,6 +1176,10 @@ export function verifyExactEnvelopeV3Artifact(input: unknown): ExactEnvelopeV3Fa
   const prepared = record(own(proof, "prepared"), "v3 prepared envelope");
   const preparedFacts = verifyPrepared(typedInput, prepared);
   const run = verifyLiveRun(own(proof, "run"), prepared, typedInput, own(proof, "readback"));
+  const firstStep = run.outcomes.propose_exact;
+  if (!firstStep || Date.parse(deployment.installObservedAt) > Date.parse(firstStep.observedAt)) {
+    throw new Error("v3 install two-node finality observation follows the first contract step");
+  }
   const readback = verifyV3ReadbackArtifact(own(proof, "readback"));
   if (
     readback.proposalId !== preparedFacts.proposalId ||

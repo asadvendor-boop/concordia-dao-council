@@ -660,12 +660,25 @@ def _strict_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys)
     if not isinstance(value, dict):
         raise ValueError(f"proof registry artifact must be an object: {path.name}")
-    if set(value) != {"schema_version", "public_items", "internal_records"}:
+    required_fields = {"schema_version", "public_items", "internal_records"}
+    if set(value) not in {frozenset(required_fields), frozenset(required_fields | {"card_chain_roots"})}:
         raise ValueError(f"proof registry artifact has unknown or missing fields: {path.name}")
     if value["schema_version"] != 1:
         raise ValueError(f"proof registry artifact schema mismatch: {path.name}")
     if not isinstance(value["public_items"], list) or not isinstance(value["internal_records"], list):
         raise ValueError(f"proof registry artifact arrays invalid: {path.name}")
+    if "card_chain_roots" in value:
+        roots = value["card_chain_roots"]
+        if (
+            not isinstance(roots, dict)
+            or set(roots) != {"artifact_path", "artifact_sha256"}
+            or roots.get("artifact_path")
+            != "artifacts/live/card-chain-roots-v1.json"
+            or not _is_hex32(roots.get("artifact_sha256"))
+        ):
+            raise ValueError(
+                f"proof registry card-chain roots identity invalid: {path.name}"
+            )
     return value
 
 

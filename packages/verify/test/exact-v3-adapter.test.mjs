@@ -105,6 +105,30 @@ test("exact-envelope v3 adapter accepts and verifies producer two-node install f
   assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /two-node|node facts|state root|finality/i);
 });
 
+test("exact-envelope v3 adapter requires producer two-node install finality", () => {
+  const proof = structuredClone(baseline);
+  delete proof.deployment.two_node_finality;
+
+  assert.throws(() => verifyExactEnvelopeV3Artifact(proof), /two-node.*finality/i);
+});
+
+test("exact-envelope v3 adapter rejects altered install two-node summary fields", () => {
+  for (const [field, value] of [
+    ["status", "operator_asserted"],
+    ["state_root_hash", "ff".repeat(32)],
+    ["observed_at", "2099-01-01T00:00:00Z"],
+    ["success", false],
+  ]) {
+    const proof = structuredClone(baseline);
+    proof.deployment.two_node_finality[field] = value;
+    assert.throws(
+      () => verifyExactEnvelopeV3Artifact(proof),
+      /two-node|node evidence|node facts|state root|finality/i,
+      `accepted altered install two-node ${field}`,
+    );
+  }
+});
+
 test("exact-envelope v3 adapter accepts only hash-reconciled lost broadcast evidence", () => {
   const proof = structuredClone(baseline);
   addInstallTwoNodeFinality(proof);
@@ -290,6 +314,11 @@ test("exact-envelope v3 adapter requires contract choreography after the install
   deployment.verified_install_deploy.block_height = 9_002;
   deployment.install_block_height = 9_002;
   deployment.finality.block_height = 9_002;
+  deployment.two_node_finality.block_height = 9_002;
+  for (const node of deployment.two_node_finality.node_observations) {
+    node.deploy_response.result.execution_info.block_height = 9_002;
+    node.block_response.result.block_with_signatures.block.Version2.header.height = 9_002;
+  }
   assert.throws(
     () => verifyExactEnvelopeV3Artifact(proof),
     /after the verified contract installation/i,

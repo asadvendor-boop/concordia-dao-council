@@ -666,7 +666,7 @@ def _deployment_evidence(
     install.approve(installer)
     install_json = serializer.to_json(install)
     state_root = ids["state_root"]
-    block_hash = ids["block"]
+    block_hash = "09" * 32
     package_state = {
         "ContractPackage": {
             "access_key": "uref-" + "ab" * 32 + "-007",
@@ -781,6 +781,39 @@ def _deployment_evidence(
         "install_deploy_hash": install_json["hash"],
     }
     verified_install = _validate_successful_install_rpc(install_raw, install_manifest)
+    install_block_timestamp = "2026-01-23T12:34:58.000Z"
+    install_observations = []
+    for index, source in enumerate(
+        run["steps"][0]["finality_block_evidence"]["node_observations"]
+    ):
+        observation = copy.deepcopy(source)
+        observation["deploy_request"]["id"] = f"install-finality-{index}"
+        observation["deploy_request"]["params"] = {
+            "deploy_hash": install_json["hash"].lower()
+        }
+        observation["deploy_response"] = {
+            "jsonrpc": "2.0",
+            "id": observation["deploy_request"]["id"],
+            "result": copy.deepcopy(install_rpc["response"]["result"]),
+        }
+        observation["block_request"]["id"] = f"install-block-{index}"
+        observation["block_request"]["params"] = {
+            "block_identifier": {"Hash": block_hash}
+        }
+        observation["block_response"]["id"] = observation["block_request"]["id"]
+        block = observation["block_response"]["result"]["block_with_signatures"][
+            "block"
+        ]["Version2"]
+        block["hash"] = block_hash
+        block["header"] = {
+            "height": 9_000,
+            "state_root_hash": state_root,
+            "timestamp": install_block_timestamp,
+        }
+        block["body"] = {
+            "transactions": {"0": [{"Deploy": install_json["hash"].lower()}]}
+        }
+        install_observations.append(observation)
     manifest.update(
         {
             "status": "finalized",
@@ -809,6 +842,23 @@ def _deployment_evidence(
                 "deploy_hash": verified_install["deploy_hash"],
             },
             "verified_install_deploy": verified_install,
+            "two_node_finality": {
+                "status": "finalized",
+                "block_hash": block_hash,
+                "block_height": 9_000,
+                "state_root_hash": state_root,
+                "block_timestamp": install_block_timestamp,
+                "finalized_at": install_block_timestamp,
+                "observed_at": "2026-01-23T12:34:59.000Z",
+                "deploy_hash": install_json["hash"].lower(),
+                "corroboration_count": 2,
+                "success": True,
+                "user_error": None,
+                "node_observations": install_observations,
+                "endpoint_identities": [
+                    observation["node_url"] for observation in install_observations
+                ],
+            },
             "raw_rpc": {
                 "broadcast_response": {
                     "jsonrpc": "2.0",
@@ -1032,6 +1082,34 @@ def test_offline_verifier_recomputes_envelope_and_readback_instead_of_trusting_b
     proof["passed"] = True
     proof["prepared"]["envelope_hash"] = "ff" * 32
     with pytest.raises(ProofVerificationError):
+        verify_v3_proof_document(proof)
+
+
+def test_offline_verifier_requires_install_two_node_finality() -> None:
+    proof, _, _ = _bound_v3_proof()
+    del proof["deployment"]["two_node_finality"]
+
+    with pytest.raises(ProofVerificationError, match="two-node finality"):
+        verify_v3_proof_document(proof)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "operator_asserted"),
+        ("state_root_hash", "ff" * 32),
+        ("observed_at", "2099-01-01T00:00:00Z"),
+        ("success", False),
+        ("node_observations", ["invalid", {}]),
+    ],
+)
+def test_offline_verifier_rejects_altered_install_two_node_summary(
+    field: str, value: object
+) -> None:
+    proof, _, _ = _bound_v3_proof()
+    proof["deployment"]["two_node_finality"][field] = value
+
+    with pytest.raises(ProofVerificationError, match="two-node finality"):
         verify_v3_proof_document(proof)
 
 
