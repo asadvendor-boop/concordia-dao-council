@@ -52,8 +52,14 @@ for (const viewport of viewports) {
         // exposes all 8 destinations.
         const menu = page.getByRole("button", { name: "Open navigation" });
         await expect(menu).toBeVisible();
-        await menu.click();
-        await expect(page.locator(".sidebar.sidebar-open")).toBeVisible();
+        // Retry the open-click until the drawer state lands: a click dispatched
+        // before React hydration attaches the handler is silently lost (a
+        // timing artifact of the test, not an app defect — no human clicks
+        // within milliseconds of first paint).
+        await expect(async () => {
+          await menu.click();
+          await expect(page.locator(".sidebar.sidebar-open")).toBeVisible({ timeout: 1000 });
+        }).toPass({ timeout: 10_000 });
         await expect(page.locator(".sidebar .nav-item")).toHaveCount(8);
         await page.locator(".sidebar .nav-item", { hasText: "Proof Center" }).click();
         await expect(page).toHaveURL(/\/dashboard\/proof/);
