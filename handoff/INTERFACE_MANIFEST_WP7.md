@@ -1,10 +1,16 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `dfa3cd2`
+- Producer commit: `9d623a7` (corrections for CODEX_REVIEW_CLAUDE_WP7, on top of `dfa3cd2`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §13 (provenance-aware proof registry), §12 (SafePay v2 / official x402)
-- Lane status: production build clean; 35/35 Playwright green (migrated proof-cockpit + new v3-sequence, provenance FE-07, 3-viewport). All fabricated-green fallbacks removed and independently source-verified.
+- Lane status: production build clean; 40/40 Playwright green x3 consecutive; `tests/test_dashboard_contract.py` 17/17 (fully migrated, nothing deleted); `git diff --check` clean.
+
+## Correction pass (post NO-GO review) — what changed at `9d623a7`
+- Proposal-switch isolation (generation counter + AbortController; stale generations discarded whole); two-step demo capability flow wired and judge-reachable, reset removed; chain_valid three-state (missing = unknown, never green); approval authorized only from an affirmative selected-proposal decision with exact plan/action-hash binding; SafePay availability fallbacks removed; duplicate static H1 proof summaries removed from `/judge` + `/proof`; `provenance.js` now validates the FULL 29-field §13 item (enums, provenance/temporal/outcome binding, required-check set exactly-once, chronology, freshness normalization at the registry boundary).
+- **The 5 post-freeze check-name renames from `G1_POST_FREEZE_CORRECTIONS.json` are applied and verified byte-identical against `codex/finals-core-v3:shared/proof_registry.py`** (including keeping the legitimately distinct `payment_deploy_finalized_without_execution_error` x402 check). Fixtures updated to the 29-field shape (`deployment_domain` added).
+- Taxonomy corrected everywhere: **four deliberative agents + authorization-bound Locke + deterministic Concordia Core + non-reasoning archivist Wells** (the earlier "Five reasoning agents" label below was wrong and is superseded).
+- Partial connectivity renders "Partial availability" (never "All systems operational"); full tab ARIA/keyboard semantics; 4.5:1 contrast enforced in the accessibility spec.
 
 The dashboard now renders honest **pending** states wherever the new registry
 payload isn't served yet. To light up the verified surfaces, Codex must serve
