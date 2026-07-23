@@ -29,6 +29,7 @@ import {
   SETTLEMENT_ENTRY_POINT,
   assertLocatorQuery,
 } from "./chain.js";
+import { parseRfc3339Utc } from "./time.js";
 import type {
   AuthorizationLocatorQuery,
   ChainTransport,
@@ -69,6 +70,7 @@ interface StableBoundary {
   blockHash: string;
   blockHeight: number;
   stateRootHash: string;
+  blockTimestamp: string;
 }
 
 class RpcResponseError extends Error {
@@ -317,10 +319,13 @@ function parseBlockResult(
   }
   const header = version["header"];
   const blockHeight = header["height"];
+  const blockTimestamp = header["timestamp"];
   if (
     typeof blockHeight !== "number" ||
     !Number.isSafeInteger(blockHeight) ||
-    blockHeight < 0
+    blockHeight < 0 ||
+    typeof blockTimestamp !== "string" ||
+    parseRfc3339Utc(blockTimestamp) === null
   ) {
     throw observationMalformed();
   }
@@ -328,6 +333,7 @@ function parseBlockResult(
     blockHash: requireHex64(version["hash"]),
     blockHeight,
     stateRootHash: requireHex64(header["state_root_hash"]),
+    blockTimestamp,
     proofs: parseBlockProofs(wrapper["proofs"]),
     transactionHashes: parseBlockTransactionHashes(
       version["body"],
@@ -947,6 +953,7 @@ export class CasperRpcChainTransport implements ChainTransport {
             blockHash: block.blockHash,
             blockHeight: block.blockHeight,
             stateRootHash: block.stateRootHash,
+            blockTimestamp: block.blockTimestamp,
           };
         }
       } catch {
@@ -1156,6 +1163,7 @@ export class CasperRpcChainTransport implements ChainTransport {
             finalized: true,
             blockHeight: boundary.blockHeight,
             stateRootHash: boundary.stateRootHash,
+            blockTimestamp: boundary.blockTimestamp,
           },
         };
       }

@@ -184,6 +184,7 @@ function blockResult(
       signature: `01${"aa".repeat(64)}`,
     },
   ],
+  timestamp = "2026-07-23T00:00:00.000Z",
 ): unknown {
   return {
     api_version: "2.0.0",
@@ -194,6 +195,7 @@ function blockResult(
           header: {
             state_root_hash: ROOT,
             height: 8_600_001,
+            timestamp,
           },
           body: {
             transactions: {
@@ -614,6 +616,7 @@ describe("CasperRpcChainTransport authorization locator", () => {
         finalized: true,
         blockHeight: 8_600_001,
         stateRootHash: ROOT,
+        blockTimestamp: "2026-07-23T00:00:00.000Z",
       },
     });
     expect(mock.cloud).toHaveLength(0);
@@ -630,6 +633,32 @@ describe("CasperRpcChainTransport authorization locator", () => {
         },
       },
     });
+  });
+
+  it("fails closed when the finalized boundary timestamp is not strict UTC-Z", async () => {
+    const mock = new MockHttp();
+    mock.queueRpc("chain_get_state_root_hash", {
+      result: { state_root_hash: ROOT },
+    });
+    mock.queueRpc(
+      "chain_get_block",
+      { result: blockResult([TX], undefined, "2026-07-23T00:00:00+00:00") },
+    );
+    mock.queueRpc("chain_get_state_root_hash", {
+      result: { state_root_hash: ROOT },
+    });
+
+    await expect(
+      makeTransport(mock).locateSettlementByAuthorization({
+        packageHashHex: FROZEN.packageHash,
+        contractHashHex: FROZEN.contractHash,
+        payerAccountHashHex: PAYER,
+        payerPublicKeyHex: PUBLIC_KEY,
+        authorizationNonceHex: NONCE,
+      }),
+    ).rejects.toMatchObject({
+      code: "chain_observation_unavailable",
+    } satisfies Partial<ServiceRefusal>);
   });
 
   it("adopts exactly one used-nonce transaction only after exact RPC readback", async () => {
