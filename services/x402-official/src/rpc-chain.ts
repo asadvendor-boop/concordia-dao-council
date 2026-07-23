@@ -45,11 +45,14 @@ export const CSPR_CLOUD_TESTNET_API_URL =
 
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const PUBLIC_KEY_RE = /^(?:01[0-9a-f]{64}|02[0-9a-f]{66})$/;
+const SIGNATURE_RE = /^(?:01|02)[0-9a-f]{128}$/;
 const UREF_RE = /^uref-[0-9a-f]{64}-00[0-7]$/;
 const MAX_JSON_BYTES = 2_097_152;
 const REQUEST_TIMEOUT_MS = 10_000;
 const LOCATOR_PAGE_SIZE = 100;
 const MAX_LOCATOR_PAGES = 2;
+const MAX_LOCATOR_CANDIDATES = 8;
+const LOCATOR_DEADLINE_MS = 20_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -58,6 +61,8 @@ interface ChainFetchOptions {
   csprCloudToken: () => string;
   /** Test-harness reduction only; production omits this and uses the frozen cap. */
   requestTimeoutMs?: number;
+  /** Test-harness reduction only; production omits this and uses the frozen cap. */
+  locatorDeadlineMs?: number;
 }
 
 interface StableBoundary {
@@ -223,7 +228,71 @@ function executionSucceeded(raw: unknown): boolean {
   throw observationMalformed();
 }
 
-function parseBlockResult(raw: unknown): StableBoundary & { proofs: number } {
+function parseBlockProofs(raw: unknown): number {
+  if (!Array.isArray(raw) || raw.length < 1) {
+    throw observationMalformed();
+  }
+  const signers = new Set<string>();
+  for (const proof of raw) {
+    if (
+      !isObject(proof) ||
+      typeof proof["public_key"] !== "string" ||
+      !PUBLIC_KEY_RE.test(proof["public_key"]) ||
+      typeof proof["signature"] !== "string" ||
+      !SIGNATURE_RE.test(proof["signature"]) ||
+      proof["public_key"].slice(0, 2) !==
+        proof["signature"].slice(0, 2) ||
+      signers.has(proof["public_key"])
+    ) {
+      throw observationMalformed();
+    }
+    signers.add(proof["public_key"]);
+  }
+  return signers.size;
+}
+
+function parseBlockTransactionHashes(
+  body: unknown,
+  version: 1 | 2,
+): Set<string> {
+  if (!isObject(body)) throw observationMalformed();
+  const hashes = new Set<string>();
+  if (version === 2) {
+    const lanes = body["transactions"];
+    if (!isObject(lanes)) throw observationMalformed();
+    for (const lane of Object.values(lanes)) {
+      if (!Array.isArray(lane)) throw observationMalformed();
+      for (const item of lane) {
+        if (!isObject(item) || Object.keys(item).length !== 1) {
+          throw observationMalformed();
+        }
+        const variant =
+          Object.hasOwn(item, "Version1")
+            ? item["Version1"]
+            : Object.hasOwn(item, "Deploy")
+              ? item["Deploy"]
+              : undefined;
+        const variantName = Object.hasOwn(item, "Version1")
+          ? "Version1"
+          : "Deploy";
+        hashes.add(`${variantName}:${requireHex64(variant)}`);
+      }
+    }
+    return hashes;
+  }
+  for (const field of ["deploy_hashes", "transfer_hashes"] as const) {
+    const values = body[field];
+    if (!Array.isArray(values)) throw observationMalformed();
+    for (const value of values) {
+      hashes.add(`Deploy:${requireHex64(value)}`);
+    }
+  }
+  return hashes;
+}
+
+function parseBlockResult(
+  raw: unknown,
+): StableBoundary & { proofs: number; transactionHashes: Set<string> } {
   if (!isObject(raw) || !isObject(raw["block_with_signatures"])) {
     throw observationMalformed();
   }
@@ -232,10 +301,18 @@ function parseBlockResult(raw: unknown): StableBoundary & { proofs: number } {
     throw observationMalformed();
   }
   const block = wrapper["block"];
-  const version =
-    (isObject(block["Version2"]) && block["Version2"]) ||
-    (isObject(block["Version1"]) && block["Version1"]);
-  if (!version || !isObject(version["header"])) {
+  let versionNumber: 1 | 2;
+  let version: JsonObject;
+  if (isObject(block["Version2"])) {
+    versionNumber = 2;
+    version = block["Version2"];
+  } else if (isObject(block["Version1"])) {
+    versionNumber = 1;
+    version = block["Version1"];
+  } else {
+    throw observationMalformed();
+  }
+  if (!isObject(version["header"])) {
     throw observationMalformed();
   }
   const header = version["header"];
@@ -251,7 +328,11 @@ function parseBlockResult(raw: unknown): StableBoundary & { proofs: number } {
     blockHash: requireHex64(version["hash"]),
     blockHeight,
     stateRootHash: requireHex64(header["state_root_hash"]),
-    proofs: wrapper["proofs"].length,
+    proofs: parseBlockProofs(wrapper["proofs"]),
+    transactionHashes: parseBlockTransactionHashes(
+      version["body"],
+      versionNumber,
+    ),
   };
 }
 
@@ -259,6 +340,7 @@ function parseTargetAndArgs(
   transaction: unknown,
 ): {
   transactionHash: string;
+  transactionKind: "Version1" | "Deploy";
   packageHash: string;
   requestedVersion: number | null;
   entryPoint: string;
@@ -303,6 +385,7 @@ function parseTargetAndArgs(
     }
     return {
       transactionHash: requireHex64(value["hash"]),
+      transactionKind: "Version1",
       packageHash: requireHex64(byPackage["addr"]),
       requestedVersion,
       entryPoint: fields["entry_point"]["Custom"],
@@ -334,6 +417,7 @@ function parseTargetAndArgs(
     }
     return {
       transactionHash: requireHex64(value["hash"]),
+      transactionKind: "Deploy",
       packageHash: requireHex64(stored["hash"]),
       requestedVersion,
       entryPoint: stored["entry_point"],
@@ -566,6 +650,7 @@ export class CasperRpcChainTransport implements ChainTransport {
   readonly #fetch: typeof fetch;
   readonly #csprCloudToken: () => string;
   readonly #requestTimeoutMs: number;
+  readonly #locatorDeadlineMs: number;
   #rpcId = 0;
 
   constructor(options: ChainFetchOptions) {
@@ -580,6 +665,16 @@ export class CasperRpcChainTransport implements ChainTransport {
       throw observationUnavailable();
     }
     this.#requestTimeoutMs = timeout;
+    const locatorDeadline =
+      options.locatorDeadlineMs ?? LOCATOR_DEADLINE_MS;
+    if (
+      !Number.isSafeInteger(locatorDeadline) ||
+      locatorDeadline < 1 ||
+      locatorDeadline > LOCATOR_DEADLINE_MS
+    ) {
+      throw observationUnavailable();
+    }
+    this.#locatorDeadlineMs = locatorDeadline;
   }
 
   async #readBoundedJson(response: Response): Promise<unknown> {
@@ -615,8 +710,17 @@ export class CasperRpcChainTransport implements ChainTransport {
     url: string,
     init: RequestInit,
     authenticated: boolean,
+    operationSignal?: AbortSignal,
   ): Promise<unknown> {
     const controller = new AbortController();
+    const abortForOperation = () => controller.abort();
+    if (operationSignal?.aborted) {
+      controller.abort();
+    } else {
+      operationSignal?.addEventListener("abort", abortForOperation, {
+        once: true,
+      });
+    }
     const timer = setTimeout(
       () => controller.abort(),
       this.#requestTimeoutMs,
@@ -642,10 +746,15 @@ export class CasperRpcChainTransport implements ChainTransport {
       throw observationUnavailable();
     } finally {
       clearTimeout(timer);
+      operationSignal?.removeEventListener("abort", abortForOperation);
     }
   }
 
-  async #rpc(method: string, params: JsonObject): Promise<unknown> {
+  async #rpc(
+    method: string,
+    params: JsonObject,
+    operationSignal?: AbortSignal,
+  ): Promise<unknown> {
     const id = (this.#rpcId += 1);
     const raw = await this.#fetchJson(
       CASPER_TESTNET_RPC_URL,
@@ -663,6 +772,7 @@ export class CasperRpcChainTransport implements ChainTransport {
         }),
       },
       false,
+      operationSignal,
     );
     if (
       !isObject(raw) ||
@@ -685,6 +795,7 @@ export class CasperRpcChainTransport implements ChainTransport {
   async #resolvePackageAt(
     packageHashHex: string,
     blockHash?: string,
+    operationSignal?: AbortSignal,
   ): Promise<PackageState> {
     if (!HEX64_RE.test(packageHashHex)) throw observationUnavailable();
     const params: JsonObject = {
@@ -696,7 +807,9 @@ export class CasperRpcChainTransport implements ChainTransport {
       params["block_identifier"] = { Hash: requireHex64(blockHash) };
     }
     try {
-      return parsePackage(await this.#rpc("state_get_package", params));
+      return parsePackage(
+        await this.#rpc("state_get_package", params, operationSignal),
+      );
     } catch (error) {
       if (error instanceof ServiceRefusal) throw error;
       throw observationUnavailable();
@@ -707,8 +820,15 @@ export class CasperRpcChainTransport implements ChainTransport {
     return this.#resolvePackageAt(packageHashHex);
   }
 
-  async getFinalizedTransaction(
+  getFinalizedTransaction(
     txHashHex: string,
+  ): Promise<TransactionReadback> {
+    return this.#getFinalizedTransaction(txHashHex);
+  }
+
+  async #getFinalizedTransaction(
+    txHashHex: string,
+    operationSignal?: AbortSignal,
   ): Promise<TransactionReadback> {
     if (!HEX64_RE.test(txHashHex)) throw observationUnavailable();
     let result: unknown;
@@ -716,7 +836,7 @@ export class CasperRpcChainTransport implements ChainTransport {
       result = await this.#rpc("info_get_transaction", {
         transaction_hash: { Version1: txHashHex },
         finalized_approvals: true,
-      });
+      }, operationSignal);
     } catch (error) {
       if (error instanceof ServiceRefusal) throw error;
       throw observationUnavailable();
@@ -755,7 +875,7 @@ export class CasperRpcChainTransport implements ChainTransport {
       executionBlock = parseBlockResult(
         await this.#rpc("chain_get_block", {
           block_identifier: { Hash: blockHash },
-        }),
+        }, operationSignal),
       );
     } catch (error) {
       if (error instanceof ServiceRefusal) throw error;
@@ -765,6 +885,9 @@ export class CasperRpcChainTransport implements ChainTransport {
     if (
       executionBlock.blockHash !== blockHash ||
       executionBlock.proofs < 1 ||
+      !executionBlock.transactionHashes.has(
+        `${parsed.transactionKind}:${txHashHex}`,
+      ) ||
       (reportedHeight !== undefined &&
         (typeof reportedHeight !== "number" ||
           !Number.isSafeInteger(reportedHeight) ||
@@ -775,6 +898,7 @@ export class CasperRpcChainTransport implements ChainTransport {
     const packageState = await this.#resolvePackageAt(
       parsed.packageHash,
       blockHash,
+      operationSignal,
     );
     if (
       parsed.requestedVersion !== null &&
@@ -794,12 +918,24 @@ export class CasperRpcChainTransport implements ChainTransport {
     };
   }
 
-  async #stableBoundary(): Promise<StableBoundary> {
+  async #stableBoundary(
+    operationSignal?: AbortSignal,
+  ): Promise<StableBoundary> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const first = await this.#rpc("chain_get_state_root_hash", {});
-        const block = parseBlockResult(await this.#rpc("chain_get_block", {}));
-        const second = await this.#rpc("chain_get_state_root_hash", {});
+        const first = await this.#rpc(
+          "chain_get_state_root_hash",
+          {},
+          operationSignal,
+        );
+        const block = parseBlockResult(
+          await this.#rpc("chain_get_block", {}, operationSignal),
+        );
+        const second = await this.#rpc(
+          "chain_get_state_root_hash",
+          {},
+          operationSignal,
+        );
         if (
           isObject(first) &&
           isObject(second) &&
@@ -823,6 +959,7 @@ export class CasperRpcChainTransport implements ChainTransport {
   async #dictionarySeed(
     contractHashHex: string,
     blockHash: string,
+    operationSignal?: AbortSignal,
   ): Promise<string> {
     try {
       return dictionarySeedFromEntity(
@@ -832,7 +969,7 @@ export class CasperRpcChainTransport implements ChainTransport {
           },
           block_identifier: { Hash: blockHash },
           include_bytecode: false,
-        }),
+        }, operationSignal),
       );
     } catch (error) {
       if (error instanceof ServiceRefusal) throw error;
@@ -843,10 +980,12 @@ export class CasperRpcChainTransport implements ChainTransport {
   async #nonceUsed(
     query: AuthorizationLocatorQuery,
     boundary: StableBoundary,
+    operationSignal?: AbortSignal,
   ): Promise<boolean> {
     const packageState = await this.#resolvePackageAt(
       query.packageHashHex,
       boundary.blockHash,
+      operationSignal,
     );
     if (packageState.enabledContractHash !== query.contractHashHex) {
       throw observationUnavailable();
@@ -854,6 +993,7 @@ export class CasperRpcChainTransport implements ChainTransport {
     const seed = await this.#dictionarySeed(
       query.contractHashHex,
       boundary.blockHash,
+      operationSignal,
     );
     const dictionaryItemKey = usedNonceDictionaryKey(
       query.payerAccountHashHex,
@@ -861,15 +1001,19 @@ export class CasperRpcChainTransport implements ChainTransport {
     );
     try {
       return parseUsedNonceValue(
-        await this.#rpc("state_get_dictionary_item", {
-          state_root_hash: boundary.stateRootHash,
-          dictionary_identifier: {
-            URef: {
-              seed_uref: seed,
-              dictionary_item_key: dictionaryItemKey,
+        await this.#rpc(
+          "state_get_dictionary_item",
+          {
+            state_root_hash: boundary.stateRootHash,
+            dictionary_identifier: {
+              URef: {
+                seed_uref: seed,
+                dictionary_item_key: dictionaryItemKey,
+              },
             },
           },
-        }),
+          operationSignal,
+        ),
       );
     } catch (error) {
       // With the exact dictionary seed independently proven at this same
@@ -886,6 +1030,7 @@ export class CasperRpcChainTransport implements ChainTransport {
   async #cloudPage(
     query: AuthorizationLocatorQuery,
     page: number,
+    operationSignal?: AbortSignal,
   ): Promise<unknown> {
     let token: string;
     try {
@@ -913,37 +1058,70 @@ export class CasperRpcChainTransport implements ChainTransport {
         },
       },
       true,
+      operationSignal,
     );
   }
 
   async #locateUsedNonce(
     query: AuthorizationLocatorQuery,
+    operationSignal: AbortSignal,
   ): Promise<string> {
+    const candidates = new Set<string>();
     const exact = new Set<string>();
     let pages = 1;
+    let expectedPageCount: number | undefined;
+    let expectedItemCount: number | undefined;
     for (let page = 1; page <= Math.min(pages, MAX_LOCATOR_PAGES); page += 1) {
-      const response = await this.#cloudPage(query, page);
+      const response = await this.#cloudPage(query, page, operationSignal);
       if (
         !isObject(response) ||
         !Array.isArray(response["data"]) ||
+        response["data"].length > LOCATOR_PAGE_SIZE ||
         typeof response["page_count"] !== "number" ||
         !Number.isSafeInteger(response["page_count"]) ||
-        response["page_count"] < 0
+        response["page_count"] < 1 ||
+        typeof response["item_count"] !== "number" ||
+        !Number.isSafeInteger(response["item_count"]) ||
+        response["item_count"] < 0
       ) {
         throw observationMalformed();
       }
-      pages = Math.max(1, response["page_count"]);
+      if (expectedPageCount === undefined) {
+        expectedPageCount = response["page_count"];
+        expectedItemCount = response["item_count"];
+      } else if (
+        response["page_count"] !== expectedPageCount ||
+        response["item_count"] !== expectedItemCount
+      ) {
+        throw observationUnavailable();
+      }
+      pages = response["page_count"];
+      if (pages > MAX_LOCATOR_PAGES) throw observationUnavailable();
       for (const item of response["data"]) {
         const candidate = cloudCandidateHash(item, query);
-        if (candidate === undefined || exact.has(candidate)) continue;
-        let readback: TransactionReadback;
-        try {
-          readback = await this.getFinalizedTransaction(candidate);
-        } catch {
-          continue;
+        if (candidate === undefined) continue;
+        candidates.add(candidate);
+        if (candidates.size > MAX_LOCATOR_CANDIDATES) {
+          throw observationUnavailable();
         }
-        if (exactLocatorReadback(readback, query)) exact.add(candidate);
       }
+    }
+    for (const candidate of candidates) {
+      if (operationSignal.aborted) throw observationUnavailable();
+      let readback: TransactionReadback;
+      try {
+        readback = await this.#getFinalizedTransaction(
+          candidate,
+          operationSignal,
+        );
+      } catch {
+        // A prefiltered candidate that cannot be conclusively read back keeps
+        // uniqueness indeterminate. Never turn a timeout/malformed response
+        // into apparent proof that some earlier candidate was unique.
+        throw observationUnavailable();
+      }
+      if (!readback.finalized) throw observationUnavailable();
+      if (exactLocatorReadback(readback, query)) exact.add(candidate);
     }
     if (exact.size !== 1) throw observationUnavailable();
     const found = exact.values().next().value;
@@ -958,21 +1136,38 @@ export class CasperRpcChainTransport implements ChainTransport {
     if (!PUBLIC_KEY_RE.test(query.payerPublicKeyHex)) {
       throw observationUnavailable();
     }
-    const boundary = await this.#stableBoundary();
-    const used = await this.#nonceUsed(query, boundary);
-    if (!used) {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.#locatorDeadlineMs,
+    );
+    timer.unref();
+    try {
+      const boundary = await this.#stableBoundary(controller.signal);
+      const used = await this.#nonceUsed(
+        query,
+        boundary,
+        controller.signal,
+      );
+      if (!used) {
+        return {
+          found: false,
+          observed: {
+            finalized: true,
+            blockHeight: boundary.blockHeight,
+            stateRootHash: boundary.stateRootHash,
+          },
+        };
+      }
       return {
-        found: false,
-        observed: {
-          finalized: true,
-          blockHeight: boundary.blockHeight,
-          stateRootHash: boundary.stateRootHash,
-        },
+        found: true,
+        transactionHash: await this.#locateUsedNonce(
+          query,
+          controller.signal,
+        ),
       };
+    } finally {
+      clearTimeout(timer);
     }
-    return {
-      found: true,
-      transactionHash: await this.#locateUsedNonce(query),
-    };
   }
 }
