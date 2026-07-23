@@ -53,6 +53,38 @@ def test_internal_and_legacy_demo_routes_are_not_public_gateway_routes() -> None
     assert "handle /demo/reset" not in config
 
 
+def test_all_judge_facing_gateway_proof_routes_precede_dashboard_catchall() -> None:
+    """A tracked Caddy rollout must not send proof URLs to Next's catch-all."""
+
+    config = _config()
+    app_start = config.index("(concordia_app)")
+    app_end = config.index("{$CONCORDIA_HOSTNAME}", app_start)
+    app = config[app_start:app_end]
+
+    matcher_start = app.index("@public_proof_gateway")
+    handler_start = app.index("handle @public_proof_gateway", matcher_start)
+    catchall_start = app.index("\n\thandle {", handler_start)
+    matcher = app[matcher_start:handler_start]
+    handler = app[handler_start:catchall_start]
+
+    required_routes = {
+        "/proof-center/*",
+        "/proof-pack/*",
+        "/proof-registry/*",
+        "/proof-artifacts/*",
+        "/safepay-lite/*",
+        "/adversarial-replay/*",
+        "/adversarial-safety-demo/*",
+        "/ipfs/*",
+        "/artifacts/rwa/*",
+    }
+    for route in required_routes:
+        assert route in matcher
+
+    assert "reverse_proxy concordia-gateway:8000" in handler
+    assert matcher_start < handler_start < catchall_start
+
+
 def test_provider_sslip_vhost_remains_available_for_tls_repair() -> None:
     config = _config()
 

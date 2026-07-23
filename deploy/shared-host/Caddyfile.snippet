@@ -95,6 +95,17 @@
 		reverse_proxy concordia-gateway:8000
 	}
 
+	# These judge-facing proof and export surfaces are served by Gateway, not
+	# the Next dashboard. Keep the complete matcher ahead of the final
+	# dashboard catch-all so a tracked-config rollout cannot turn live proof
+	# links into Next 404s.
+	@public_proof_gateway {
+		path /proof-center/* /proof-pack/* /proof-registry/* /proof-artifacts/* /safepay-lite/* /adversarial-replay/* /adversarial-safety-demo/* /ipfs/* /artifacts/rwa/*
+	}
+	handle @public_proof_gateway {
+		reverse_proxy concordia-gateway:8000
+	}
+
 	handle /traces* {
 		reverse_proxy concordia-jaeger:16686
 	}

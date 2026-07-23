@@ -1,1 +1,10 @@
-{"type":"module","private":true,"dependencies":{"casper-js-sdk":"5.0.12"}}
+{
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "casper-js-sdk": "5.0.12"
+  },
+  "overrides": {
+    "brace-expansion": "1.1.16"
+  }
+}
