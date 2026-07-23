@@ -1,10 +1,10 @@
 # INTERFACE MANIFEST — WP2 (SafePay v2 durable atomic consumption)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `268c90d` (corrections for CODEX_REVIEW_CLAUDE_WP2_WP3, on top of `9a4d66f`)
+- Producer commit: `7671543` (correction lineage: `9a4d66f` → `268c90d` → `7671543` bound-evidence re-review fix)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 "SafePay Lite supplemental v2", §2 (encoding)
-- Lane status: 112 tests green x3 stable (ledger + verifier + freeze 16/16), ruff + `git diff --check` clean. Golden vectors (`correlation_id`, `quote_hash`) verified byte-for-byte against an INDEPENDENT reference computed from the spec formulas.
+- Lane status: 113 tests green x3 stable at `7671543` (test_safepay_ledger + test_safepay_verifier + test_g1_freeze_manifest 16/16), ruff + `git diff --check` clean. Golden vectors (`correlation_id`, `quote_hash`) verified byte-for-byte against an INDEPENDENT reference computed from the spec formulas.
 
 ## Correction pass (post NO-GO review) — what changed at `268c90d`
 - **Finality is proven, never assumed**: `observe_safepay_v2_payment` parses the real CSPR.live `/deploys/{hash}` shape and binds exact returned-deploy identity, canonical network, block identity, RAW pre-filter transfer count, and `initiator_account_hash` as the bound source. `status=processed` alone is NEVER finality: `_observe_block_finality` performs a separate `/blocks/{block_hash}` observation and requires exact `(block_hash, block_height)` identity. Unfinalized/pending/wrong-deploy → honest 425; observation outage → 503; nothing ever consumed on either.

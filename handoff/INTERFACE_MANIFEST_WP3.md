@@ -1,7 +1,7 @@
 # INTERFACE MANIFEST — WP3 (approval boundary, demo capability, room identity)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `73279a1` (corrections for CODEX_REVIEW_CLAUDE_WP2_WP3, on top of `d096403`)
+- Producer commit: `ca975cb` (correction lineage: `d096403` → `73279a1` → `4b60f1c` re-review fixes → `ca975cb` recovery-ordering fix; 125 tests green x3 at `ca975cb`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 (Approval boundary v1 / Demo capability v1 / Room identity v1), §14
 - Status of my lane: 103 tests green x3 stable (approval + demo + room + freeze), ruff + `git diff --check` clean.
@@ -13,6 +13,9 @@
 - **Issuance admission**: durable `demo_capability_issue_counters` fixed-window table (12/client, 120/global per 600s), outstanding/retained caps, bounded GC of expired unconsumed rows only.
 - **Room identity (SUPERSEDES the old accept-on-match deviation below)**: in PRODUCTION (`APP_ENV=production/prod`, no `CONCORDIA_TEST_MODE`) every caller-supplied `sender_id`/`sender_role`/`sender_type`/participant `role` is rejected 400 even when it exactly matches. Non-production keeps a flagged exact-match compat gate ONLY because Codex-owned `shared/proposal_room.py` still transmits these fields. **Codex: (1) migrate `shared/proposal_room.py` post_message/add_participant call sites to stop sending identity fields so production strictness holds for the recorder pipeline; (2) ensure compose sets `APP_ENV=production` on the gateway or the strict gate never engages.**
 - Duplicate agent-id principals: sorted-order role resolution, collided ids fail closed as `ambiguous_principal`/`ambiguous_participant`. Startup duplicate-key rejection remains Codex-owned in `gateway/auth.py`.
+
+## Recovery-ordering fix (third Codex pass) — at `ca975cb`
+Durable row state is dispatched BEFORE token expiry (the old expiry-first gate made crashed RUNNING capabilities unrecoverable): terminal rows replay their validated stored result even after expiry; RUNNING rows get 202 (same run id) while the 180s lease is active then ONE CAS transition to FAILED; only never-consumed ISSUED rows reject 403 expired; bounded issuance-time reconciliation (LIMIT 25) terminalizes abandoned RUNNING rows. Note: an expired token whose ISSUED row was already GC'd now returns 401 `invalid_capability` (row-match failure) instead of the old pre-row-load 403 — a required consequence of the directed ordering.
 
 ## Re-review addendum (second Codex pass) — four further fail-closed fixes
 - `_stored_capability_response` validates the COMPLETE stored result (int status 100–599, body parses to a dict); corruption replays as terminal 503 `stored_response_integrity`, never `{}` 200.
@@ -63,8 +66,7 @@ on the shared routes connection (CREATE TABLE IF NOT EXISTS). Please fold into `
 - `remove_demo_proposals(db, demo_run_id)` is function-only by design (no public/HTTP surface). Operator runbooks that used `POST /demo/reset` must call it server-side, or Codex adds an internal operator-token cleanup endpoint if wanted.
 
 ## Deviations from spec I made (for Codex review)
-- Message identity fields: schema says caller-supplied `sender_id/sender_role/sender_type` "forbidden" (400); implemented **reject-on-conflict** (400 `identity_fields_are_server_derived`) while accepting values exactly equal to server-derived identity — required because Codex-owned `shared/proposal_room.py` always transmits these fields. Stored identity is always server-derived.
-- Participant `role` field: **ignored** (server-derived) rather than rejected — recorder sends `role=agent_id` junk on every add_participant; rejecting would break the live demo pipeline.
+- Message identity fields + participant `role` — CURRENT behavior (the original accept-on-match/ignore deviation is REMOVED, superseded at `73279a1`): production (`APP_ENV=production/prod`, no `CONCORDIA_TEST_MODE`) rejects EVERY caller-supplied `sender_id`/`sender_role`/`sender_type`/participant `role` with 400 `identity_fields_are_server_derived`, even when values exactly match; non-production tolerates only an exact match (conflicts always rejected) solely because Codex-owned `shared/proposal_room.py` still transmits these fields. Stored identity is always server-derived. See the correction-pass section above for the two required Codex changes.
 - Idempotent re-join: adding an already-member participant returns 200 for any room member regardless of matrix (grants nothing new; keeps Locke's operator receipt-publish re-add of recorder alive).
 - AU-08: non-allowlisted/unconfigured approver keeps existing 500 (preserved exact authenticate order + status codes).
 - Legacy operator-token `POST /demo/trigger` retained (server-side tooling, not the public path); now shares the capability executor, records demo_run_id+is_demo, mints `DAO-DEMO-` ids.
@@ -73,5 +75,5 @@ on the shared routes connection (CREATE TABLE IF NOT EXISTS). Please fold into `
 
 ## Open questions for Codex
 - Effective demo concurrency is 1 (preserved single `_trigger_lock`), stricter than schema `maximum_concurrent_runs=2` — harmless; ack?
-- Capability **issuance** has no dedicated rate limit (only activation is limited); existing `RateLimitMiddleware` (600/min) covers internal endpoints — want issuance-specific limits?
+- ~~Issuance rate limit~~ RESOLVED at `73279a1`: capability issuance now has its own durable fixed-window admission (`demo_capability_issue_counters`, 12/client + 120/global per 600s, outstanding/retained caps) — see the correction-pass section.
 - `__Host-` cookie requires HTTPS (Secure); local plain-HTTP dev drops it — deploy-profile concern, not a code defect.
