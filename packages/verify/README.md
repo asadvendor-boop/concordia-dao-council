@@ -47,9 +47,9 @@ concordia-verify url https://concordiadao.xyz/proof-registry/v1/DAO-PROP-EXAMPLE
 concordia-verify proposal DAO-PROP-EXAMPLE \
   --base-url https://concordiadao.xyz
 
-# Re-query every supported embedded Casper observation through two independently
-# named, explicitly trusted public RPC endpoints. The endpoints must resolve to
-# distinct public addresses and return identical results.
+# Re-query every supported embedded Casper observation through two
+# address-distinct, explicitly trusted public RPC endpoints. The endpoints must
+# resolve to disjoint public addresses and return identical results.
 concordia-verify live DAO-PROP-EXAMPLE \
   --base-url https://concordiadao.xyz \
   --rpc-endpoint https://node-a.example/rpc \
@@ -113,6 +113,14 @@ or an unavailable endpoint fails closed. Library callers may instead supply a
 raw-bundle observer callback; the package still runs its strict adapters and
 never trusts boolean summaries.
 
+The package ships no default RPC endpoints and never accepts RPC credentials.
+Distinct hostnames and disjoint IP addresses provide transport-level
+corroboration; they do not by themselves prove that two endpoints have
+independent administrators. Any stronger operator-independence claim belongs
+in the external release manifest, where the endpoint operators can be reviewed
+and named. Offline artifact verification remains available when a trusted live
+endpoint set is not.
+
 ## What is recomputed
 
 - Canonical typed scalar, header, native-transfer, official-x402, evidence,
@@ -163,9 +171,10 @@ artifact bytes. Missing evidence cannot pass vacuously.
   seam; supply `dnsLookup` as well when the caller wants the package to enforce
   destination-address policy for that custom transport.
 - Stock live mode additionally requires two to four credential-free public RPC
-  origins with distinct hostnames and resolved addresses, pins each validated
-  address for transport, applies one overall deadline, and rejects any
-  cross-node or artifact-result disagreement.
+  origins with distinct hostnames and disjoint resolved addresses, pins each
+  validated address for transport, applies one overall deadline, and rejects
+  any cross-endpoint or artifact-result disagreement. This is a transport
+  separation check, not an assertion of independent administration.
 - Local mode bounds registries to 8 MiB and artifacts to 64 MiB, confines
   artifact real paths to the registry directory, and verifies the opened file
   identity before reading.
