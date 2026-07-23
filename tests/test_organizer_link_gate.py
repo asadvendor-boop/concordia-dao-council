@@ -10,19 +10,22 @@ RUNNER = ROOT / "scripts/run_organizer_link_gate.mjs"
 CORE = ROOT / "scripts/organizer-link-gate-core.mjs"
 REQUEST = ROOT / "handoff/ORGANIZER_LINK_GATE_REQUEST.json"
 DOCUMENTATION = ROOT / "docs/PRE_SUBMISSION_VERIFICATION.md"
-NODE_TEST = ROOT / "tests/js/organizer_link_gate.test.mjs"
+NODE_TESTS = (
+    ROOT / "tests/js/organizer_link_gate.test.mjs",
+    ROOT / "tests/js/organizer_link_gate_playwright.test.mjs",
+)
 
 
 def test_failure_first_node_contract_suite_passes() -> None:
     completed = subprocess.run(
-        ["node", "--test", str(NODE_TEST)],
+        ["node", "--test", *(str(test_path) for test_path in NODE_TESTS)],
         cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "# pass 13" in completed.stdout
+    assert "# pass 15" in completed.stdout
     assert "# fail 0" in completed.stdout
 
 
