@@ -12,6 +12,7 @@ import {
   DEFAULT_REVIEW_PROPOSAL_ID,
   RECORDED_ONCHAIN_RECEIPTS,
   agentStatusInfo,
+  api,
   countDissentReceipts,
   cx,
   deriveLifecycle,
@@ -21,6 +22,8 @@ import {
   getCard,
   isActiveProposal,
   isAuthorizedApproval,
+  isCasperLiveReadComplete,
+  isDecidedVerdict,
   isDeniedApproval,
   isReceiptVerified,
   navHref,
@@ -154,15 +157,44 @@ export function OverviewPage({ data }) {
   const [demoOpen, setDemoOpen] = useState(false);
   const activeCandidate = data.proposals.find(isActiveProposal) || null;
   const activeProposal = activeCandidate || data.selectedProposal || data.proposals[0] || null;
-  const proposalEyebrow = activeCandidate ? "Active proposal" : "Verified proposal replay";
   const activeEvidence = activeProposal?.proposal_id === data.selectedId ? data.evidence : null;
+  // "Verified proposal replay" requires the shown proposal's OWN observed
+  // evidence to report chain_valid === true. Missing/unknown/invalid evidence
+  // renders the honest "Recorded proposal replay" label — replays are never
+  // presented as verified from presence alone.
+  const proposalEyebrow = activeCandidate
+    ? "Active proposal"
+    : activeEvidence?.chain_valid === true ? "Verified proposal replay" : "Recorded proposal replay";
   const cards = activeEvidence?.cards || [];
   const facts = deriveProposalFacts(activeProposal, activeEvidence);
   const lifecycle = deriveLifecycle(cards, activeProposal?.proposal_id);
   const eventFeed = cards.slice(-5).reverse();
   const showBaseIssue = useDelayedFlag(Boolean(data.baseError), 10000);
-  const showRoomIssue = useDelayedFlag(Boolean(data.roomError), 10000);
   const agentStatus = agentStatusInfo(data.agents, data.loading);
+  // WP7 final fail-open kill: every positive protocol-health cue derives from
+  // an actual fresh observation. The initial/unobserved state renders honest
+  // "Checking" — never Operational/Connected/Healthy — and an observed failure
+  // renders a non-green reconnecting/unknown state immediately (the delayed
+  // flag only gates the top reconnect banner, never a green state).
+  const baseObserved = Boolean(data.lastUpdate);
+  const gatewayOperational = baseObserved && !data.baseError;
+  const roomConnected = Boolean(data.roomMeta);
+  // The Casper liveness chip is observation-driven: "CASPER TESTNET LIVE"
+  // renders ONLY from a complete live Casper read (block height + state root)
+  // in the observed proof payload. Unknown/unavailable renders an honest
+  // recorded label, never a live claim.
+  const [casperLiveRead, setCasperLiveRead] = useState(null);
+  const liveReadProposalId = data.selectedId || "";
+  useEffect(() => {
+    setCasperLiveRead(null);
+    if (!liveReadProposalId) return undefined;
+    let cancelled = false;
+    api(`/proof-center/${encodeURIComponent(liveReadProposalId)}`)
+      .then((value) => { if (!cancelled) setCasperLiveRead(value?.mercer_live_casper_read || null); })
+      .catch(() => { if (!cancelled) setCasperLiveRead(null); });
+    return () => { cancelled = true; };
+  }, [liveReadProposalId]);
+  const casperLiveObserved = isCasperLiveReadComplete(casperLiveRead);
   const dissentCount = countDissentReceipts(activeEvidence);
   const councilRoles = ["rowan", "mercer", "verity", "alden", "locke", "core"];
   return <>
@@ -242,7 +274,10 @@ export function OverviewPage({ data }) {
           const receiptVerified = isReceiptVerified(receipt);
           const byRole = {
             mercer: { status: assessment ? "Assessment ready" : "Standing by", tone: assessment ? "info" : "muted" },
-            verity: { status: verdict ? "Review complete" : "Standing by", tone: verdict ? "success" : "muted" },
+            // "Review complete" (green) requires an explicitly recorded verdict
+            // decision — a Verdict card without a decision is recorded work,
+            // not a completed review, and never renders a success cue.
+            verity: { status: isDecidedVerdict(verdict) ? "Review complete" : verdict ? "Review recorded · undecided" : "Standing by", tone: isDecidedVerdict(verdict) ? "success" : verdict ? "info" : "muted" },
             alden: {
               status: plan ? (planAuthorized ? "Authorized" : approvalRejected ? "Authorization rejected" : "Awaiting human") : "Standing by",
               tone: plan ? (planAuthorized ? "success" : approvalRejected ? "danger" : "warning") : "muted",
@@ -255,23 +290,34 @@ export function OverviewPage({ data }) {
           const entry = byRole[role];
           return entry ? <AgentMiniRow key={role} role={role} status={entry.status} tone={entry.tone} /> : null;
         })}</div></Panel>
-        <Panel title="Protocol health" eyebrow="Control plane"><div className="health-list"><div><span className="health-icon"><Icon name="shield" size={17} /></span><span><strong>Gateway</strong><small>Deterministic policy plane</small></span><StatusPill tone={showBaseIssue ? "muted" : "success"} compact>{showBaseIssue ? "Reconnecting" : "Operational"}</StatusPill></div><div><span className="health-icon"><Icon name="network" size={17} /></span><span><strong>Council Chambers</strong><small>Shared collaboration layer</small></span><StatusPill tone={showRoomIssue ? "muted" : "info"} compact>{showRoomIssue ? "Reconnecting" : "Connected"}</StatusPill></div><div><span className="health-icon"><Icon name="activity" size={17} /></span><span><strong>Proposal simulator</strong><small>Synthetic DAO treasury feed</small></span><StatusPill tone={activeProposal && isActiveProposal(activeProposal) ? "warning" : "success"} compact>{activeProposal && isActiveProposal(activeProposal) ? "Proposal active" : "Healthy"}</StatusPill></div>{/* Three-state chain validity: ONLY an explicit chain_valid === true renders
+        <Panel title="Protocol health" eyebrow="Control plane"><div className="health-list">{/* Observation-gated health pills: "Operational" requires a completed
+    base refresh with zero failed live data sources; "Connected" requires an
+    actual Council Chamber payload; "Healthy" requires the observed proposal
+    feed. Unknown/loading renders "Checking", an observed failure renders a
+    non-green state — never a default-positive cue. */}<div><span className="health-icon"><Icon name="shield" size={17} /></span><span><strong>Gateway</strong><small>Deterministic policy plane</small></span><StatusPill tone={gatewayOperational ? "success" : "muted"} compact>{gatewayOperational ? "Operational" : baseObserved ? "Reconnecting" : "Checking"}</StatusPill></div><div><span className="health-icon"><Icon name="network" size={17} /></span><span><strong>Council Chambers</strong><small>Shared collaboration layer</small></span><StatusPill tone={roomConnected ? "info" : "muted"} compact>{roomConnected ? "Connected" : data.roomError ? "Reconnecting" : "Checking"}</StatusPill></div><div><span className="health-icon"><Icon name="activity" size={17} /></span><span><strong>Proposal simulator</strong><small>Synthetic DAO treasury feed</small></span><StatusPill tone={!gatewayOperational ? "muted" : activeProposal && isActiveProposal(activeProposal) ? "warning" : "success"} compact>{!gatewayOperational ? (baseObserved ? "Unknown" : "Checking") : activeProposal && isActiveProposal(activeProposal) ? "Proposal active" : "Healthy"}</StatusPill></div>{/* Three-state chain validity: ONLY an explicit chain_valid === true renders
     the green "Valid" cue; an explicit false is "Invalid"; a missing/unknown
     value renders an honest non-green "Unverified". */}<div><span className="health-icon"><Icon name="link" size={17} /></span><span><strong>Evidence chain</strong><small>Sealed and ordered cards</small></span><StatusPill tone={activeEvidence?.chain_valid === true ? "success" : activeEvidence?.chain_valid === false ? "danger" : "muted"} compact>{activeEvidence ? activeEvidence.chain_valid === true ? "Valid" : activeEvidence.chain_valid === false ? "Invalid" : "Unverified" : "Waiting"}</StatusPill></div></div></Panel>
       </div>
     </div>
-    <Panel title="Recent verified runs" eyebrow="Measured outcomes" action={<Link className="text-link" href={navHref("/runs", data.selectedId)}>Open replay library <Icon name="chevronRight" size={15} /></Link>}><RecentRunsTable runSummary={data.runSummary} proposals={data.proposals} onSelect={(id) => data.selectProposal(id)} /></Panel>
+    {/* The panel title asserts nothing: per-run verification (receipt /
+        evidence chain) renders row-by-row from each run's own observed
+        receipt_verified and chain_valid fields, never from the heading. */}
+    <Panel title="Recent runs" eyebrow="Measured outcomes · per-run verification from observed fields" action={<Link className="text-link" href={navHref("/runs", data.selectedId)}>Open replay library <Icon name="chevronRight" size={15} /></Link>}><RecentRunsTable runSummary={data.runSummary} proposals={data.proposals} onSelect={(id) => data.selectProposal(id)} /></Panel>
     <section className="overview-persona-section">
       <CouncilPersonaStrip />
-      <div className="capability-chip-row" aria-label="Concordia live capabilities">
+      <div className="capability-chip-row" aria-label="Concordia capabilities">
         {[
           ["ODRA CONTRACTS", "green"],
           ["ON-CHAIN QUORUM", "cyan"],
           ["DISSENT RECEIPTS", "purple"],
           ["SAFEPAY LITE SETTLEMENT", "amber"],
           ["IPFS ARCHIVE", "blue"],
-          ["CASPER TESTNET LIVE", "green"],
         ].map(([label, tone]) => <span key={label} className={cx("chip-outline", `chip-outline-${tone}`)}>{label}</span>)}
+        {/* No static LIVE claim: the green "CASPER TESTNET LIVE" chip renders
+            ONLY from a complete observed live Casper read (block height +
+            state root) in the proof payload. Otherwise the chip honestly
+            labels the recorded testnet proof without asserting liveness. */}
+        <span className={cx("chip-outline", casperLiveObserved ? "chip-outline-green" : "chip-outline-blue")} data-testid="overview-casper-chip">{casperLiveObserved ? "CASPER TESTNET LIVE" : "CASPER TESTNET · RECORDED PROOF"}</span>
       </div>
       <p className="overview-fine-print">Four deliberative agents (Rowan, Mercer, Verity, Alden) plus authorization-bound Locke act under model guidance; Concordia Core is deterministic infrastructure and Wells is a non-reasoning archive persona. Every execution still requires deterministic invariants, quorum approval, and an on-chain receipt.</p>
     </section>

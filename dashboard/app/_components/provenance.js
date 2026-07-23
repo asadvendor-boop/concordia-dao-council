@@ -366,6 +366,14 @@ export function findRegistryItems(registry, proofType) {
 export function findRegistryItem(registry, proofType) {
   return findRegistryItems(registry, proofType)[0] || null;
 }
+// Exact-id registry lookup for claim rows that reference a specific proof item.
+// The result passes through the same cross-field normalization, so a
+// mismatched/late/malformed item is stamped invalid and can never render green.
+export function findRegistryItemByProofId(registry, proofId) {
+  if (!registry || !Array.isArray(registry.items) || !proofId) return null;
+  const match = registry.items.find((item) => item?.proof_id === proofId);
+  return match ? normalizeRegistryItem(match, registry, new Date().toISOString()) : null;
+}
 
 const STATUS_META = {
   verified: { label: "Verified", tone: "success" },

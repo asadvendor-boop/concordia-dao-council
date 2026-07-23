@@ -183,8 +183,13 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
       });
     });
     await gotoDashboardRoute(page, "/dashboard/judge");
-    await page.getByRole("button", { name: "Try to Break Concordia" }).click();
-    await expect(page.getByText("Mode")).toBeVisible();
+    // Retry the trigger-click until the replay panel lands: a click dispatched
+    // before React hydration attaches the handler is silently lost (test
+    // timing artifact, not an app defect — same idiom as the nav-drawer test).
+    await expect(async () => {
+      await page.getByRole("button", { name: "Try to Break Concordia" }).click();
+      await expect(page.getByText("Mode")).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     await expect(page.getByText("Deterministic Adversarial Replay")).toBeVisible();
     await expect(page.locator(".safety-demo-grid").getByText("Fallback")).toHaveCount(0);
   });
