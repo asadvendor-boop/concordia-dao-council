@@ -54,6 +54,7 @@ from shared.proof_runtime import (
     certificate_html,
     certificate_pdf_bytes,
     check_canonical_text,
+    check_repo_canonical_consistency,
     redact_public_payload,
     redaction_findings,
 )
@@ -820,6 +821,15 @@ def test_canonical_manifest_and_text_check_require_final_hierarchy():
     assert check_canonical_text("test", text) == []
     assert check_canonical_text("test", text.replace(CANONICAL_X402_PAYMENT_HASH, "missing"))
     assert check_canonical_text("test", text + "\nhttp://concordia.47.84.232.193.sslip.io/dashboard")
+
+
+def test_repo_canonical_consistency_follows_the_decomposed_dashboard_source():
+    result = check_repo_canonical_consistency(Path("."))
+
+    assert result["status"] == "passed", result["findings"]
+    assert "dashboard/app/_components/lib.js" in result["checked"]
+    assert "dashboard/app/proof/page.js" not in result["checked"]
+    assert "dashboard/app/judge/page.js" not in result["checked"]
 
 
 def test_public_redaction_removes_secret_values_and_paths():

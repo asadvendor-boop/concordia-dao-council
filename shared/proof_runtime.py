@@ -1275,8 +1275,11 @@ def check_repo_canonical_consistency(root: Path | str = ".") -> dict[str, Any]:
         "artifacts/live/live-proof-pack-current.json",
         "artifacts/live/judge-walkthrough-current.json",
         "artifacts/live/certificate-current.html",
-        "dashboard/app/proof/page.js",
-        "dashboard/app/judge/page.js",
+        # The dashboard route wrappers intentionally contain no proof literals:
+        # both render the shared, provenance-aware application shell.  Keep one
+        # canonical recorded-facts source for the decomposed frontend instead
+        # of requiring every route wrapper to duplicate historical hashes.
+        "dashboard/app/_components/lib.js",
     ]
     findings: list[dict[str, str]] = []
     checked: list[str] = []
