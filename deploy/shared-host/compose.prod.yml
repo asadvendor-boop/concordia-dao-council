@@ -220,6 +220,7 @@ services:
       X402_LEDGER_PATH: /data/x402-official.db
       X402_GATEWAY_INTERNAL_URL: http://gateway:8000
       X402_RESOURCES_FILE: /run/config/x402-resources.json
+      X402_GOVERNANCE_V3_CONFIG_FILE: /run/config/x402-governance-v3.json
       X402_CSPR_CLOUD_TOKEN_FILE: /run/secrets/x402_official_cspr_cloud_token
       X402_SIGNER_FILE: /run/secrets/x402_official_signer
       X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token

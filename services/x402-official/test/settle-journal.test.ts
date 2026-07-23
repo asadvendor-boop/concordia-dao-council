@@ -308,11 +308,11 @@ describe("transport: journal before network, exact bytes, no secrets", () => {
       "response_observed",
     ]);
     // Byte identity: journaled request bytes === sent bytes === the single
-    // serialization of the request body.
+    // canonical recursive serialization of the request body.
     expect(events[0]?.requestBody?.equals(sentBody as Buffer)).toBe(true);
-    expect(events[0]?.requestBody?.toString("utf8")).toBe(JSON.stringify(body));
+    expect(events[0]?.requestBody?.equals(canonicalJsonBytes(body))).toBe(true);
     expect(events[0]?.requestBodySha256).toBe(
-      sha256Hex(Buffer.from(JSON.stringify(body), "utf8")),
+      sha256Hex(canonicalJsonBytes(body)),
     );
     expect(events[0]?.requestUrl).toBe(SETTLE_URL);
     journal.close();

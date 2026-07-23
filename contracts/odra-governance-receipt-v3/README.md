@@ -163,19 +163,26 @@ Repeat the submit/resume command at each custody boundary. The final
 `v3-run.json` is written only after all seven steps and the state readback have
 verified.
 
-Assemble the self-contained proof only from those verified artifacts, then run
-the offline verifier:
+Compose the self-contained proof only from the finalized deployment manifest,
+the typed action input, and the final `v3-run.json` (not a checkpoint journal or
+role-custody file):
 
 ```sh
-jq -n \
-  --slurpfile deployment artifacts/private/v3-deployment.json \
-  --slurpfile input artifacts/private/native-input.json \
-  --slurpfile run artifacts/private/v3-run.json \
-  '{schema_id:"concordia.v3-proof.v1",deployment:$deployment[0],input:$input[0],prepared:$run[0].prepared,run:$run[0],readback:$run[0].readback}' \
-  > artifacts/private/v3-proof.json
-
-uv run python scripts/verify_v3_proof.py artifacts/private/v3-proof.json
+uv run python scripts/compose_v3_release_proof.py \
+  --deployment artifacts/private/v3-deployment.json \
+  --input artifacts/private/native-input.json \
+  --run artifacts/private/v3-run.json \
+  --out artifacts/private/v3-proof.json
 ```
+
+The composer is offline: it neither signs nor submits a deploy and accepts no
+secret or role-custody input. It recomputes `prepared` from the typed action,
+takes `readback` from the finalized run, constructs exactly
+`schema_id/deployment/input/prepared/run/readback`, and calls
+`scripts/verify_v3_proof.py` before publishing anything. `--out` is mandatory
+and write-once. The mode-`0600` JSON is made visible atomically only after
+verification; an existing path or symlink is refused even when its bytes are
+identical. Use a fresh output path for a deliberate recomposition.
 
 The threshold is exactly `2`. The negative finalization always changes
 `approved_allocation_bps` to `3000`, except an approved value of `3000` changes

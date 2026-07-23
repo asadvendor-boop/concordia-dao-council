@@ -136,6 +136,23 @@
         "test_preserved_source_manifest_still_matches_every_historical_file",
         "WP8 historical raw-receipt adapter and forged-summary guard tests"
       ]
+    },
+    {
+      "id": "G1-C14-official-x402-separate-proposal-and-governance-identity",
+      "affected_schema": "internal_proof_registry_v1,public_proof_registry_v1",
+      "rules": [
+        "NativeTransferV1 and OfficialX402SettlementV1 use distinct proposal IDs, action IDs, and envelope hashes on the same finalized v3 package, contract, network, and deployment domain.",
+        "The canonical public proposal view contains historical, exact-envelope, native-treasury, and SafePay proofs; the official-x402 public proposal view contains only the official settlement proof.",
+        "The internal OfficialX402SettlementV1 authorization record is a pre-settlement v3 record and therefore contains no settlement transaction; the public official settlement item binds the later finalized settlement transaction.",
+        "The official service compares internal registry package, contract, and deployment-domain fields to a strict finalized-v3 governance config file, never to the separate WCSPR token identity.",
+        "Both proposal-scoped public registry documents and the signed-payment internal lookup are independently validated before release."
+      ],
+      "acceptance_tests": [
+        "test_release_registry_requires_distinct_official_proposal_on_same_v3_deployment",
+        "test_release_assembly_rejects_combined_payment_proposal",
+        "official-x402 governance config and interlock tests",
+        "dual hosted proof-registry release-manifest tests"
+      ]
     }
   ]
 }

@@ -16,6 +16,10 @@ https://concordia.47.84.232.193.sslip.io
 /opt/apps/concordia/
   compose.prod.yml
   concordia.env
+  config/
+    x402-official-<release-commit>/
+      x402-governance-v3.json
+      x402-resources.json
   secrets/
     llm_api_key
     gateway_secret
@@ -36,6 +40,73 @@ https://concordia.47.84.232.193.sslip.io
 ```
 
 Secret files should be owned by root and readable only by the deployment group.
+The `x402-governance-v3.json` file is public release configuration, not a
+secret, but it is still mode `0600`, write-once, and mounted read-only so a
+runtime process cannot redirect the governance identity.
+
+## Stage the official-x402 governance binding
+
+Do this only after the `OfficialX402SettlementV1` exact-envelope proof is
+finalized and independently verified. The generator accepts no package,
+contract, network, or deployment-domain arguments: it extracts those identities
+from the proof after running `scripts.verify_v3_proof.verify_v3_proof_document`.
+It performs no network requests and reads no key or token.
+
+From the exact release checkout, generate into a new release-scoped directory:
+
+```bash
+umask 077
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+export X402_OFFICIAL_CONFIG_DIR="/opt/apps/concordia/config/x402-official-${RELEASE_COMMIT}"
+install -d -m 0700 "${X402_OFFICIAL_CONFIG_DIR}"
+
+uv run python scripts/generate_x402_governance_v3_config.py \
+  --proof /absolute/path/to/finalized-official-x402-v3-proof.json \
+  --out "${X402_OFFICIAL_CONFIG_DIR}/x402-governance-v3.json"
+
+CONFIG_SHA256="$(
+  sha256sum "${X402_OFFICIAL_CONFIG_DIR}/x402-governance-v3.json" |
+  awk '{print $1}'
+)"
+test -n "${CONFIG_SHA256}"
+test "$(stat -c '%a' "${X402_OFFICIAL_CONFIG_DIR}/x402-governance-v3.json")" = "600"
+```
+
+These commands target the Linux deployment host. If generation occurs in the
+verified local release checkout and the bytes are transferred to the host,
+transfer them into a newly created release-scoped directory, set mode `0600`,
+and require the host SHA-256 to equal the generator's recorded
+`config_sha256`. Never replace an existing config path. A collision or
+mismatched digest stops the release.
+
+Pin Compose to that exact directory in `concordia.env`:
+
+```text
+X402_OFFICIAL_CONFIG_DIR=/opt/apps/concordia/config/x402-official-<release-commit>
+```
+
+Keep `X402_OFFICIAL_CONFIG_DIR` exported in the release shell. Before starting
+`x402-official`, verify both the host bytes and the bytes seen through the
+read-only container mount:
+
+```bash
+HOST_SHA256="$(
+  sha256sum "${X402_OFFICIAL_CONFIG_DIR}/x402-governance-v3.json" |
+  awk '{print $1}'
+)"
+CONTAINER_SHA256="$(
+  docker compose --env-file concordia.env -f compose.prod.yml \
+    run --rm --no-deps --entrypoint node x402-official \
+    -e "const fs=require('node:fs');const c=require('node:crypto');process.stdout.write(c.createHash('sha256').update(fs.readFileSync('/run/config/x402-governance-v3.json')).digest('hex'))"
+)"
+test "${HOST_SHA256}" = "${CONFIG_SHA256}"
+test "${CONTAINER_SHA256}" = "${CONFIG_SHA256}"
+```
+
+Only after both comparisons pass may the service start. After startup,
+`/health` must report the expected blocked or live state without a governance
+configuration error; missing, malformed, stale, or WCSPR-reused governance
+identity is a release refusal.
 
 ## Shared proxy integration
 

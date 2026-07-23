@@ -531,7 +531,7 @@ def build_safepay_lite(evidence: dict[str, Any]) -> dict[str, Any]:
     payment_hash = (
         item.get("settlement_transaction")
         if verified and item is not None
-        else CANONICAL_X402_PAYMENT_HASH
+        else None
     )
     report_hash = item.get("report_hash") if verified and item is not None else None
     artifact_path = item.get("artifact_path") if item is not None else None
@@ -569,7 +569,7 @@ def build_safepay_lite(evidence: dict[str, Any]) -> dict[str, Any]:
             if replay_safe
             else "unverified"
         ),
-        "malformed_provider_response": not replay_safe,
+        "malformed_provider_response": False if replay_safe else None,
         "provider_reputation_delta": 1 if replay_safe else 0,
         "report": {},
         "registry_proof_id": item.get("proof_id") if item is not None else None,

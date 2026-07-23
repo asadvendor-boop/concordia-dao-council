@@ -44,19 +44,6 @@ export const SETTLE_EVENT_TYPES = [
 
 export type SettleEventType = (typeof SETTLE_EVENT_TYPES)[number];
 
-/**
- * Response headers that may enter the canonical journal record. Everything
- * else — any Set-Cookie, Authorization echo, or proxy token — is dropped.
- */
-const RESPONSE_HEADER_ALLOWLIST: ReadonlySet<string> = new Set([
-  "content-type",
-  "content-length",
-  "date",
-  "retry-after",
-  "server",
-  "x-request-id",
-]);
-
 const BOUNDED_FAILURE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -64,17 +51,78 @@ export function sha256Hex(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/**
- * Canonical JSON bytes of a flat string map: lowercase keys sorted
- * lexicographically, compact separators — byte-compatible with the release
- * adapter's Python `_canonical` for the same map.
- */
-export function canonicalJsonBytes(map: Record<string, string>): Buffer {
-  const sorted: Record<string, string> = {};
-  for (const key of Object.keys(map).sort()) {
-    sorted[key] = map[key] as string;
+function compareUnicodeCodePoints(left: string, right: string): number {
+  const leftPoints = Array.from(left, (value) => value.codePointAt(0) as number);
+  const rightPoints = Array.from(right, (value) => value.codePointAt(0) as number);
+  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference =
+      (leftPoints[index] as number) - (rightPoints[index] as number);
+    if (difference !== 0) return difference;
   }
-  return Buffer.from(JSON.stringify(sorted), "utf8");
+  return leftPoints.length - rightPoints.length;
+}
+
+function ensureAsciiJsonString(value: string): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-\uffff]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function canonicalJsonText(
+  value: unknown,
+  ancestors: WeakSet<object>,
+): string {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return ensureAsciiJsonString(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new ServiceRefusal(500, "canonical_json_invalid", "internal");
+    }
+    return Object.is(value, -0) ? "0" : JSON.stringify(value);
+  }
+  if (typeof value !== "object") {
+    throw new ServiceRefusal(500, "canonical_json_invalid", "internal");
+  }
+  if (ancestors.has(value)) {
+    throw new ServiceRefusal(500, "canonical_json_invalid", "internal");
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return `[${value
+        .map((item) => canonicalJsonText(item, ancestors))
+        .join(",")}]`;
+    }
+    const prototype = Object.getPrototypeOf(value) as unknown;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new ServiceRefusal(500, "canonical_json_invalid", "internal");
+    }
+    const input = value as Record<string, unknown>;
+    return `{${Object.keys(input)
+      .sort(compareUnicodeCodePoints)
+      .map(
+        (key) =>
+          `${ensureAsciiJsonString(key)}:${canonicalJsonText(
+            input[key],
+            ancestors,
+          )}`,
+      )
+      .join(",")}}`;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+/**
+ * One canonical serializer for every facilitator POST body and journaled
+ * header map: recursively key-sorted objects, array order preserved, compact
+ * JSON, and fail-closed handling of non-JSON values.
+ */
+export function canonicalJsonBytes(value: unknown): Buffer {
+  return Buffer.from(canonicalJsonText(value, new WeakSet<object>()), "ascii");
 }
 
 /** The frozen request-header record: the credential is never journaled. */
@@ -101,16 +149,30 @@ export function settleCallId(binding: SettleCallBinding): string {
     .digest("hex");
 }
 
-/** Allowlisted, lowercase-keyed, key-sorted canonical response headers. */
+/**
+ * Frozen response-header evidence. A successful upstream settlement must be
+ * exact JSON; only that single non-secret header enters the journal.
+ */
 export function sanitizeResponseHeaders(headers: Headers): Buffer {
-  const out: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (RESPONSE_HEADER_ALLOWLIST.has(lower)) {
-      out[lower] = value;
-    }
-  });
-  return canonicalJsonBytes(out);
+  if (headers.get("content-type") !== "application/json") {
+    throw new ServiceRefusal(
+      502,
+      "response_content_type_invalid",
+      "upstream_malformed",
+    );
+  }
+  return canonicalJsonBytes({ "content-type": "application/json" });
+}
+
+/**
+ * Deterministic sibling database on the same durable volume as the
+ * fulfillment ledger. `:memory:` remains isolated because each SQLite
+ * connection owns a distinct in-memory database; production always supplies
+ * a file path.
+ */
+export function deriveSettleJournalPath(ledgerPath: string): string {
+  if (ledgerPath === ":memory:") return ":memory:";
+  return `${ledgerPath}.settle-journal.sqlite3`;
 }
 
 export interface SettleJournalEvent {

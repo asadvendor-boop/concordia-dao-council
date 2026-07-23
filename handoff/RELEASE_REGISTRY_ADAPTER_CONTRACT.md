@@ -117,9 +117,12 @@ The exact artifact contains:
   `OfficialX402SettlementV1`; the native-transfer v3 proof cannot be reused or
   relabeled for this binding;
 - configured resource bytes and the accepted/payment-requirements objects;
-- exact EIP-712 authorization preimage, Ed25519 signature and tagged Ed25519
-  public key, recovered payer, payee, value, nonce, validity window, and
-  signed-payload bytes;
+- exact EIP-712 authorization preimage, tagged Ed25519 or secp256k1
+  signature and matching tagged public key, recovered payer, payee, value,
+  nonce, validity window, and signed-payload bytes. The secp256k1 path matches
+  the Casper SDK exactly: compact low-S `r || s`, SHA-256 of the 32-byte
+  EIP-712 digest as the ECDSA message digest, and
+  `BLAKE2b-256("secp256k1\0" || compressed_public_key)` for the account hash;
 - raw sanitized `/verify` and `/settle` request/response transcripts;
 - active WCSPR v8 package, contract, entry-point, and argument readbacks before
   verify, before settle, and after settle. Each observation includes
@@ -128,8 +131,11 @@ The exact artifact contains:
   records the real Casper CLValue types and bytes;
 - finalized settlement `info_get_transaction`, `chain_get_block`, and
   `info_get_status` RPC transcripts from the two release-pinned provider
-  origins, with no execution error, valid unique Casper block-proof signers,
-  distinct node signing identities, and at least eight confirmations;
+  origins, with no execution error, unique structurally valid Casper
+  block-proof signer observations, distinct node signing identities, and at
+  least eight confirmations. This adapter validates the proof records'
+  canonical tags and identity consistency; it does not independently verify
+  validator consensus signatures;
 - the first paid-resource release, exact retry, and cross-binding reuse as
   exact `GET /resource/:resourceId` exchanges. Each exchange carries the
   canonical sanitized request/response header maps and their SHA-256 values,
@@ -216,6 +222,92 @@ Only those recomputed facts may create the official public item and its
 `OfficialX402SettlementV1` internal record. The internal record must equal the
 artifact projection byte-for-byte after canonical JSON normalization; public
 and internal action/envelope/payment/report/settlement identities must match.
+
+### Pre-settlement governance staging
+
+The official service cannot call `/verify` until the signed-payload hash
+resolves to a finalized v3 internal record. That record is produced offline,
+before the service starts, by:
+
+```bash
+.venv/bin/python scripts/stage_official_x402_governance.py \
+  --base-registry /absolute/path/current-registry.json \
+  --v3-proof /absolute/path/exact-envelope-v3-official.json \
+  --payment-envelope /absolute/path/official-x402-payment-envelope.json \
+  --signed-payment-payload /absolute/path/payment-payload.json \
+  --out /absolute/path/isolated-official-staging/registry.json
+```
+
+The base input is one complete `schema_version=1` proof-registry document
+containing the already accepted public items and internal records. It is
+strictly validated before use. The producer preserves every validated base
+value and list order, rejects a duplicate action ID or signed-payload hash,
+appends exactly one derived `OfficialX402SettlementV1` internal record, and
+passes the complete combined document through `validate_registry_document`.
+The output is therefore directly consumable by `ProofRegistryRepository`; a
+bare internal-record file is never a deployable output.
+
+The payment-envelope input is the closed
+`concordia.official_x402_staging_input.v1` object with exactly:
+
+- `typed_action_input`: the complete `OfficialX402SettlementV1` input, which
+  must equal the finalized proof's input byte-for-byte after canonical JSON
+  encoding;
+- `configured_resource`: exact `url`, `description`, and `mimeType`;
+- `payment_requirements`: the exact accepted WCSPR requirements object;
+- `protected_report_base64`: the exact non-empty report bytes; and
+- `schema_version`.
+
+The signed-payload input is the exact CSPR.click/x402 payment payload, not a
+summary or producer status. The staging producer:
+
+1. calls `verify_v3_proof_document` over the complete finalized proof;
+2. recomputes the action ID and envelope hash with
+   `derive_x402_material`;
+3. derives the resource, report, requirements, and signed-payload hashes from
+   their typed preimages;
+4. derives the payer account hash and verifies the tagged Ed25519 or
+   secp256k1 EIP-712 signature;
+5. requires every payment field and derived hash to equal the typed v3 body;
+6. creates the exact internal registry record and passes it through
+   `validate_internal_record`;
+7. appends that record to the validated base and validates the full combined
+   registry; and
+8. writes compact canonical ASCII JSON once, mode `0600`, without following
+   or replacing a symlink.
+
+No settlement transaction exists at this stage and none is present in the
+internal record. The later live artifact and public proof add the finalized
+settlement identity. Unknown fields, supplied truth booleans, mismatched
+proposal/action/envelope/network/payment identities, unfinalized proof
+evidence, invalid signatures, overwrite attempts, and unsafe output paths all
+refuse.
+
+The Python release adapter currently owns the reviewed Casper EIP-712 and
+payment-preimage primitives. The staging producer deliberately imports those
+exact primitives rather than carrying a second cryptographic implementation;
+`tests/test_stage_official_x402_governance.py` pins that coupling and exercises
+both tagged-key algorithms. Any missing or incompatible primitive prevents the
+producer from starting and therefore cannot yield a staged record.
+
+Deployment uses two isolated registry directories, never two registry files in
+one loaded directory:
+
+1. build the combined staging `registry.json` in a new isolated directory;
+2. atomically point the Gateway's registry-directory configuration at that
+   directory only for the official settlement phase;
+3. run `/verify`, `/settle`, finality capture, restart/retry, and terminal
+   cross-binding evidence;
+4. assemble and independently validate the final release registry containing
+   the official public proof and its one internal record; then
+5. atomically point the Gateway at the final registry directory and retire the
+   staging directory from the loaded path.
+
+The staging and final documents must never be loaded simultaneously: both
+contain the same official internal action/payload binding and the repository
+would correctly treat that as ambiguous. The submitted sslip routes stay
+available during each app-scoped configuration switch, and the final registry
+directory becomes the sole runtime source after settlement capture.
 
 ## Adapter API and release behavior
 

@@ -644,7 +644,8 @@ def test_safepay_lite_does_not_promote_historical_x402_artifact():
     assert safepay["payment_verified"] is False
     assert safepay["report_hash_verified"] is False
     assert safepay["duplicate_proof_rejected"] is False
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
     assert safepay["provider_reputation_delta"] == 0
     assert safepay["included_in_governance_proof"] is False
 
@@ -653,7 +654,8 @@ def test_safepay_lite_real_historical_payment_is_not_replay_proof():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
     assert safepay["status"] == "unverified"
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
     assert safepay["payment_verified"] is False
     assert safepay["report_hash_verified"] is False
     assert safepay["included_in_governance_proof"] is False
@@ -663,7 +665,8 @@ def test_safepay_lite_is_unverified_without_payment_artifact(monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
     assert safepay["status"] == "unverified"
     assert safepay["payment_verified"] is False
     assert safepay["included_in_governance_proof"] is False

@@ -1,14 +1,14 @@
 /**
  * Frozen configuration and secret loading (§12 "Official x402 local service v1").
  *
- * Production config loading is STRICT (WP5-4): every non-resource value is a
- * G1-frozen constant, and any environment variable that is set to anything
- * other than its frozen value is REJECTED at startup — a redirected facilitator
- * or Gateway origin, network, package/contract identity, token metadata, port,
- * ledger path, resources path, or secret-file path can never take effect. There
- * is no environment-proxy or arbitrary-origin override. Test/harness overrides
- * go through explicit injected constructors (`configForTest`, `resolveSecrets`,
- * `parseResourcesDocument`), never through production env parsing.
+ * Production config loading is STRICT (WP5-4): every env-addressable scalar
+ * and file path is G1-frozen, and any variable set to anything else is REJECTED
+ * at startup. The live v3 governance identity and protected resources are
+ * public release config loaded from exact-schema documents at frozen paths; a
+ * redirected facilitator/Gateway origin, network, WCSPR identity, metadata,
+ * port, ledger path, config path, or secret-file path can never take effect.
+ * Test/harness overrides go through explicit constructors and pure parsers,
+ * never through production env parsing.
  *
  * Secrets are loaded ONLY from *_FILE paths; a configured-but-unreadable secret
  * file fails startup. Secret values live behind getter closures and are never
@@ -52,6 +52,7 @@ export const FROZEN_CONFIG = {
   X402_TOKEN_DOMAIN_VERSION: "1",
   X402_LEDGER_PATH: "/data/x402-official.db",
   X402_GATEWAY_INTERNAL_URL: "http://gateway:8000",
+  X402_GOVERNANCE_V3_CONFIG_FILE: "/run/config/x402-governance-v3.json",
   X402_RESOURCES_FILE: "/run/config/x402-resources.json",
 } as const;
 
@@ -79,6 +80,9 @@ export interface ServiceConfig {
   wcsprPackageHash: string;
   wcsprContractHash: string;
   wcsprContractVersion: number;
+  governanceV3PackageHash: string;
+  governanceV3ContractHash: string;
+  governanceV3DeploymentDomain: string;
   tokenName: string;
   tokenSymbol: string;
   tokenDecimals: number;
@@ -131,6 +135,73 @@ interface RawResourceEntry {
   maxTimeoutSeconds?: unknown;
   reportBase64?: unknown;
   reportFile?: unknown;
+}
+
+const GOVERNANCE_V3_CONFIG_FIELDS = [
+  "schema_version",
+  "network",
+  "package_hash",
+  "contract_hash",
+  "deployment_domain",
+] as const;
+
+export interface GovernanceV3ConfigFields {
+  governanceV3PackageHash: string;
+  governanceV3ContractHash: string;
+  governanceV3DeploymentDomain: string;
+}
+
+/**
+ * Parse the public release identity of the exact-envelope v3 governance
+ * deployment. The file is strict and non-secret: all five snake_case fields
+ * are required, unknown fields are rejected, and WCSPR token identity may
+ * never be substituted for governance identity.
+ */
+export function parseGovernanceV3ConfigDocument(
+  raw: unknown,
+): GovernanceV3ConfigFields {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError("governance_v3_config_invalid");
+  }
+  const document = raw as Record<string, unknown>;
+  const allowed = new Set<string>(GOVERNANCE_V3_CONFIG_FIELDS);
+  for (const key of Object.keys(document)) {
+    if (!allowed.has(key)) {
+      throw new ConfigError("governance_v3_config_unknown_field");
+    }
+  }
+  for (const key of GOVERNANCE_V3_CONFIG_FIELDS) {
+    if (!(key in document)) {
+      throw new ConfigError("governance_v3_config_invalid");
+    }
+  }
+  const packageHash = document["package_hash"];
+  const contractHash = document["contract_hash"];
+  const deploymentDomain = document["deployment_domain"];
+  if (
+    document["schema_version"] !==
+      "concordia.x402-governance-v3-binding.v1" ||
+    document["network"] !== FROZEN_CONFIG.X402_NETWORK ||
+    typeof packageHash !== "string" ||
+    !LOWER_HEX_64_RE.test(packageHash) ||
+    typeof contractHash !== "string" ||
+    !LOWER_HEX_64_RE.test(contractHash) ||
+    typeof deploymentDomain !== "string" ||
+    !LOWER_HEX_64_RE.test(deploymentDomain)
+  ) {
+    throw new ConfigError("governance_v3_config_invalid");
+  }
+  if (
+    packageHash === FROZEN_CONFIG.X402_WCSPR_PACKAGE_HASH ||
+    contractHash === FROZEN_CONFIG.X402_WCSPR_CONTRACT_HASH
+  ) {
+    throw new ConfigError("governance_v3_identity_not_distinct");
+  }
+  return {
+    governanceV3PackageHash: packageHash,
+    governanceV3ContractHash: contractHash,
+    governanceV3DeploymentDomain: deploymentDomain,
+  };
 }
 
 const RESOURCE_ALLOWED_FIELDS = new Set([
@@ -251,10 +322,7 @@ export function parseResourcesDocument(
   return out;
 }
 
-function loadResources(
-  env: Record<string, string | undefined>,
-): ConfiguredResource[] {
-  const path = frozenEnv(env, "X402_RESOURCES_FILE");
+function loadResources(path: string): ConfiguredResource[] {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -262,6 +330,16 @@ function loadResources(
     throw new ConfigError("resources_file_unreadable");
   }
   return parseResourcesDocument(raw);
+}
+
+function loadGovernanceV3Config(path: string): GovernanceV3ConfigFields {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new ConfigError("governance_v3_config_unreadable");
+  }
+  return parseGovernanceV3ConfigDocument(raw);
 }
 
 /**
@@ -278,6 +356,9 @@ export function configForTest(overrides: Partial<ServiceConfig> = {}): ServiceCo
     wcsprPackageHash: FROZEN_CONFIG.X402_WCSPR_PACKAGE_HASH,
     wcsprContractHash: FROZEN_CONFIG.X402_WCSPR_CONTRACT_HASH,
     wcsprContractVersion: 8,
+    governanceV3PackageHash: "71".repeat(32),
+    governanceV3ContractHash: "72".repeat(32),
+    governanceV3DeploymentDomain: "73".repeat(32),
     tokenName: FROZEN_CONFIG.X402_TOKEN_NAME,
     tokenSymbol: FROZEN_CONFIG.X402_TOKEN_SYMBOL,
     tokenDecimals: 9,
@@ -308,21 +389,38 @@ export function loadConfig(
   const wcsprContractHash = frozenEnv(env, "X402_WCSPR_CONTRACT_HASH");
   if (!LOWER_HEX_64_RE.test(wcsprPackageHash)) throw new ConfigError("invalid_package_hash");
   if (!LOWER_HEX_64_RE.test(wcsprContractHash)) throw new ConfigError("invalid_contract_hash");
+  // Resolve every frozen scalar and public config-file path before opening
+  // either file, so a redirected value is always rejected at the env boundary.
+  const facilitatorUrl = frozenEnv(env, "X402_FACILITATOR_URL");
+  const network = frozenEnv(env, "X402_NETWORK");
+  const scheme = frozenEnv(env, "X402_SCHEME");
+  const tokenName = frozenEnv(env, "X402_TOKEN_NAME");
+  const tokenSymbol = frozenEnv(env, "X402_TOKEN_SYMBOL");
+  const tokenDomainVersion = frozenEnv(env, "X402_TOKEN_DOMAIN_VERSION");
+  const ledgerPath = frozenEnv(env, "X402_LEDGER_PATH");
+  const gatewayInternalUrl = frozenEnv(env, "X402_GATEWAY_INTERNAL_URL");
+  const governanceV3ConfigPath = frozenEnv(
+    env,
+    "X402_GOVERNANCE_V3_CONFIG_FILE",
+  );
+  const resourcesPath = frozenEnv(env, "X402_RESOURCES_FILE");
+  const governanceV3 = loadGovernanceV3Config(governanceV3ConfigPath);
   return {
     port,
-    facilitatorUrl: frozenEnv(env, "X402_FACILITATOR_URL"),
-    network: frozenEnv(env, "X402_NETWORK"),
-    scheme: frozenEnv(env, "X402_SCHEME"),
+    facilitatorUrl,
+    network,
+    scheme,
     wcsprPackageHash,
     wcsprContractHash,
     wcsprContractVersion: contractVersion,
-    tokenName: frozenEnv(env, "X402_TOKEN_NAME"),
-    tokenSymbol: frozenEnv(env, "X402_TOKEN_SYMBOL"),
+    ...governanceV3,
+    tokenName,
+    tokenSymbol,
     tokenDecimals: decimals,
-    tokenDomainVersion: frozenEnv(env, "X402_TOKEN_DOMAIN_VERSION"),
-    ledgerPath: frozenEnv(env, "X402_LEDGER_PATH"),
-    gatewayInternalUrl: frozenEnv(env, "X402_GATEWAY_INTERNAL_URL"),
-    resources: loadResources(env),
+    tokenDomainVersion,
+    ledgerPath,
+    gatewayInternalUrl,
+    resources: loadResources(resourcesPath),
   };
 }
 

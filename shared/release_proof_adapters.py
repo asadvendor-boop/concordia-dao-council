@@ -7,7 +7,7 @@ import binascii
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
@@ -550,6 +550,8 @@ def _native_transfer_from_deploy(
     if deploy.get("hash") != expected_hash:
         _fail(check, "returned deploy hash differs")
     header = _mapping(deploy.get("header"), "returned deploy header")
+    if header.get("chain_name") != "casper-test":
+        _fail(check, "returned deploy is not for casper-test")
     source_public_key = header.get("account")
     source = _public_key_account_hash(
         source_public_key, "native transfer source public key"
@@ -950,6 +952,15 @@ def _verify_safepay_ledger(
             _fail(check, "ledger snapshots are not chronologically ordered")
         if snapshot_time > captured_at:
             _fail(check, "ledger snapshot postdates artifact capture")
+        latest_observation_time = datetime.fromtimestamp(
+            max(int(redemptions[name]["observed_at"]) for name in observation_names),
+            UTC,
+        )
+        if snapshot_time < latest_observation_time:
+            _fail(
+                check,
+                f"{stage} snapshot predates its latest included redemption observation",
+            )
         previous_snapshot_time = snapshot_time
         instance_ids.append(str(snapshot.get("provider_instance_id")))
 
@@ -1108,7 +1119,7 @@ def verify_safepay_v2_artifact(
     _validate_safepay_schema(document)
     captured_at = document["captured_at"]
     captured_at_instant = _timestamp(captured_at, "SafePay captured_at")
-    if captured_at_instant > datetime.now(UTC) + timedelta(minutes=5):
+    if captured_at_instant > datetime.now(UTC):
         raise ReleaseProofAdapterError("SafePay captured_at is in the future")
     capture_identity = _mapping(document["capture_identity"], "capture identity")
     if capture_identity.get("capture_tool_commit") != document["source_commit"]:

@@ -8,6 +8,10 @@ import {
   type HistoricalOdraReceiptFacts,
 } from "./adapters/historical-odra.js";
 import { verifyNativeTreasuryExecutionArtifact, type NativeTreasuryExecutionFacts } from "./adapters/native-treasury.js";
+import {
+  verifyOfficialX402ArtifactEnvelope,
+  verifySafePayV2ArtifactEnvelope,
+} from "./adapters/payment-envelope.js";
 import { parseJsonStrict, StrictJsonError } from "./json.js";
 
 export const EXIT_CODES = Object.freeze({
@@ -19,6 +23,14 @@ export const EXIT_CODES = Object.freeze({
 } as const);
 
 export type ResultStatus = "verified" | "invalid" | "unavailable" | "unknown";
+export type VerifiedAspect =
+  | "artifact_identity_envelope"
+  | "artifact_sha256"
+  | "proof_semantics"
+  | "proposal_binding";
+export type UnsupportedCapability =
+  | "official_x402_settlement_v1_semantics"
+  | "safepay_v2_semantics";
 
 export type RegistryVerificationOptions = {
   artifacts?: Readonly<Record<string, Uint8Array | string>>;
@@ -32,6 +44,8 @@ export type ItemVerificationResult = {
   green: boolean;
   reasons: string[];
   ignoredAssertions: string[];
+  verifiedAspects: VerifiedAspect[];
+  unsupportedCapabilities: UnsupportedCapability[];
 };
 
 type AdapterFacts = ExactEnvelopeV3Facts | HistoricalOdraReceiptFacts | NativeTreasuryExecutionFacts;
@@ -373,7 +387,7 @@ function verifyItem(
   referenceTime: string,
 ): InternalItemVerificationResult {
   if (!isRecord(input)) {
-    return itemResult(null, null, "invalid", ["proof item must be an object"], []);
+    return itemResult(null, null, "invalid", ["proof item must be an object"], [], [], []);
   }
   const proofId = typeof input.proof_id === "string" ? input.proof_id : null;
   const proofType = typeof input.proof_type === "string" ? input.proof_type : null;
@@ -381,6 +395,8 @@ function verifyItem(
   const unavailableReasons: string[] = [];
   const unknownReasons: string[] = [];
   const ignoredAssertions = FORGED_BOOLEAN_FIELDS.filter((field) => Object.hasOwn(input, field)).sort();
+  const verifiedAspects = new Set<VerifiedAspect>();
+  const unsupportedCapabilities = new Set<UnsupportedCapability>();
   let artifactHashVerified = false;
   let independentlyVerified = false;
   let adapterFacts: AdapterFacts | undefined;
@@ -414,6 +430,8 @@ function verifyItem(
   if (!isNonemptyAscii(input.enforcement_scope)) reasons.push("enforcement_scope must be nonempty ASCII");
   if (input.proposal_id !== null && (!isStringMatching(input.proposal_id, PROPOSAL_ID) || input.proposal_id !== registryProposalId)) {
     reasons.push("proposal_id must be null or equal the registry proposal");
+  } else if (input.proposal_id === registryProposalId) {
+    verifiedAspects.add("proposal_binding");
   }
   for (const field of [
     "action_id",
@@ -469,6 +487,10 @@ function verifyItem(
   if (input.verification_status === "pending" || input.execution_outcome === "not_attempted" || input.execution_outcome === "unknown") {
     unknownReasons.push("proof has not reached an observed terminal outcome");
   }
+  const unsupportedPaymentCapability = paymentSemanticCapability(proofType);
+  if (input.verification_status === "verified" && unsupportedPaymentCapability !== undefined) {
+    unsupportedCapabilities.add(unsupportedPaymentCapability);
+  }
 
   if (input.verification_status === "verified" && typeof input.artifact_path === "string") {
     const artifact = Object.hasOwn(artifacts, input.artifact_path)
@@ -480,7 +502,10 @@ function verifyItem(
       const bytes = typeof artifact === "string" ? Buffer.from(artifact, "utf8") : artifact;
       const digest = createHash("sha256").update(bytes).digest("hex");
       if (digest !== input.artifact_sha256) reasons.push("artifact SHA-256 mismatch");
-      else artifactHashVerified = true;
+      else {
+        artifactHashVerified = true;
+        verifiedAspects.add("artifact_sha256");
+      }
     }
   }
 
@@ -506,12 +531,15 @@ function verifyItem(
         }
       }
       independentlyVerified = artifactHashVerified && sourcePresent;
+      if (independentlyVerified) verifiedAspects.add("proof_semantics");
     } else if (
       artifactHashVerified &&
       (
         proofType === "exact_envelope_v3" ||
         proofType === "historical_odra_receipt_v2" ||
-        proofType === "native_treasury_execution_v1"
+        proofType === "native_treasury_execution_v1" ||
+        proofType === "safepay_v2" ||
+        proofType === "official_x402_settlement_v1"
       ) &&
       typeof input.artifact_path === "string"
     ) {
@@ -524,7 +552,7 @@ function verifyItem(
           const parsed = parseJsonStrict(Buffer.from(bytes).toString("utf8"));
           if (proofType === "exact_envelope_v3") {
             const facts = verifyExactEnvelopeV3Artifact(parsed);
-            validateAdapterClaims(input, {
+            if (validateAdapterClaims(input, {
               proposal_id: facts.proposalId,
               action_id: facts.actionId,
               envelope_hash: facts.envelopeHash,
@@ -535,11 +563,11 @@ function verifyItem(
               source_commit: facts.sourceCommit,
               deployment_commit: facts.deploymentCommit,
               schema_version: "concordia.v3-proof.v1",
-            }, reasons);
+            }, reasons)) verifiedAspects.add("artifact_identity_envelope");
             adapterFacts = facts;
           } else if (proofType === "historical_odra_receipt_v2") {
             const facts = verifyHistoricalOdraReceiptArtifact(parsed);
-            validateAdapterClaims(input, {
+            if (validateAdapterClaims(input, {
               proposal_id: facts.proposalId,
               generation: facts.generation,
               network: "casper-test",
@@ -549,14 +577,14 @@ function verifyItem(
               deployment_commit: facts.deploymentCommit,
               schema_version: facts.schemaVersion,
               captured_at: facts.capturedAt,
-            }, reasons);
+            }, reasons)) verifiedAspects.add("artifact_identity_envelope");
             if (facts.generation === "v1" && input.lineage !== "canonical") {
               reasons.push("the currently publishable historical v1 combined proof must use canonical lineage");
             }
             adapterFacts = facts;
-          } else {
+          } else if (proofType === "native_treasury_execution_v1") {
             const facts = verifyNativeTreasuryExecutionArtifact(parsed);
-            validateAdapterClaims(input, {
+            if (validateAdapterClaims(input, {
               proposal_id: facts.proposalId,
               action_id: facts.actionId,
               envelope_hash: facts.envelopeHash,
@@ -568,10 +596,48 @@ function verifyItem(
               deployment_commit: facts.deploymentCommit,
               schema_version: facts.schemaVersion,
               captured_at: facts.capturedAt,
-            }, reasons);
+            }, reasons)) verifiedAspects.add("artifact_identity_envelope");
             adapterFacts = facts;
+          } else if (proofType === "safepay_v2") {
+            const facts = verifySafePayV2ArtifactEnvelope(parsed);
+            if (validateAdapterClaims(input, {
+              proposal_id: facts.proposalId,
+              network: facts.network,
+              report_hash: facts.reportHash,
+              settlement_transaction: facts.settlementTransaction,
+              source_commit: facts.sourceCommit,
+              deployment_commit: facts.deploymentCommit,
+              schema_version: facts.schemaVersion,
+              captured_at: facts.capturedAt,
+            }, reasons)) verifiedAspects.add("artifact_identity_envelope");
+          } else {
+            const facts = verifyOfficialX402ArtifactEnvelope(parsed);
+            if (validateAdapterClaims(input, {
+              proposal_id: facts.proposalId,
+              action_id: facts.actionId,
+              envelope_hash: facts.envelopeHash,
+              network: facts.network,
+              package_hash: facts.packageHash,
+              contract_hash: facts.contractHash,
+              deployment_domain: facts.deploymentDomain,
+              payment_requirements_hash: facts.paymentRequirementsHash,
+              signed_payment_payload_hash: facts.signedPaymentPayloadHash,
+              report_hash: facts.reportHash,
+              settlement_transaction: facts.settlementTransaction,
+              source_commit: facts.sourceCommit,
+              deployment_commit: facts.deploymentCommit,
+              schema_version: facts.schemaVersion,
+              captured_at: facts.capturedAt,
+            }, reasons)) verifiedAspects.add("artifact_identity_envelope");
           }
-          independentlyVerified = true;
+          if (
+            proofType === "exact_envelope_v3" ||
+            proofType === "historical_odra_receipt_v2" ||
+            proofType === "native_treasury_execution_v1"
+          ) {
+            independentlyVerified = true;
+            verifiedAspects.add("proof_semantics");
+          }
         } catch (error) {
           if (error instanceof HistoricalOdraArtifactUnavailableError) {
             unavailableReasons.push(`independent ${proofType} verification unavailable: ${error.message}`);
@@ -579,9 +645,19 @@ function verifyItem(
           else reasons.push(`independent ${proofType} verification failed: ${safeErrorMessage(error)}`);
         }
       }
-    } else {
+    } else if (unsupportedPaymentCapability === undefined) {
       unavailableReasons.push(
         `independent ${proofType ?? "unknown"} proof adapter has not verified the artifact`,
+      );
+    }
+    if (unsupportedPaymentCapability !== undefined) {
+      const verifiedEnvelope = verifiedAspects.has("artifact_identity_envelope");
+      unavailableReasons.push(
+        `${proofType} payment semantic verification is unsupported by this package; ${
+          verifiedEnvelope
+            ? "artifact SHA-256 and proposal/identity envelope were independently verified"
+            : "a dedicated raw-evidence semantic adapter is required"
+        }`,
       );
     }
   }
@@ -607,6 +683,8 @@ function verifyItem(
     status,
     [...reasons, ...unavailableReasons, ...unknownReasons],
     ignoredAssertions,
+    [...verifiedAspects],
+    [...unsupportedCapabilities],
   );
   if (adapterFacts !== undefined) result.adapterFacts = adapterFacts;
   return result;
@@ -642,10 +720,25 @@ function validateAdapterClaims(
   item: Record<string, unknown>,
   expected: Readonly<Record<string, unknown>>,
   reasons: string[],
-): void {
+): boolean {
+  let matches = true;
   for (const [field, value] of Object.entries(expected)) {
-    if (item[field] !== value) reasons.push(`${field} differs from independently verified artifact`);
+    if (item[field] !== value) {
+      matches = false;
+      reasons.push(`${field} differs from independently verified artifact`);
+    }
   }
+  return matches;
+}
+
+function paymentSemanticCapability(
+  proofType: string | null,
+): UnsupportedCapability | undefined {
+  if (proofType === "safepay_v2") return "safepay_v2_semantics";
+  if (proofType === "official_x402_settlement_v1") {
+    return "official_x402_settlement_v1_semantics";
+  }
+  return undefined;
 }
 
 function applyCrossProofBindings(items: InternalItemVerificationResult[]): void {
@@ -823,6 +916,18 @@ function validateNullability(
       }
     }
   }
+  if (proofType === "safepay_v2" && item.verification_status === "verified") {
+    for (const field of [
+      "proposal_id",
+      "network",
+      "report_hash",
+      "settlement_transaction",
+    ]) {
+      if (item[field] === null || item[field] === undefined) {
+        reasons.push(`verified SafePay proof requires ${field}`);
+      }
+    }
+  }
   if (proofType === "official_x402_settlement_v1" && item.verification_status === "verified") {
     for (const field of [
       "proposal_id",
@@ -896,6 +1001,8 @@ function itemResult(
   status: ResultStatus,
   reasons: string[],
   ignoredAssertions: string[],
+  verifiedAspects: VerifiedAspect[],
+  unsupportedCapabilities: UnsupportedCapability[],
 ): ItemVerificationResult {
   return {
     proofId,
@@ -904,6 +1011,8 @@ function itemResult(
     green: status === "verified",
     reasons,
     ignoredAssertions,
+    verifiedAspects: verifiedAspects.sort(),
+    unsupportedCapabilities: unsupportedCapabilities.sort(),
   };
 }
 

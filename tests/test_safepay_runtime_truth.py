@@ -100,6 +100,7 @@ def test_safepay_runtime_uses_one_green_registry_item(
     assert safepay["report_hash"] == REPORT_HASH
     assert safepay["report_hash_verified"] is True
     assert safepay["duplicate_proof_rejected"] is True
+    assert safepay["malformed_provider_response"] is False
     assert safepay["included_in_governance_proof"] is True
 
 
@@ -129,9 +130,11 @@ def test_safepay_runtime_ignores_historical_handshake_and_forged_boolean(
     safepay = build_safepay_lite({"proposal_id": CANONICAL_PROPOSAL_ID})
 
     assert safepay["status"] == "unverified"
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
     assert safepay["payment_verified"] is False
     assert safepay["duplicate_proof_rejected"] is False
+    assert safepay["malformed_provider_response"] is None
     assert safepay["included_in_governance_proof"] is False
 
 
@@ -151,6 +154,26 @@ def test_safepay_runtime_failed_required_check_never_turns_green(
 
     assert safepay["status"] == "unverified"
     assert safepay["duplicate_proof_rejected"] is False
+
+
+def test_safepay_runtime_requires_current_payment_deploy_hash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    item = _safepay_item()
+    item["settlement_transaction"] = None
+    registry = tmp_path / "registry"
+    _write_registry(registry, item)
+    monkeypatch.setenv("CONCORDIA_PROOF_REGISTRY_DIR", str(registry))
+
+    safepay = build_safepay_lite({"proposal_id": CANONICAL_PROPOSAL_ID})
+
+    assert safepay["status"] == "unverified"
+    assert safepay["payment_hash"] is None
+    assert safepay["payment_verified"] is False
+    assert safepay["duplicate_proof_rejected"] is False
+    assert safepay["malformed_provider_response"] is None
+    assert safepay["included_in_governance_proof"] is False
 
 
 def test_invariant_runner_ignores_caller_supplied_safepay_success(

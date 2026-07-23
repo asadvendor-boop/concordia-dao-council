@@ -89,6 +89,27 @@ CAPTURE_JOURNAL_PATH = ".concordia-release-capture-journal.json"
 CAPTURE_JOURNAL_SCHEMA_VERSION = "concordia.capture_publication_journal.v1"
 POST_FREEZE_CORRECTION_SCHEMA_VERSION = "concordia.post_freeze_correction.v1"
 POST_FREEZE_CORRECTIONS_SCHEMA_VERSION = "concordia.post_freeze_corrections.v1"
+_G1_POST_FREEZE_CORRECTIONS_PATH = "handoff/G1_POST_FREEZE_CORRECTIONS.json"
+_G1_POST_FREEZE_CORRECTIONS_SCHEMA_ID = (
+    "concordia.g1-post-freeze-corrections.v1"
+)
+_G1_POST_FREEZE_CORRECTION_IDS = (
+    "G1-C6-v3-temporal-order",
+    "G1-C7-proof-registry-deployment-domain",
+    "G1-C8-v3-canonical-block-order",
+    "G1-C9-treasury-authorization-block-hash",
+    "G1-C10-independent-card-chain-artifact",
+    "G1-C11-proof-type-provenance-binding",
+    "G1-C12-proof-observation-chronology",
+    "G1-C13-independent-historical-odra-artifact",
+    "G1-C14-official-x402-separate-proposal-and-governance-identity",
+)
+# The shared host serves another judged application. Bind its complete /mcp
+# route projection without carrying that application's identity into Concordia's
+# submission corpus.
+_SHARED_COHOST_MCP_ROUTE_SHA256 = (
+    "ea66f8b9c78be3bbbb459f908181c6ad80e9527c1162c057c499311cf464df1b"
+)
 
 _SAFEPAY_GATEWAY_CORRECTION = {
     "schema_version": POST_FREEZE_CORRECTION_SCHEMA_VERSION,
@@ -179,6 +200,7 @@ RPC_PROVIDERS: dict[str, dict[str, str]] = {
 _APP = "https://concordia.47.84.232.193.sslip.io"
 _PROVIDER = "https://x402-provider.47.84.232.193.sslip.io"
 _PROPOSAL = "DAO-PROP-6CB25C"
+_OFFICIAL_X402_PROPOSAL = "DAO-PROP-X402-FINALS-2026"
 _APP_TITLE = b"Concordia \xe2\x80\x94 Evidence-Bound DAO Governance Council"
 
 
@@ -358,6 +380,12 @@ HTTP_PROBE_SPECS.update(
             f"{_APP}/proof-registry/v1/{_PROPOSAL}",
             content_type="application/json",
             marker=_PROPOSAL.encode(),
+            semantic="proof_registry",
+        ),
+        "proof_registry_official": _probe(
+            f"{_APP}/proof-registry/v1/{_OFFICIAL_X402_PROPOSAL}",
+            content_type="application/json",
+            marker=_OFFICIAL_X402_PROPOSAL.encode(),
             semantic="proof_registry",
         ),
         "card_chain": _probe(
@@ -1418,6 +1446,89 @@ def _post_freeze_corrections_projection(
     integration_commit: str,
 ) -> tuple[dict[str, object], list[_BoundFile]]:
     integration_commit = _git40(integration_commit, "integration commit")
+    authority_bound = _load_bound_file(
+        root,
+        _G1_POST_FREEZE_CORRECTIONS_PATH,
+        _CONTROL_LIMIT,
+    )
+    if not _is_ancestor(
+        root,
+        authority_bound.artifact_commit,
+        integration_commit,
+    ):
+        raise ReleaseManifestError(
+            "G1 post-freeze corrections postdate integration"
+        )
+    authority_document, _ = _strict_json(
+        authority_bound.raw,
+        "G1 post-freeze corrections",
+    )
+    if set(authority_document) != {
+        "schema_id",
+        "status",
+        "authority_tag",
+        "authority_commit",
+        "reason",
+        "corrections",
+    }:
+        raise ReleaseManifestError(
+            "G1 post-freeze correction authority field set differs"
+        )
+    authority_rows = _sequence(
+        authority_document.get("corrections"),
+        "G1 post-freeze corrections",
+    )
+    correction_ids: list[str] = []
+    for raw_row in authority_rows:
+        row = _mapping(raw_row, "G1 post-freeze correction")
+        if set(row) != {
+            "id",
+            "affected_schema",
+            "rules",
+            "acceptance_tests",
+        }:
+            raise ReleaseManifestError(
+                "G1 post-freeze correction field set differs"
+            )
+        correction_ids.append(
+            _text(row.get("id"), "G1 post-freeze correction ID")
+        )
+        _text(
+            row.get("affected_schema"),
+            "G1 post-freeze affected schema",
+        )
+        rules = _sequence(row.get("rules"), "G1 post-freeze correction rules")
+        acceptance = _sequence(
+            row.get("acceptance_tests"),
+            "G1 post-freeze correction acceptance tests",
+        )
+        if not rules or not acceptance:
+            raise ReleaseManifestError(
+                "G1 post-freeze correction lacks rules or acceptance tests"
+            )
+        for value in (*rules, *acceptance):
+            _text(value, "G1 post-freeze correction text")
+    if (
+        authority_document.get("schema_id")
+        != _G1_POST_FREEZE_CORRECTIONS_SCHEMA_ID
+        or authority_document.get("status") != "required"
+        or authority_document.get("authority_tag") != G1_FREEZE_TAG
+        or authority_document.get("authority_commit") != G1_FREEZE_COMMIT
+        or tuple(correction_ids) != _G1_POST_FREEZE_CORRECTION_IDS
+    ):
+        raise ReleaseManifestError(
+            "G1 post-freeze correction authority differs"
+        )
+    authority_projection = {
+        "path": _G1_POST_FREEZE_CORRECTIONS_PATH,
+        "sha256": authority_bound.sha256,
+        "artifact_commit": authority_bound.artifact_commit,
+        "schema_id": _G1_POST_FREEZE_CORRECTIONS_SCHEMA_ID,
+        "status": "required",
+        "authority_tag": G1_FREEZE_TAG,
+        "authority_commit": G1_FREEZE_COMMIT,
+        "correction_ids": correction_ids,
+    }
     required_markers = {
         "gateway/app.py": (
             b"/x402/v2/payment-intent",
@@ -1442,7 +1553,7 @@ def _post_freeze_corrections_projection(
         "tests/test_compose_secret_scope.py": (b"safepay_quote_token_secret",),
     }
     bindings: list[dict[str, object]] = []
-    bounds: list[_BoundFile] = []
+    bounds: list[_BoundFile] = [authority_bound]
     for relative in _SAFEPAY_GATEWAY_CORRECTION_PATHS:
         bound = _load_bound_file(root, relative, _ARTIFACT_LIMIT)
         if not _is_ancestor(root, bound.artifact_commit, integration_commit):
@@ -1468,6 +1579,7 @@ def _post_freeze_corrections_projection(
     correction["implementation_bindings"] = bindings
     projection = {
         "schema_version": POST_FREEZE_CORRECTIONS_SCHEMA_VERSION,
+        "authority": authority_projection,
         "corrections": [correction],
     }
     _assert_safe_projection(projection, (), "post-freeze corrections")
@@ -2927,7 +3039,7 @@ def _run_release_adapter(
     )
     if (
         captured_text != metadata[1]
-        or captured_instant > datetime.now(UTC) + timedelta(minutes=5)
+        or captured_instant > datetime.now(UTC)
         or _git40(
             facts.get("source_commit"),
             f"{artifact_id} adapter source_commit",
@@ -2994,7 +3106,7 @@ def _adapter_registry_checks(
             check.get("observed_at"),
             f"{artifact_id} independent adapter check observed_at",
         )
-        if observed_instant > datetime.now(UTC) + timedelta(minutes=5):
+        if observed_instant > datetime.now(UTC):
             raise ReleaseManifestError(
                 f"{artifact_id} independent adapter check is future-dated"
             )
@@ -3217,7 +3329,7 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
             artifact.captured_at,
             f"{proof_type} artifact captured_at",
         )
-        if artifact_captured_at > datetime.now(UTC) + timedelta(minutes=5):
+        if artifact_captured_at > datetime.now(UTC):
             raise ReleaseManifestError(
                 f"registry artifact is future-dated: {proof_type}"
             )
@@ -3230,6 +3342,29 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
             "artifact_sha256": artifact.bound.sha256,
             "observation_mode": artifact.observation_mode,
         }
+        if proof_type == "exact_envelope_v3":
+            # The six-field v3 artifact records chain-observation time, while
+            # its public registry item is created only after the independent
+            # verifier recomputes source/build/envelope checks.  That later
+            # verification instant is therefore allowed (and becomes the
+            # internal record observation boundary), but it can never predate
+            # the artifact's intrinsic chain observation.
+            item_captured_raw = _text(
+                item.get("captured_at"),
+                "registry exact-envelope captured_at",
+            )
+            _, item_captured_at = _parse_timestamp(
+                item_captured_raw,
+                "registry exact-envelope captured_at",
+            )
+            if (
+                item_captured_at < artifact_captured_at
+                or item_captured_at > datetime.now(UTC)
+            ):
+                raise ReleaseManifestError(
+                    "registry exact-envelope verification chronology is invalid"
+                )
+            expected.pop("captured_at")
         for field, value in expected.items():
             if item.get(field) != value:
                 if field == "observation_mode":
@@ -3288,6 +3423,8 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
         safepay_item.get("proposal_id") != safepay_facts.get("proposal_id")
         or safepay_item.get("network") != safepay_facts.get("network")
         or safepay_item.get("report_hash") != safepay_facts.get("report_hash")
+        or safepay_item.get("settlement_transaction")
+        != safepay_facts.get("payment_hash")
         or safepay_item.get("checks")
         != _adapter_registry_checks(safepay_adapter, "safepay_v2")
     ):
@@ -3394,9 +3531,8 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
         "report_hash": None,
         "payment_requirements_hash": None,
         "signed_payment_payload_hash": None,
-        "settlement_transaction": None,
         "verification_status": "verified",
-        "observed_at": exact_finality.get("observed_at"),
+        "observed_at": exact_item.get("captured_at"),
         "checks": exact_item.get("checks"),
     }
     if native_record != expected_native_record:
@@ -3436,7 +3572,6 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
         "report_hash",
         "payment_requirements_hash",
         "signed_payment_payload_hash",
-        "settlement_transaction",
         "observed_at",
     )
     if any(
@@ -3465,6 +3600,67 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
         "artifact_sha256": root_artifact.bound.sha256,
     }:
         raise ReleaseManifestError("registry card-chain root binding differs")
+
+
+def _validate_payment_artifact_runtime_binding(
+    artifacts: Mapping[str, _Artifact],
+    runtime: Mapping[str, object],
+) -> None:
+    """Bind payment capture identities to the observed deployed image bytes."""
+
+    containers = _sequence(
+        runtime.get("containers"),
+        "payment artifact runtime containers",
+    )
+    by_service: dict[str, Mapping[str, Any]] = {}
+    for raw in containers:
+        container = _mapping(raw, "payment artifact runtime container")
+        service_id = _text(
+            container.get("service_id"),
+            "payment artifact runtime service",
+        )
+        if service_id in by_service:
+            raise ReleaseManifestError("payment runtime service is duplicated")
+        by_service[service_id] = container
+
+    bindings = (
+        (
+            "safepay_v2",
+            "x402-provider",
+            "provider_image_digest",
+            "SafePay provider",
+        ),
+        (
+            "official_x402_settlement_v1",
+            "x402-official",
+            "service_image_digest",
+            "official-x402 service",
+        ),
+    )
+    for artifact_id, service_id, digest_field, label in bindings:
+        artifact = artifacts.get(artifact_id)
+        if artifact is None:
+            raise ReleaseManifestError(f"{label} artifact is unavailable")
+        identity = _mapping(
+            artifact.document.get("capture_identity"),
+            f"{label} capture identity",
+        )
+        captured_digest = _text(
+            identity.get(digest_field),
+            f"{label} capture image digest",
+        )
+        runtime_container = by_service.get(service_id)
+        if (
+            runtime_container is None
+            or captured_digest
+            != _text(
+                runtime_container.get("image_id"),
+                f"{label} runtime image digest",
+            )
+        ):
+            raise ReleaseManifestError(
+                f"{label} capture image differs from observed runtime"
+            )
 
 
 def _compose_argv_sha256(
@@ -4385,26 +4581,22 @@ def _caddy_projection(
         walk_routes(server.get("routes"), server_id=server_id)
     if not routes:
         raise ReleaseManifestError("Caddy active topology has no route")
-    yiting_routes = [
+    cohost_routes = [
         route
         for route in routes
-        if route["hosts"] == ["yiting.47.84.232.193.sslip.io"]
-        and route["paths"] == ["/mcp"]
-        and route["matchers"]
-        == [
-            {
-                "hosts": ["yiting.47.84.232.193.sslip.io"],
-                "paths": ["/mcp"],
-                "methods": [],
-                "unknown_keys": [],
-            }
-        ]
+        if hashlib.sha256(
+            _canonical_json(
+                {
+                    key: route[key]
+                    for key in ("hosts", "paths", "matchers", "handlers")
+                }
+            )
+        ).hexdigest()
+        == _SHARED_COHOST_MCP_ROUTE_SHA256
     ]
-    if len(yiting_routes) != 1 or yiting_routes[0]["handlers"] != [
-        {"handler": "reverse_proxy", "upstreams": ["yiting-gateway:8000"]}
-    ]:
+    if len(cohost_routes) != 1:
         raise ReleaseManifestError(
-            "shared Caddy topology lost the exact YITING /mcp binding"
+            "shared Caddy topology lost the exact cohost /mcp binding"
         )
     approvals = [
         route
@@ -4946,6 +5138,7 @@ _CARD_PROPOSAL_ID_FIELDS = {
 _DYNAMIC_PUBLIC_TIMESTAMP_FIELDS = {
     "card_chain": "captured_at",
     "proof_registry": "generated_at",
+    "proof_registry_official": "generated_at",
     "trace": "generated_at",
 }
 
@@ -5148,37 +5341,64 @@ def _public_release_graph(
     if evidence_inventory != inventory:
         raise ReleaseManifestError("public evidence card inventory differs")
 
-    registry = document("proof_registry")
-    if set(registry) != {"schema_version", "generated_at", "proposal_id", "items"}:
-        raise ReleaseManifestError("public proof registry shape differs")
-    _, registry_time = _parse_public_utc(
-        registry.get("generated_at"), "proof registry generated_at"
-    )
-    if registry_time > now or now - registry_time > _RECEIPT_MAX_AGE:
-        raise ReleaseManifestError("public proof registry timestamp is stale or future")
     committed_bound = _load_bound_file(
         root, ARTIFACT_PATHS["proof_registry_v1"], _ARTIFACT_LIMIT
     )
     committed_registry, _ = _strict_json(
         committed_bound.raw, "committed proof registry"
     )
-    committed_items = [
-        item
-        for item in _sequence(
-            committed_registry.get("public_items"), "committed public proof items"
+    all_committed_items = _sequence(
+        committed_registry.get("public_items"), "committed public proof items"
+    )
+
+    def registry_projection(
+        probe_id: str,
+        proposal_id: str,
+    ) -> tuple[list[object], str]:
+        registry = document(probe_id)
+        if set(registry) != {
+            "schema_version",
+            "generated_at",
+            "proposal_id",
+            "items",
+        }:
+            raise ReleaseManifestError(
+                f"public proof registry shape differs: {probe_id}"
+            )
+        _, registry_time = _parse_public_utc(
+            registry.get("generated_at"),
+            f"{probe_id} generated_at",
         )
-        if _mapping(item, "committed proof item").get("proposal_id")
-        in {None, _PROPOSAL}
-    ]
-    if (
-        registry.get("schema_version") != 1
-        or registry.get("proposal_id") != _PROPOSAL
-        or registry.get("items") != committed_items
-    ):
-        raise ReleaseManifestError(
-            "public proof registry differs from committed registry"
-        )
-    registry_sha256 = hashlib.sha256(_canonical_json(committed_items)).hexdigest()
+        if registry_time > now or now - registry_time > _RECEIPT_MAX_AGE:
+            raise ReleaseManifestError(
+                f"public proof registry timestamp is stale or future: {probe_id}"
+            )
+        committed_items = [
+            item
+            for item in all_committed_items
+            if _mapping(item, "committed proof item").get("proposal_id")
+            in {None, proposal_id}
+        ]
+        if (
+            registry.get("schema_version") != 1
+            or registry.get("proposal_id") != proposal_id
+            or registry.get("items") != committed_items
+        ):
+            raise ReleaseManifestError(
+                f"public proof registry differs from committed registry: {probe_id}"
+            )
+        return committed_items, hashlib.sha256(
+            _canonical_json(committed_items)
+        ).hexdigest()
+
+    committed_items, registry_sha256 = registry_projection(
+        "proof_registry",
+        _PROPOSAL,
+    )
+    official_committed_items, official_registry_sha256 = registry_projection(
+        "proof_registry_official",
+        _OFFICIAL_X402_PROPOSAL,
+    )
 
     proof_pack = document("proof_pack")
     historical_bound = _load_bound_file(
@@ -5334,6 +5554,10 @@ def _public_release_graph(
         "proof_registry": {
             "item_count": len(committed_items),
             "items_sha256": registry_sha256,
+        },
+        "proof_registry_official": {
+            "item_count": len(official_committed_items),
+            "items_sha256": official_registry_sha256,
         },
         "trace": {
             "observation_count": len(inventory),
@@ -7448,6 +7672,10 @@ def _validate_g12_manifest_offline(
         raise ReleaseManifestError("G12 observation receipt bindings differ")
 
     artifacts = _load_artifacts(root)
+    _validate_payment_artifact_runtime_binding(
+        artifacts,
+        _mapping(captured.get("runtime"), "captured runtime"),
+    )
     verifier = _proof_verifier_factory(root)
     proof_bindings: list[dict[str, object]] = []
     for artifact_id, artifact in artifacts.items():
@@ -7762,6 +7990,10 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
     if replayed != captured:
         raise ReleaseManifestError("normalized observation replay inventory differs")
 
+    _validate_payment_artifact_runtime_binding(
+        artifacts,
+        _mapping(captured.get("runtime"), "captured runtime"),
+    )
     proof_bindings: list[dict[str, object]] = []
     for artifact_id, artifact in artifacts.items():
         bound, document = _load_receipt(
@@ -10028,16 +10260,112 @@ class _DefaultProofVerifier:
             verifier_id = (
                 "shared.proof_registry.validate_release_registry_document"
             )
+        elif artifact_id in {
+            "safepay_v2",
+            "official_x402_settlement_v1",
+        }:
+            try:
+                adapter_result = (
+                    release_proof_adapters.verify_safepay_v2_artifact(
+                        artifact_document,
+                        artifact_bytes,
+                    )
+                    if artifact_id == "safepay_v2"
+                    else release_proof_adapters.verify_official_x402_artifact(
+                        artifact_document,
+                        artifact_bytes,
+                    )
+                )
+            except release_proof_adapters.ReleaseProofAdapterError as exc:
+                raise ReleaseManifestError(
+                    f"{artifact_id} raw proof adapter rejected its artifact"
+                ) from exc
+            expected_artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+            if (
+                adapter_result.get("proof_type") != artifact_id
+                or adapter_result.get("artifact_sha256")
+                != expected_artifact_sha256
+            ):
+                raise ReleaseManifestError(
+                    f"{artifact_id} raw proof adapter identity differs"
+                )
+            facts = _mapping(
+                adapter_result.get("derived_facts"),
+                f"{artifact_id} raw adapter facts",
+            )
+            checks = _sequence(
+                adapter_result.get("checks"),
+                f"{artifact_id} raw adapter checks",
+            )
+            check_names = [
+                check.get("name") for check in checks if type(check) is dict
+            ]
+            if (
+                not checks
+                or len(check_names) != len(checks)
+                or len(check_names) != len(set(check_names))
+                or any(check.get("passed") is not True for check in checks)
+            ):
+                raise ReleaseManifestError(
+                    f"{artifact_id} raw proof adapter returned a non-green check"
+                )
+            identity = {
+                "artifact_sha256": expected_artifact_sha256,
+                "proposal_id": _text(
+                    facts.get("proposal_id"),
+                    f"{artifact_id} adapter proposal ID",
+                ),
+                "report_hash": _hash32(
+                    facts.get("report_hash"),
+                    f"{artifact_id} adapter report hash",
+                ),
+            }
+            if artifact_id == "safepay_v2":
+                identity["payment_hash"] = _hash32(
+                    facts.get("payment_hash"),
+                    "SafePay adapter payment hash",
+                )
+            else:
+                identity.update(
+                    {
+                        "action_id": _hash32(
+                            facts.get("action_id"),
+                            "official-x402 adapter action ID",
+                        ),
+                        "envelope_hash": _hash32(
+                            facts.get("envelope_hash"),
+                            "official-x402 adapter envelope hash",
+                        ),
+                        "settlement_transaction": _hash32(
+                            facts.get("settlement_transaction"),
+                            "official-x402 adapter settlement transaction",
+                        ),
+                    }
+                )
+            derived = {
+                "adapter_result_sha256": hashlib.sha256(
+                    _canonical_json(adapter_result)
+                ).hexdigest(),
+                "check_count": len(checks),
+                "check_names_sha256": hashlib.sha256(
+                    _canonical_json([check["name"] for check in checks])
+                ).hexdigest(),
+            }
+            verifier_id = (
+                "shared.release_proof_adapters."
+                + (
+                    "verify_safepay_v2_artifact"
+                    if artifact_id == "safepay_v2"
+                    else "verify_official_x402_artifact"
+                )
+            )
         else:
             # The read-only SDK independently reparses registry-bound treasury
-            # evidence. SafePay and official-x402 remain terminally unavailable
-            # until their raw-artifact adapters land; registry booleans alone
-            # never authorize a release proof.
+            # evidence. Payment proofs use the raw adapters above; registry
+            # booleans never authorize their release receipts.
             items = self._packaged_registry_items()
             proof_ids = {
                 "native_treasury_execution_v1": "native_treasury_execution_v1",
-                "official_x402_settlement_v1": "official_x402_settlement_v1",
-                "safepay_v2": "safepay_v2",
             }
             proof_id = proof_ids[artifact_id]
             item = items.get(proof_id)
@@ -10975,10 +11303,16 @@ def _inspect_npm_tarball(
             timeout=180,
             repository_root=repository_root,
         )
-        pack_document = _decode_json_response(
-            pack_result.stdout,
-            "reproduced npm pack result",
-        )
+        try:
+            pack_document = json.loads(
+                pack_result.stdout.decode("utf-8"),
+                object_pairs_hook=_pairs,
+                parse_constant=_reject_constant,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReleaseManifestError(
+                "reproduced npm pack result is not strict JSON"
+            ) from exc
         if (
             type(pack_document) is not list
             or len(pack_document) != 1

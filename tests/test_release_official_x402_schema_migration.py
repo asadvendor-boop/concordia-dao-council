@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -36,12 +37,18 @@ def test_official_live_schema_uses_current_casper_transaction_rpc() -> None:
     assert "info_get_deploy" not in provider["properties"]
 
 
-def test_official_release_schema_requires_ed25519_payer_key() -> None:
+def test_official_release_schema_allows_only_supported_casper_payer_keys() -> None:
     schema = _load(LIVE_SCHEMA_PATH)
 
-    assert schema["properties"]["authorization"]["properties"][
+    pattern = schema["properties"]["authorization"]["properties"][
         "public_key_hex"
-    ]["pattern"] == "^01[0-9a-f]{64}$"
+    ]["pattern"]
+    assert pattern == "^(?:01[0-9a-f]{64}|02[0-9a-f]{66})$"
+    assert re.fullmatch(pattern, "01" + "11" * 32)
+    assert re.fullmatch(pattern, "02" + "02" + "11" * 32)
+    assert not re.fullmatch(pattern, "03" + "11" * 32)
+    assert not re.fullmatch(pattern, "01" + "11" * 31)
+    assert not re.fullmatch(pattern, "02" + "02" + "11" * 31)
 
 
 def test_paid_resource_exchanges_capture_headers_and_decoded_values() -> None:

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   loadConfig,
   loadSecrets,
+  parseGovernanceV3ConfigDocument,
   parseResourcesDocument,
   ConfigError,
   FROZEN_CONFIG,
@@ -44,6 +45,7 @@ describe("loadConfig — frozen production values (WP5-4)", () => {
     ["X402_TOKEN_DECIMALS", "6"],
     ["X402_TOKEN_DOMAIN_VERSION", "2"],
     ["X402_SCHEME", "upto"],
+    ["X402_GOVERNANCE_V3_CONFIG_FILE", "/tmp/evil-governance-v3.json"],
     ["X402_RESOURCES_FILE", "/tmp/evil-resources.json"],
   ])("rejects a redirected %s", (name, value) => {
     expect(codeOf(() => loadConfig({ [name]: value }))).toBe(
@@ -61,6 +63,78 @@ describe("loadConfig — frozen production values (WP5-4)", () => {
     expect(FROZEN_CONFIG.X402_FACILITATOR_URL).toBe(
       "https://x402-facilitator.cspr.cloud",
     );
+  });
+
+  it("exposes the frozen public v3-governance config path", () => {
+    expect(FROZEN_CONFIG.X402_GOVERNANCE_V3_CONFIG_FILE).toBe(
+      "/run/config/x402-governance-v3.json",
+    );
+  });
+});
+
+const GOVERNANCE_V3_DOCUMENT = {
+  schema_version: "concordia.x402-governance-v3-binding.v1",
+  network: "casper:casper-test",
+  package_hash: "71".repeat(32),
+  contract_hash: "72".repeat(32),
+  deployment_domain: "73".repeat(32),
+};
+
+describe("parseGovernanceV3ConfigDocument — exact public release identity", () => {
+  it("maps the exact snake_case document to distinct ServiceConfig fields", () => {
+    expect(parseGovernanceV3ConfigDocument(GOVERNANCE_V3_DOCUMENT)).toEqual({
+      governanceV3PackageHash: GOVERNANCE_V3_DOCUMENT.package_hash,
+      governanceV3ContractHash: GOVERNANCE_V3_DOCUMENT.contract_hash,
+      governanceV3DeploymentDomain: GOVERNANCE_V3_DOCUMENT.deployment_domain,
+    });
+  });
+
+  it("rejects unknown fields", () => {
+    expect(
+      codeOf(() =>
+        parseGovernanceV3ConfigDocument({
+          ...GOVERNANCE_V3_DOCUMENT,
+          token_package_hash: FROZEN_CONFIG.X402_WCSPR_PACKAGE_HASH,
+        }),
+      ),
+    ).toBe("governance_v3_config_unknown_field");
+  });
+
+  it.each([
+    ["wrong schema", { schema_version: "concordia.x402-governance-v3-binding.v2" }],
+    ["wrong network", { network: "casper:casper" }],
+    ["uppercase package hash", { package_hash: "AA".repeat(32) }],
+    ["short contract hash", { contract_hash: "72".repeat(31) }],
+    ["missing deployment domain", { deployment_domain: undefined }],
+  ])("rejects an invalid exact document (%s)", (_name, override) => {
+    expect(
+      codeOf(() =>
+        parseGovernanceV3ConfigDocument({
+          ...GOVERNANCE_V3_DOCUMENT,
+          ...override,
+        }),
+      ),
+    ).toBe("governance_v3_config_invalid");
+  });
+
+  it.each([
+    [
+      "package",
+      { package_hash: FROZEN_CONFIG.X402_WCSPR_PACKAGE_HASH },
+    ],
+    [
+      "contract",
+      { contract_hash: FROZEN_CONFIG.X402_WCSPR_CONTRACT_HASH },
+    ],
+  ])("rejects reuse of the WCSPR %s hash", (_name, override) => {
+    expect(
+      codeOf(() =>
+        parseGovernanceV3ConfigDocument({
+          ...GOVERNANCE_V3_DOCUMENT,
+          ...override,
+        }),
+      ),
+    ).toBe("governance_v3_identity_not_distinct");
   });
 });
 

@@ -16,6 +16,14 @@ The verifier distinguishes four outcomes:
 `invalid`, `unavailable`, and `unknown` are intentionally different. None is
 silently promoted to success.
 
+Every item also reports two machine-readable lists:
+
+- `verifiedAspects` names the layers this package actually recomputed
+  (`artifact_sha256`, `proposal_binding`, `artifact_identity_envelope`, and,
+  only for a full adapter, `proof_semantics`);
+- `unsupportedCapabilities` names a semantic adapter that this package does
+  not implement. A nonempty value can never produce `green: true`.
+
 ## Install
 
 ```bash
@@ -149,10 +157,25 @@ endpoint set is not.
 
 SafePay provider-ledger rows, approval/demo/room-boundary proofs, historical-v2
 combined receipts, and official-facilitator settlement facts do not yet have a
-passing dedicated adapter in this package. Their registry items therefore
-remain `unavailable` even if asserted checks say they passed. Future adapters
-must verify their raw, content-addressed evidence before those proof types can
-become green.
+passing semantic adapter in this package. For SafePay v2 and official x402, the
+package does parse the strict JSON and independently bind the artifact SHA-256,
+registry proposal, schema, commits, capture time, and registry-facing payment
+identity fields. It reports those layers in `verifiedAspects`, while reporting
+`safepay_v2_semantics` or `official_x402_settlement_v1_semantics` in
+`unsupportedCapabilities` and returning `unavailable`.
+
+The payment envelope adapters intentionally do not claim to verify SafePay
+SQLite restart persistence, quote/fulfillment/replay semantics, EIP-712
+authorization, official-facilitator behavior, WCSPR execution, settlement
+finality, or protected-resource release. Future semantic adapters must verify
+that raw, content-addressed evidence before either proof type can become green.
+Passing observed-check booleans never substitute for that adapter.
+
+Each public registry document is proposal-scoped. A release whose native
+governance/SafePay evidence belongs to one proposal and whose official-x402
+action belongs to a second proposal must be verified as two documents. Combining
+all five items under either proposal ID is invalid; results from one document
+must not be used to upgrade the other.
 
 ## Boolean trust boundary
 

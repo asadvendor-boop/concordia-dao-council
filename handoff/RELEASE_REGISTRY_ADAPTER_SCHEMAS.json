@@ -21,11 +21,11 @@
   "exact_json_schemas": {
     "official_x402_artifact": {
       "path": "handoff/schemas/official-x402-live-artifact.schema.json",
-      "sha256": "69d8bca41d46ccb9d3673460a1ad07addf0d1b6dcbcae141ad9585db21e08a19"
+      "sha256": "82bbd396bc8a2cec9bde2d9626e72cf117ecd3d82ce65b9b762926b76882940c"
     },
     "official_x402_result": {
       "path": "handoff/schemas/official-x402-adapter-result.schema.json",
-      "sha256": "6e21244c0941d7eb3bf7635b94a5db96e0eb818f672c4d00e2ebe8db880f697d"
+      "sha256": "cd6d6a1083da48d2763f9c5e521ab25888fc7cf80eb6d349d7fc868ea0c97bca"
     },
     "safepay_artifact": {
       "path": "handoff/schemas/safepay-v2-live-artifact.schema.json",
@@ -265,7 +265,7 @@
       "exact_info_get_transaction_requests_and_responses",
       "exact_chain_get_block_requests_and_responses",
       "exact_info_get_status_requests_and_responses",
-      "valid_unique_casper_block_proof_signers",
+      "unique_structurally_valid_casper_block_proof_signer_observations",
       "distinct_node_signing_identities",
       "minimum_eight_confirmation_depth",
       "block_hash",

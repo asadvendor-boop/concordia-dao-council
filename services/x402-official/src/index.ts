@@ -10,7 +10,10 @@
 
 import { loadConfig, loadSecrets } from "./config.js";
 import { FulfillmentLedger } from "./ledger.js";
-import { SettleJournal } from "./settle-journal.js";
+import {
+  deriveSettleJournalPath,
+  SettleJournal,
+} from "./settle-journal.js";
 import { HttpFacilitatorTransport, createLocalVerifier } from "./facilitator.js";
 import { HttpRegistryTransport } from "./registry.js";
 import { CasperRpcChainTransport } from "./rpc-chain.js";
@@ -26,9 +29,9 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const secrets = loadSecrets(process.env);
   const ledger = new FulfillmentLedger(config.ledgerPath);
-  // The upstream-settle journal shares the durable ledger volume/file: one
-  // artifact carries both the fulfillment states and the per-call evidence.
-  const settleJournal = new SettleJournal(config.ledgerPath);
+  // The journal is a deterministic sibling file on the same durable volume.
+  // It never shares a SQLite schema or connection with the fulfillment ledger.
+  const settleJournal = new SettleJournal(deriveSettleJournalPath(config.ledgerPath));
   const chainName = config.network.includes(":")
     ? (config.network.split(":")[1] as string)
     : config.network;

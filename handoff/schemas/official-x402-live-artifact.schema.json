@@ -215,7 +215,7 @@
         },
         "public_key_hex": {
           "type": "string",
-          "pattern": "^01[0-9a-f]{64}$"
+          "pattern": "^(?:01[0-9a-f]{64}|02[0-9a-f]{66})$"
         },
         "recovered_payer_account_hash": {
           "$ref": "#/$defs/hex32"

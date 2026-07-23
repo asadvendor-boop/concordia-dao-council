@@ -82,6 +82,18 @@ def test_release_adapter_contract_pins_both_missing_producer_check_sets() -> Non
         "derived_facts"
     ]["required"]
     assert "v3_finalized_exact" in official_derived
+    official_internal = loaded_schemas["official_x402_result"]["properties"][
+        "internal_record"
+    ]
+    frozen_internal = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "handoff"
+            / "G1_CROSS_LANE_SCHEMAS.json"
+        ).read_text(encoding="utf-8")
+    )["internal_proof_registry_v1"]["success_response"]["required_fields"]
+    assert official_internal["required"] == frozen_internal
+    assert "settlement_transaction" not in official_internal["properties"]
 
     def result_check_names(schema: dict, key: str) -> list[str]:
         checks = schema["properties"][key]
@@ -193,7 +205,6 @@ def _internal_record(*, kind: str = "OfficialX402SettlementV1") -> dict:
         "report_hash": "0a" * 32 if x402 else None,
         "payment_requirements_hash": "0b" * 32 if x402 else None,
         "signed_payment_payload_hash": "0c" * 32 if x402 else None,
-        "settlement_transaction": "0d" * 32 if x402 else None,
         "verification_status": "verified",
         "observed_at": NOW,
         "checks": _checks("exact_envelope_v3"),
@@ -443,6 +454,8 @@ def test_reg_04e_payment_proof_provenance_is_generation_bound(
             "checks": _checks(proof_type),
         }
     )
+    if proof_type == "safepay_v2":
+        item["settlement_transaction"] = "09" * 32
     if proof_type == "official_x402_settlement_v1":
         item.update(
             {
@@ -499,6 +512,8 @@ def test_reg_04f_payment_proof_provenance_cannot_be_relabelled(
             "checks": _checks(proof_type),
         }
     )
+    if proof_type == "safepay_v2":
+        item["settlement_transaction"] = "09" * 32
     if proof_type == "official_x402_settlement_v1":
         item.update(
             {
@@ -515,6 +530,33 @@ def test_reg_04f_payment_proof_provenance_cannot_be_relabelled(
             }
         )
     item[field] = invalid_value
+
+    assert proof_item_is_green(item) is False
+    assert normalize_proof_item(item)["verification_status"] == "invalid"
+
+
+def test_reg_04g_safepay_requires_exact_payment_deploy_identity() -> None:
+    item = _snapshot_item()
+    item.update(
+        {
+            "proof_id": "safepay-current",
+            "proof_type": "safepay_v2",
+            "generation": "v2",
+            "lineage": "supplemental",
+            "observation_mode": "live",
+            "temporal_scope": "current",
+            "verification_status": "verified",
+            "execution_outcome": "accepted",
+            "deployment_commit": "2" * 40,
+            "network": "casper:casper-test",
+            "report_hash": "08" * 32,
+            "settlement_transaction": "09" * 32,
+            "checks": _checks("safepay_v2"),
+        }
+    )
+    assert proof_item_is_green(item) is True
+
+    item["settlement_transaction"] = None
 
     assert proof_item_is_green(item) is False
     assert normalize_proof_item(item)["verification_status"] == "invalid"

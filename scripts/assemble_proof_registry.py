@@ -4,9 +4,9 @@
 The assembler accepts only raw producer artifacts.  It derives registry facts
 by running the Python historical/v3 verifiers and the packaged TypeScript
 verifier; it never consumes a producer ``verified`` or ``passed`` summary as
-authority.  SafePay, approval/demo/room, and official-x402 items are omitted
-until their independent producer adapters exist, which keeps them unavailable
-instead of fabricating green placeholders.
+authority. Release mode additionally requires the independent SafePay v2 and
+official-x402 raw-artifact adapters and emits the exact frozen five-public /
+two-internal release registry.
 """
 
 from __future__ import annotations
@@ -36,12 +36,14 @@ from shared.historical_odra_artifact import (
     HistoricalOdraArtifactUnavailable,
     verify_historical_odra_artifact,
 )
+from shared import release_proof_adapters
 from shared.proof_registry import (
     ProofRegistryRepository,
     REQUIRED_CHECKS_BY_PROOF_TYPE,
     build_public_registry,
     proof_item_is_green,
     validate_internal_record,
+    validate_release_registry_document,
 )
 
 
@@ -54,6 +56,15 @@ _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT40_RE = re.compile(r"^[0-9a-f]{40}$")
 _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
 _BUILT_VERIFIER_OUTPUTS: dict[str, str] = {}
+_RELEASE_ARTIFACT_PATHS = {
+    "historical_v1": "artifacts/live/historical-odra-receipt-v2.json",
+    "exact_v3": (
+        "artifacts/live/odra-governance-receipt-v3-exact-envelope-proof.json"
+    ),
+    "native_treasury": "artifacts/live/treasury-execution-v3.json",
+    "safepay_v2": "artifacts/live/safepay-lite-replaysafe-v2.json",
+    "official_x402": "artifacts/live/official-x402-settlement-v1.json",
+}
 _EXACT_CHECK_STEP = {
     "pre_quorum_finalize_reverted_with_code_8": "finalize_pre_quorum",
     "post_quorum_mutated_envelope_reverted_with_code_10": (
@@ -315,8 +326,8 @@ def _base_item(
     source_commit: str,
     deployment_commit: str,
     network: str,
-    package_hash: str,
-    contract_hash: str,
+    package_hash: str | None,
+    contract_hash: str | None,
     deployment_domain: str | None,
     schema_version: str,
     captured_at: str,
@@ -352,6 +363,203 @@ def _base_item(
         "checks": _checks(proof_type, artifact.relative_path, captured_at),
         "links": _links(),
     }
+
+
+def _adapter_checks(
+    result: Mapping[str, Any],
+    *,
+    proof_type: str,
+    artifact: _Artifact,
+    captured_at: str,
+) -> list[dict[str, Any]]:
+    if (
+        result.get("proof_type") != proof_type
+        or result.get("artifact_sha256") != artifact.sha256
+    ):
+        raise AssemblyError(
+            f"{proof_type} adapter result differs from the raw artifact identity"
+        )
+    adapter_checks = result.get("checks")
+    required_names = REQUIRED_CHECKS_BY_PROOF_TYPE[proof_type]
+    if not isinstance(adapter_checks, list) or len(adapter_checks) != len(
+        required_names
+    ):
+        raise AssemblyError(f"{proof_type} adapter check cardinality is invalid")
+    captured_time = _parse_timestamp(captured_at, f"{proof_type} captured_at")
+    checks: list[dict[str, Any]] = []
+    for expected_name, check_value in zip(
+        required_names, adapter_checks, strict=True
+    ):
+        check = _mapping(check_value, f"{proof_type} adapter check")
+        observed_at = _text(
+            check.get("observed_at"), f"{proof_type} {expected_name} observed_at"
+        )
+        if (
+            check.get("name") != expected_name
+            or check.get("passed") is not True
+            or check.get("source") != artifact.relative_path
+            or _parse_timestamp(
+                observed_at, f"{proof_type} {expected_name} observed_at"
+            )
+            > captured_time
+        ):
+            raise AssemblyError(
+                f"{proof_type} adapter check {expected_name} is not independently valid"
+            )
+        checks.append(
+            {
+                "name": expected_name,
+                "required": True,
+                "passed": True,
+                "source": artifact.relative_path,
+                "observed_at": observed_at,
+            }
+        )
+    return checks
+
+
+def _safepay_item(artifact: _Artifact) -> dict[str, Any]:
+    try:
+        result = release_proof_adapters.verify_safepay_v2_artifact(
+            artifact.document, artifact.raw
+        )
+    except release_proof_adapters.ReleaseProofAdapterError as exc:
+        raise AssemblyError(f"SafePay v2 raw artifact was rejected: {exc}") from exc
+    facts = _mapping(result.get("derived_facts"), "SafePay v2 derived facts")
+    captured_at = _text(facts.get("captured_at"), "SafePay v2 captured_at")
+    item = _base_item(
+        proof_id="safepay_v2",
+        proof_type="safepay_v2",
+        generation="v2",
+        lineage="supplemental",
+        temporal_scope="current",
+        claim_scope=(
+            "One exact native Testnet payment consumed one immutable SafePay quote; "
+            "an exact retry returned the stored fulfillment and cross-binding reuse "
+            "was rejected before a second consumption."
+        ),
+        enforcement_scope=(
+            "SafePay Lite provider consumption and report-release binding; this is "
+            "separate from the official WCSPR x402 facilitator flow."
+        ),
+        proposal_id=_text(facts.get("proposal_id"), "SafePay v2 proposal_id"),
+        action_id=None,
+        envelope_hash=None,
+        artifact=artifact,
+        source_commit=_git40(
+            facts.get("source_commit"), "SafePay v2 source_commit"
+        ),
+        deployment_commit=_git40(
+            facts.get("deployment_commit"), "SafePay v2 deployment_commit"
+        ),
+        network=_text(facts.get("network"), "SafePay v2 network"),
+        package_hash=None,
+        contract_hash=None,
+        deployment_domain=None,
+        schema_version=_text(
+            artifact.document.get("schema_version"), "SafePay v2 schema_version"
+        ),
+        captured_at=captured_at,
+    )
+    item["observation_mode"] = "live"
+    item["report_hash"] = _hash32(
+        facts.get("report_hash"), "SafePay v2 report_hash"
+    )
+    item["settlement_transaction"] = _hash32(
+        facts.get("payment_hash"), "SafePay v2 payment_hash"
+    )
+    item["checks"] = _adapter_checks(
+        result,
+        proof_type="safepay_v2",
+        artifact=artifact,
+        captured_at=captured_at,
+    )
+    return item
+
+
+def _official_item_and_internal(
+    artifact: _Artifact,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        result = release_proof_adapters.verify_official_x402_artifact(
+            artifact.document, artifact.raw
+        )
+    except release_proof_adapters.ReleaseProofAdapterError as exc:
+        raise AssemblyError(
+            f"official x402 raw artifact was rejected: {exc}"
+        ) from exc
+    facts = _mapping(result.get("derived_facts"), "official x402 derived facts")
+    captured_at = _text(facts.get("captured_at"), "official x402 captured_at")
+    item = _base_item(
+        proof_id="official_x402_settlement_v1",
+        proof_type="official_x402_settlement_v1",
+        generation="v3",
+        lineage="supplemental",
+        temporal_scope="current",
+        claim_scope=(
+            "The official WCSPR x402 authorization, facilitator verification and "
+            "settlement, finalized chain receipt, and paid report release are bound "
+            "to one exact v3 envelope."
+        ),
+        enforcement_scope=(
+            "Official WCSPR facilitator settlement after exact-envelope v3 "
+            "finalization; it does not relabel SafePay Lite as official x402."
+        ),
+        proposal_id=_text(facts.get("proposal_id"), "official x402 proposal_id"),
+        action_id=_hash32(facts.get("action_id"), "official x402 action_id"),
+        envelope_hash=_hash32(
+            facts.get("envelope_hash"), "official x402 envelope_hash"
+        ),
+        artifact=artifact,
+        source_commit=_git40(
+            facts.get("source_commit"), "official x402 source_commit"
+        ),
+        deployment_commit=_git40(
+            facts.get("deployment_commit"), "official x402 deployment_commit"
+        ),
+        network=_text(facts.get("network"), "official x402 network"),
+        package_hash=_hash32(
+            facts.get("package_hash"), "official x402 package_hash"
+        ),
+        contract_hash=_hash32(
+            facts.get("contract_hash"), "official x402 contract_hash"
+        ),
+        deployment_domain=_hash32(
+            facts.get("deployment_domain"), "official x402 deployment_domain"
+        ),
+        schema_version=_text(
+            artifact.document.get("schema_version"),
+            "official x402 schema_version",
+        ),
+        captured_at=captured_at,
+    )
+    item["observation_mode"] = "live"
+    for field in (
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "report_hash",
+        "settlement_transaction",
+    ):
+        item[field] = _hash32(facts.get(field), f"official x402 {field}")
+    item["checks"] = _adapter_checks(
+        result,
+        proof_type="official_x402_settlement_v1",
+        artifact=artifact,
+        captured_at=captured_at,
+    )
+    raw_internal = _mapping(
+        result.get("internal_record"), "official x402 internal record"
+    )
+    internal = validate_internal_record(copy.deepcopy(raw_internal))
+    if (
+        internal != raw_internal
+        or internal.get("verification_status") != "verified"
+        or internal.get("v3_finalized_exact") is not True
+    ):
+        raise AssemblyError(
+            "official x402 adapter internal record failed registry validation"
+        )
+    return item, internal
 
 
 def _historical_item(artifact: _Artifact) -> tuple[dict[str, Any], dict[str, object]]:
@@ -701,7 +909,6 @@ def _internal_record(
         "report_hash": None,
         "payment_requirements_hash": None,
         "signed_payment_payload_hash": None,
-        "settlement_transaction": None,
         "verification_status": "verified",
         "observed_at": observed_at,
         "checks": copy.deepcopy(exact_item["checks"]),
@@ -725,11 +932,30 @@ def _verify_with_packaged_cli(
     public_document: Mapping[str, Any],
     generated_at: str,
     expected_proof_ids: Sequence[str],
+    expected_unsupported_capabilities: Mapping[str, str] | None = None,
 ) -> None:
     _ensure_packaged_verifier(repository_root)
     cli = repository_root / "packages/verify/dist/cli.js"
+    unsupported = dict(expected_unsupported_capabilities or {})
+    if not set(unsupported).issubset(expected_proof_ids):
+        raise AssemblyError("packaged verifier unsupported proof inventory is invalid")
+    artifact_paths = [
+        item.get("artifact_path")
+        for item in public_document.get("items", [])
+        if isinstance(item, Mapping) and isinstance(item.get("artifact_path"), str)
+    ]
+    candidate_roots = [
+        root
+        for root in (repository_root, bundle_root)
+        if all((root / relative).is_file() for relative in artifact_paths)
+    ]
+    if artifact_paths and not candidate_roots:
+        raise AssemblyError(
+            "packaged verifier artifact paths do not share one verification root"
+        )
+    verification_root = candidate_roots[0] if candidate_roots else repository_root
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".registry.verify.", suffix=".json", dir=bundle_root
+        prefix=".registry.verify.", suffix=".json", dir=verification_root
     )
     temporary = Path(temporary_name)
     try:
@@ -761,12 +987,24 @@ def _verify_with_packaged_cli(
         except AssemblyError as exc:
             raise AssemblyError("packaged verifier did not return strict JSON") from exc
         items = payload.get("items")
+        expected_exit = 3 if unsupported else 0
+        expected_status = "unavailable" if unsupported else "verified"
+        expected_valid = not unsupported
         if (
-            result.returncode != 0
+            result.returncode != expected_exit
             or payload.get("tool") != "@concordia-dao/verify"
-            or payload.get("status") != "verified"
-            or payload.get("valid") is not True
-            or payload.get("exitCode") != 0
+            or payload.get("status") != expected_status
+            or payload.get("valid") is not expected_valid
+            or payload.get("exitCode") != expected_exit
+            or payload.get("proposalId") != public_document.get("proposal_id")
+            or payload.get("summary")
+            != {
+                "total": len(expected_proof_ids),
+                "verified": len(expected_proof_ids) - len(unsupported),
+                "invalid": 0,
+                "unavailable": len(unsupported),
+                "unknown": 0,
+            }
             or not isinstance(items, list)
             or len(items) != len(expected_proof_ids)
         ):
@@ -782,10 +1020,39 @@ def _verify_with_packaged_cli(
             )
         for proof_id in expected_proof_ids:
             item = by_id[proof_id]
+            if item.get("ignoredAssertions") != []:
+                raise AssemblyError(
+                    f"packaged verifier did not independently verify {proof_id}"
+                )
+            if proof_id in unsupported:
+                if (
+                    item.get("status") != "unavailable"
+                    or item.get("green") is not False
+                    or set(item.get("verifiedAspects", []))
+                    != {
+                        "artifact_identity_envelope",
+                        "artifact_sha256",
+                        "proposal_binding",
+                    }
+                    or item.get("unsupportedCapabilities")
+                    != [unsupported[proof_id]]
+                ):
+                    raise AssemblyError(
+                        "packaged verifier misstated unsupported payment semantics: "
+                        f"{proof_id}"
+                    )
+                continue
             if (
                 item.get("status") != "verified"
                 or item.get("green") is not True
-                or item.get("ignoredAssertions") != []
+                or set(item.get("verifiedAspects", []))
+                != {
+                    "artifact_identity_envelope",
+                    "artifact_sha256",
+                    "proposal_binding",
+                    "proof_semantics",
+                }
+                or item.get("unsupportedCapabilities") != []
             ):
                 raise AssemblyError(
                     f"packaged verifier did not independently verify {proof_id}"
@@ -935,6 +1202,8 @@ def _validate_output_mode(
     output_path: str | Path,
     release: bool,
     historical_v1_path: str | Path | None,
+    safepay_v2_path: str | Path | None = None,
+    official_x402_path: str | Path | None = None,
 ) -> None:
     root = Path(repository_root).resolve()
     output = Path(output_path).absolute()
@@ -950,6 +1219,43 @@ def _validate_output_mode(
         )
     if release and not _git_worktree_is_clean(root):
         raise AssemblyError("release assembly requires a clean Git worktree")
+    if release and safepay_v2_path is None:
+        raise AssemblyError("release assembly requires the raw SafePay v2 artifact")
+    if release and official_x402_path is None:
+        raise AssemblyError(
+            "release assembly requires the raw official x402 artifact"
+        )
+
+
+def _artifact_input(
+    path_value: str | Path,
+    *,
+    repository_root: Path,
+    bundle_root: Path,
+    release: bool,
+    release_key: str,
+    label: str,
+) -> tuple[_Artifact, Path]:
+    artifact_root = bundle_root
+    path = Path(path_value)
+    if release:
+        canonical = repository_root / _RELEASE_ARTIFACT_PATHS[release_key]
+        provided = path if path.is_absolute() else repository_root / path
+        try:
+            canonical_resolved = canonical.resolve(strict=True)
+            provided_resolved = provided.resolve(strict=True)
+        except OSError as exc:
+            raise AssemblyError(
+                f"release canonical {label} is unavailable"
+            ) from exc
+        if provided_resolved != canonical_resolved:
+            raise AssemblyError(f"release requires the canonical {label} path")
+        path = provided_resolved
+        artifact_root = repository_root
+    return (
+        _read_artifact(path, bundle_root=artifact_root, label=label),
+        artifact_root,
+    )
 
 
 def _validate_bundle_layout(output_path: Path) -> Path:
@@ -1006,6 +1312,8 @@ def assemble_proof_registry(
     native_treasury_path: str | Path,
     historical_v1_path: str | Path | None = None,
     card_chain_roots_path: str | Path | None = None,
+    safepay_v2_path: str | Path | None = None,
+    official_x402_path: str | Path | None = None,
     generated_at: str | None = None,
     release: bool = False,
 ) -> dict[str, Any]:
@@ -1018,6 +1326,8 @@ def assemble_proof_registry(
         output_path=output,
         release=release,
         historical_v1_path=historical_v1_path,
+        safepay_v2_path=safepay_v2_path,
+        official_x402_path=official_x402_path,
     )
     bundle_root = _validate_bundle_layout(output)
     if generated_at is None:
@@ -1033,22 +1343,67 @@ def assemble_proof_registry(
             "release generated_at must be captured within the last five minutes"
         )
 
-    exact = _read_artifact(
-        exact_v3_path, bundle_root=bundle_root, label="exact-envelope v3 artifact"
-    )
-    treasury = _read_artifact(
-        native_treasury_path,
+    exact, exact_root = _artifact_input(
+        exact_v3_path,
+        repository_root=root,
         bundle_root=bundle_root,
+        release=release,
+        release_key="exact_v3",
+        label="exact-envelope v3 artifact",
+    )
+    treasury, treasury_root = _artifact_input(
+        native_treasury_path,
+        repository_root=root,
+        bundle_root=bundle_root,
+        release=release,
+        release_key="native_treasury",
         label="native treasury artifact",
     )
-    historical = (
-        _read_artifact(
+    historical_result = (
+        _artifact_input(
             historical_v1_path,
+            repository_root=root,
             bundle_root=bundle_root,
+            release=release,
+            release_key="historical_v1",
             label="historical v1 artifact",
         )
         if historical_v1_path is not None
         else None
+    )
+    historical = historical_result[0] if historical_result is not None else None
+    historical_root = (
+        historical_result[1] if historical_result is not None else bundle_root
+    )
+    safepay_result = (
+        _artifact_input(
+            safepay_v2_path,
+            repository_root=root,
+            bundle_root=bundle_root,
+            release=release,
+            release_key="safepay_v2",
+            label="SafePay v2 artifact",
+        )
+        if safepay_v2_path is not None
+        else None
+    )
+    safepay = safepay_result[0] if safepay_result is not None else None
+    safepay_root = safepay_result[1] if safepay_result is not None else bundle_root
+    official_result = (
+        _artifact_input(
+            official_x402_path,
+            repository_root=root,
+            bundle_root=bundle_root,
+            release=release,
+            release_key="official_x402",
+            label="official x402 artifact",
+        )
+        if official_x402_path is not None
+        else None
+    )
+    official = official_result[0] if official_result is not None else None
+    official_root = (
+        official_result[1] if official_result is not None else bundle_root
     )
     release_roots: _Artifact | None = None
     if release and card_chain_roots_path is None:
@@ -1074,7 +1429,11 @@ def assemble_proof_registry(
             bundle_root=root,
             label="card-chain roots",
         )
-    artifacts = [artifact for artifact in (historical, exact, treasury) if artifact]
+    artifacts = [
+        artifact
+        for artifact in (historical, exact, treasury, safepay, official)
+        if artifact
+    ]
     if len({artifact.path for artifact in artifacts}) != len(artifacts):
         raise AssemblyError("producer inputs must use distinct artifact paths")
     if len({artifact.sha256 for artifact in artifacts}) != len(artifacts):
@@ -1122,6 +1481,34 @@ def assemble_proof_registry(
             )
         public_items.append(historical_item)
     public_items.extend([exact_item, treasury_item])
+    official_internal: dict[str, Any] | None = None
+    if safepay is not None:
+        safepay_item = _safepay_item(safepay)
+        if safepay_item["proposal_id"] != exact_item["proposal_id"]:
+            raise AssemblyError("SafePay and v3 proposal bindings differ")
+        public_items.append(safepay_item)
+    if official is not None:
+        official_item, official_internal = _official_item_and_internal(official)
+        if official_item["proposal_id"] == exact_item["proposal_id"]:
+            raise AssemblyError(
+                "official x402 requires a distinct proposal from the native-transfer "
+                "v3 action"
+            )
+        for field, label in (
+            ("network", "network"),
+            ("package_hash", "package"),
+            ("contract_hash", "contract"),
+            ("deployment_domain", "deployment domain"),
+        ):
+            if official_item.get(field) != exact_item.get(field):
+                raise AssemblyError(
+                    f"official x402 and native-transfer v3 {label} bindings differ"
+                )
+        if official_item.get("action_id") == exact_item.get("action_id"):
+            raise AssemblyError("official x402 and native-transfer action IDs collide")
+        if official_item.get("envelope_hash") == exact_item.get("envelope_hash"):
+            raise AssemblyError("official x402 and native-transfer envelopes collide")
+        public_items.append(official_item)
 
     for item in public_items:
         captured = _parse_timestamp(
@@ -1135,21 +1522,40 @@ def assemble_proof_registry(
             raise AssemblyError(f"Python proof registry rejected {item['proof_id']}")
 
     proposal_id = exact_item["proposal_id"]
-    public_document = build_public_registry(
-        proposal_id,
-        public_items,
-        generated_at=generated_at,
-        reference_time=generated_at,
-    )
-    if any(not proof_item_is_green(item) for item in public_document["items"]):
-        raise AssemblyError("Python public registry normalization rejected an item")
-    _verify_with_packaged_cli(
-        repository_root=root,
-        bundle_root=bundle_root,
-        public_document=public_document,
-        generated_at=generated_at,
-        expected_proof_ids=[item["proof_id"] for item in public_items],
-    )
+    proposal_ids = sorted({str(item["proposal_id"]) for item in public_items})
+    expected_public_counts: dict[str, int] = {}
+    for selected_proposal_id in proposal_ids:
+        selected_items = [
+            item
+            for item in public_items
+            if item["proposal_id"] == selected_proposal_id
+        ]
+        public_document = build_public_registry(
+            selected_proposal_id,
+            selected_items,
+            generated_at=generated_at,
+            reference_time=generated_at,
+        )
+        if any(not proof_item_is_green(item) for item in public_document["items"]):
+            raise AssemblyError("Python public registry normalization rejected an item")
+        _verify_with_packaged_cli(
+            repository_root=root,
+            bundle_root=bundle_root,
+            public_document=public_document,
+            generated_at=generated_at,
+            expected_proof_ids=[item["proof_id"] for item in selected_items],
+            expected_unsupported_capabilities={
+                item["proof_id"]: (
+                    "safepay_v2_semantics"
+                    if item["proof_type"] == "safepay_v2"
+                    else "official_x402_settlement_v1_semantics"
+                )
+                for item in selected_items
+                if item["proof_type"]
+                in {"safepay_v2", "official_x402_settlement_v1"}
+            },
+        )
+        expected_public_counts[selected_proposal_id] = len(selected_items)
 
     internal = _internal_record(exact, exact_item)
     if release:
@@ -1163,11 +1569,17 @@ def assemble_proof_registry(
             raise AssemblyError("release artifact references an unavailable Git commit")
 
     unchanged_checks: list[tuple[_Artifact, Path, str]] = [
-        (exact, bundle_root, "exact-envelope v3 artifact"),
-        (treasury, bundle_root, "native treasury artifact"),
+        (exact, exact_root, "exact-envelope v3 artifact"),
+        (treasury, treasury_root, "native treasury artifact"),
     ]
     if historical is not None:
-        unchanged_checks.append((historical, bundle_root, "historical v1 artifact"))
+        unchanged_checks.append(
+            (historical, historical_root, "historical v1 artifact")
+        )
+    if safepay is not None:
+        unchanged_checks.append((safepay, safepay_root, "SafePay v2 artifact"))
+    if official is not None:
+        unchanged_checks.append((official, official_root, "official x402 artifact"))
     if release_roots is not None:
         unchanged_checks.append((release_roots, root, "card-chain roots"))
     for artifact, artifact_root, label in unchanged_checks:
@@ -1178,24 +1590,34 @@ def assemble_proof_registry(
     document = {
         "schema_version": 1,
         "public_items": public_items,
-        "internal_records": [internal],
+        "internal_records": [
+            record for record in (internal, official_internal) if record is not None
+        ],
     }
     if release_roots is not None:
         document["card_chain_roots"] = {
             "artifact_path": release_roots.relative_path,
             "artifact_sha256": release_roots.sha256,
         }
+    if release:
+        try:
+            validated_release = validate_release_registry_document(document)
+        except ValueError as exc:
+            raise AssemblyError(f"release proof registry is incomplete: {exc}") from exc
+        if validated_release != document:
+            raise AssemblyError("release proof registry validation changed its content")
     _atomic_write_document(output, document)
 
     # Exercise the same strict loader used by Gateway routes before returning.
     repository = ProofRegistryRepository(bundle_root)
-    loaded = repository.public_document(
-        proposal_id, known=True, generated_at=generated_at
-    )
-    if len(loaded["items"]) != len(public_items) or any(
-        not proof_item_is_green(item) for item in loaded["items"]
-    ):
-        raise AssemblyError("emitted registry failed repository reload")
+    for selected_proposal_id, expected_count in expected_public_counts.items():
+        loaded = repository.public_document(
+            selected_proposal_id, known=True, generated_at=generated_at
+        )
+        if len(loaded["items"]) != expected_count or any(
+            not proof_item_is_green(item) for item in loaded["items"]
+        ):
+            raise AssemblyError("emitted registry failed repository reload")
     bound = repository.by_action_id(exact_item["action_id"])
     if bound.get("v3_finalized_exact") is not True:
         raise AssemblyError("emitted internal record failed action lookup")
@@ -1210,6 +1632,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--card-chain-roots", type=Path)
     parser.add_argument("--exact-v3", type=Path, required=True)
     parser.add_argument("--native-treasury", type=Path, required=True)
+    parser.add_argument("--safepay-v2", type=Path)
+    parser.add_argument("--official-x402", type=Path)
     parser.add_argument("--generated-at")
     parser.add_argument("--release", action="store_true")
     return parser
@@ -1231,6 +1655,8 @@ def main() -> int:
             card_chain_roots_path=args.card_chain_roots,
             exact_v3_path=args.exact_v3,
             native_treasury_path=args.native_treasury,
+            safepay_v2_path=args.safepay_v2,
+            official_x402_path=args.official_x402,
             generated_at=args.generated_at,
             release=args.release,
         )

@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -364,9 +365,17 @@ def test_adapter_rejects_report_released_before_finalized_payment_block() -> Non
         _verify(artifact)
 
 
-def test_adapter_rejects_capture_timestamp_in_the_future() -> None:
+def test_adapter_rejects_capture_timestamp_even_one_second_in_the_future(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 23, 1, 5, 0, tzinfo=tz or UTC)
+
     artifact = _artifact()
-    artifact["captured_at"] = "9999-12-31T23:59:59Z"
+    artifact["captured_at"] = "2026-07-23T01:05:01Z"
+    monkeypatch.setattr(adapters, "datetime", FrozenDateTime)
 
     with pytest.raises(
         ReleaseProofAdapterError,
@@ -444,6 +453,21 @@ def test_adapter_derives_eight_block_confirmation_depth_from_raw_status() -> Non
         _verify(artifact)
 
 
+def test_adapter_rejects_raw_payment_deploy_from_wrong_chain() -> None:
+    artifact = _artifact()
+
+    def mutate(response: dict[str, Any]) -> None:
+        response["result"]["deploy"]["header"]["chain_name"] = "casper"
+
+    _mutate_each_rpc_response(artifact, "info_get_deploy", mutate)
+
+    with pytest.raises(
+        ReleaseProofAdapterError,
+        match="payment_deploy_finalized_without_execution_error.*casper-test",
+    ):
+        _verify(artifact)
+
+
 def _rewrite_snapshot(
     artifact: dict[str, Any],
     stage: str,
@@ -495,6 +519,57 @@ def test_adapter_queries_progressive_redemption_journal_from_backups() -> None:
     with pytest.raises(
         ReleaseProofAdapterError,
         match="provider_consumption_row_matches_payment_and_binding.*progression",
+    ):
+        _verify(artifact)
+
+
+def test_adapter_rejects_first_snapshot_before_first_redemption_observation() -> None:
+    artifact = _artifact()
+    artifact["ledger_evidence"]["after_first_consumption"]["observed_at"] = (
+        "2026-07-23T01:03:00Z"
+    )
+
+    with pytest.raises(
+        ReleaseProofAdapterError,
+        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
+    ):
+        _verify(artifact)
+
+
+def test_adapter_rejects_retry_snapshot_before_retry_observation() -> None:
+    artifact = _artifact()
+    retry_observed_at = base.CONSUMED_AT + 15
+    artifact["redemption_observations"]["exact_retry"]["observed_at"] = (
+        retry_observed_at
+    )
+    for stage in ("after_exact_retry", "after_cross_binding_reuse"):
+        _rewrite_snapshot(
+            artifact,
+            stage,
+            "UPDATE safepay_redemption_observations SET observed_at = ? "
+            "WHERE kind = 'idempotent_replay'",
+            (retry_observed_at,),
+        )
+    artifact["ledger_evidence"]["after_exact_retry"]["observed_at"] = (
+        "2026-07-23T01:03:12Z"
+    )
+
+    with pytest.raises(
+        ReleaseProofAdapterError,
+        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
+    ):
+        _verify(artifact)
+
+
+def test_adapter_rejects_cross_binding_snapshot_before_rejection_observation() -> None:
+    artifact = _artifact()
+    artifact["ledger_evidence"]["after_cross_binding_reuse"]["observed_at"] = (
+        "2026-07-23T01:04:05Z"
+    )
+
+    with pytest.raises(
+        ReleaseProofAdapterError,
+        match="provider_consumption_row_matches_payment_and_binding.*snapshot.*redemption",
     ):
         _verify(artifact)
 

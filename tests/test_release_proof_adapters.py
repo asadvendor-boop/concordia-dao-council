@@ -166,7 +166,10 @@ def _rpc_provider(
         "result": {
             "deploy": {
                 "hash": PAYMENT_HASH,
-                "header": {"account": SOURCE_PUBLIC_KEY},
+                "header": {
+                    "account": SOURCE_PUBLIC_KEY,
+                    "chain_name": "casper-test",
+                },
                 "session": {
                     "Transfer": {
                         "args": [

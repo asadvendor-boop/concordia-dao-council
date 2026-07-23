@@ -14,6 +14,7 @@ export * from "./adapters/casper-deploy-json.js";
 export * from "./adapters/v3-readback.js";
 export * from "./adapters/exact-envelope-v3.js";
 export * from "./adapters/card-chain.js";
+export * from "./adapters/payment-envelope.js";
 export { verifyHistoricalOdraReceiptArtifact } from "./adapters/historical-odra.js";
 export type { HistoricalOdraReceiptFacts } from "./adapters/historical-odra.js";
 export * from "./modes/common.js";

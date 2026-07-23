@@ -23,6 +23,7 @@ import {
 } from "./errors.js";
 import { readBoundedBytes, readBoundedJson } from "./http.js";
 import {
+  canonicalJsonBytes,
   sanitizeResponseHeaders,
   settleCallId,
   sha256Hex,
@@ -129,6 +130,8 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
 
   private async request(method: string, path: string, body?: unknown): Promise<unknown> {
     const token = this.tokenProvider();
+    const requestBody =
+      body === undefined ? undefined : canonicalJsonBytes(body);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
@@ -143,7 +146,7 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
         // bounded in time (WP5-4).
         redirect: "error",
         signal: AbortSignal.timeout(this.timeoutMs),
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(requestBody === undefined ? {} : { body: requestBody }),
       });
     } catch {
       // No exception details propagate: fetch errors can embed request data,
@@ -203,7 +206,7 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
       throw new ServiceRefusal(500, "settle_journal_not_configured", "internal");
     }
     const token = this.tokenProvider();
-    const requestBody = Buffer.from(JSON.stringify(body), "utf8");
+    const requestBody = canonicalJsonBytes(body);
     const start: SettleCallStart = {
       callId: settleCallId(binding),
       binding,
@@ -270,6 +273,23 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
       throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
     }
 
+    let responseHeadersCanonicalJson: Buffer;
+    try {
+      responseHeadersCanonicalJson = sanitizeResponseHeaders(response.headers);
+    } catch {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* discarded */
+      }
+      settleJournal.recordRequestFailed(
+        start,
+        null,
+        "response_content_type_invalid",
+      );
+      throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
+    }
+
     let raw: Buffer;
     try {
       raw = await readBoundedBytes(response, this.maxResponseBytes);
@@ -284,7 +304,7 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
     settleJournal.recordResponseObserved(
       start,
       response.status,
-      sanitizeResponseHeaders(response.headers),
+      responseHeadersCanonicalJson,
       raw,
     );
 

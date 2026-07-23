@@ -12,7 +12,7 @@ import sys
 import tarfile
 import zlib
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -45,6 +45,8 @@ from shared.release_manifest import (
 
 SOURCE_TIME = "2026-07-23T00:00:00Z"
 CAPTURED_AT = "2026-07-23T00:10:00Z"
+_TEST_COHOST_HOST = "peer-service.shared.invalid"
+_TEST_COHOST_UPSTREAM = "peer-service-gateway:8000"
 RECHECKED_AT = "2026-07-23T00:10:25Z"
 BUILD_SCRIPT = Path(__file__).parents[1] / "scripts/build_release_manifest.py"
 _TEST_IPFS_BODY = b'{"proposal_id":"DAO-PROP-6CB25C","archive":"test"}'
@@ -349,9 +351,9 @@ def _artifact_documents(
                     "name": "finalize_exact",
                     "deploy_hash": "17" * 32,
                     "finality_block_evidence": {
-                        "block_timestamp": CAPTURED_AT,
-                        "finalized_at": CAPTURED_AT,
-                        "observed_at": CAPTURED_AT,
+                        "block_timestamp": SOURCE_TIME,
+                        "finalized_at": SOURCE_TIME,
+                        "observed_at": SOURCE_TIME,
                     },
                 }
             ]
@@ -386,7 +388,9 @@ def _artifact_documents(
         "capture_identity": {
             "provider_url": "https://x402-provider.example.invalid",
             "provider_deployment_id": "provider-release-1",
-            "provider_image_digest": f"sha256:{'98' * 32}",
+            "provider_image_digest": (
+                "sha256:" + hashlib.sha256(b"x402-provider").hexdigest()
+            ),
             "capture_tool_commit": source_commit,
         },
         "quote": {
@@ -435,11 +439,13 @@ def _artifact_documents(
         "capture_identity": {
             "service_url": "https://x402.example.invalid",
             "service_deployment_id": "x402-release-1",
-            "service_image_digest": f"sha256:{'97' * 32}",
+            "service_image_digest": (
+                "sha256:" + hashlib.sha256(b"x402-official").hexdigest()
+            ),
             "capture_tool_commit": source_commit,
         },
         "governance_binding": {
-            "proposal_id": "DAO-PROP-6CB25C",
+            "proposal_id": "DAO-PROP-X402-FINALS-2026",
             "proposal_hash": "18" * 32,
             "proposal_nonce": "19" * 32,
             "action_id": "bb" * 32,
@@ -575,7 +581,11 @@ def _artifact_documents(
                 "execution_outcome": "accepted",
                 "claim_scope": f"Verified {proof_type} evidence",
                 "enforcement_scope": "Artifact and independent verifier checks",
-                "proposal_id": "DAO-PROP-6CB25C",
+                "proposal_id": (
+                    "DAO-PROP-X402-FINALS-2026"
+                    if official_payment
+                    else "DAO-PROP-6CB25C"
+                ),
                 "action_id": action_id,
                 "envelope_hash": envelope_hash,
                 "schema_version": schema,
@@ -603,7 +613,13 @@ def _artifact_documents(
                     if proof_type == "safepay_v2"
                     else None
                 ),
-                "settlement_transaction": "ee" * 32 if official_payment else None,
+                "settlement_transaction": (
+                    "ee" * 32
+                    if official_payment
+                    else "99" * 32
+                    if proof_type == "safepay_v2"
+                    else None
+                ),
                 "checks": [
                     {
                         "name": name,
@@ -650,19 +666,18 @@ def _artifact_documents(
             "contract_hash": "22" * 32,
             "v3_finalized_exact": True,
             "finalization_transaction": "17" * 32,
-            "finalized_at": CAPTURED_AT,
+            "finalized_at": SOURCE_TIME,
             "resource_url_hash": None,
             "report_hash": None,
             "payment_requirements_hash": None,
             "signed_payment_payload_hash": None,
-            "settlement_transaction": None,
             "verification_status": "verified",
             "observed_at": CAPTURED_AT,
             "checks": exact_checks,
         },
         {
             "schema_version": 1,
-            "proposal_id": "DAO-PROP-6CB25C",
+            "proposal_id": "DAO-PROP-X402-FINALS-2026",
             "proposal_hash": "18" * 32,
             "proposal_nonce": "19" * 32,
             "action_id": "bb" * 32,
@@ -680,7 +695,6 @@ def _artifact_documents(
             "report_hash": "12" * 32,
             "payment_requirements_hash": "14" * 32,
             "signed_payment_payload_hash": "cc" * 32,
-            "settlement_transaction": "ee" * 32,
             "verification_status": "verified",
             "observed_at": CAPTURED_AT,
             "checks": [
@@ -973,12 +987,60 @@ def test_fixed_proof_registry_parity_rejects_adapter_fact_or_check_drift() -> No
         )
 
 
+def test_fixed_proof_registry_parity_binds_safepay_payment_hash() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    adapter_results = _adapter_results(documents)
+    safepay_item = next(
+        item
+        for item in documents["proof_registry_v1"]["public_items"]
+        if item["proof_type"] == "safepay_v2"
+    )
+    safepay_item["settlement_transaction"] = "98" * 32
+
+    with pytest.raises(ReleaseManifestError, match="SafePay.*adapter"):
+        release_manifest._validate_registry_parity(
+            _parity_artifacts(documents, adapter_results=adapter_results)
+        )
+
+
+def test_payment_artifact_image_digests_bind_to_observed_runtime() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    artifacts = _parity_artifacts(
+        documents,
+        adapter_results=_adapter_results(documents),
+    )
+    compose = _compose_raw()
+    runtime = {"containers": _runtime_raw(compose, "2" * 40)}
+
+    release_manifest._validate_payment_artifact_runtime_binding(
+        artifacts,
+        runtime,
+    )
+
+    documents["official_x402_settlement_v1"]["capture_identity"][
+        "service_image_digest"
+    ] = "sha256:" + "00" * 32
+    with pytest.raises(ReleaseManifestError, match="official-x402.*image"):
+        release_manifest._validate_payment_artifact_runtime_binding(
+            _parity_artifacts(
+                documents,
+                adapter_results=_adapter_results(documents),
+            ),
+            runtime,
+        )
+
+
 def test_official_x402_adapter_capture_cannot_be_future_dated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     documents = _artifact_documents("1" * 40, "2" * 40)
     official = documents["official_x402_settlement_v1"]
-    future = "9999-12-31T23:59:59Z"
+    future = (
+        (datetime.now(UTC) + timedelta(minutes=1))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     official["captured_at"] = future
     raw = _canonical(official)
     result = _adapter_results(documents)["official_x402_settlement_v1"]
@@ -1011,7 +1073,12 @@ def test_official_x402_adapter_capture_cannot_be_future_dated(
 def test_release_adapter_check_cannot_be_future_dated() -> None:
     documents = _artifact_documents("1" * 40, "2" * 40)
     result = _adapter_results(documents)["official_x402_settlement_v1"]
-    result["checks"][0]["observed_at"] = "9999-12-31T23:59:59Z"
+    result["checks"][0]["observed_at"] = (
+        (datetime.now(UTC) + timedelta(minutes=1))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
     with pytest.raises(
         ReleaseManifestError,
@@ -1025,9 +1092,12 @@ def test_release_adapter_check_cannot_be_future_dated() -> None:
 
 def test_release_registry_parity_rejects_future_dated_artifact() -> None:
     documents = _artifact_documents("1" * 40, "2" * 40)
-    documents["official_x402_settlement_v1"][
-        "captured_at"
-    ] = "9999-12-31T23:59:59Z"
+    documents["official_x402_settlement_v1"]["captured_at"] = (
+        (datetime.now(UTC) + timedelta(minutes=1))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
     with pytest.raises(
         ReleaseManifestError,
@@ -1054,6 +1124,83 @@ def test_release_registry_requires_all_five_proofs_green_and_card_roots() -> Non
     missing_roots.pop("card_chain_roots")
     with pytest.raises(ValueError, match="card-chain root binding"):
         validate_release_registry_document(missing_roots)
+
+
+def test_release_registry_requires_distinct_official_proposal_on_same_v3_deployment() -> None:
+    registry = _artifact_documents("1" * 40, "2" * 40)["proof_registry_v1"]
+    by_type = {
+        item["proof_type"]: item for item in registry["public_items"]
+    }
+    official_record = next(
+        record
+        for record in registry["internal_records"]
+        if record["action_kind"] == "OfficialX402SettlementV1"
+    )
+
+    main_proposal = by_type["historical_odra_receipt_v2"]["proposal_id"]
+    assert by_type["exact_envelope_v3"]["proposal_id"] == main_proposal
+    assert by_type["native_treasury_execution_v1"]["proposal_id"] == main_proposal
+    assert by_type["safepay_v2"]["proposal_id"] == main_proposal
+    assert by_type["official_x402_settlement_v1"]["proposal_id"] != (
+        by_type["exact_envelope_v3"]["proposal_id"]
+    )
+    assert validate_release_registry_document(registry) == registry
+
+    same_proposal = json.loads(json.dumps(registry))
+    same_official = next(
+        item
+        for item in same_proposal["public_items"]
+        if item["proof_type"] == "official_x402_settlement_v1"
+    )
+    same_record = next(
+        record
+        for record in same_proposal["internal_records"]
+        if record["action_kind"] == "OfficialX402SettlementV1"
+    )
+    same_official["proposal_id"] = by_type["exact_envelope_v3"]["proposal_id"]
+    same_record["proposal_id"] = by_type["exact_envelope_v3"]["proposal_id"]
+    with pytest.raises(ValueError, match="official x402 proposal must be distinct"):
+        validate_release_registry_document(same_proposal)
+
+    different_deployment = json.loads(json.dumps(registry))
+    different_official = next(
+        item
+        for item in different_deployment["public_items"]
+        if item["proof_type"] == "official_x402_settlement_v1"
+    )
+    different_record = next(
+        record
+        for record in different_deployment["internal_records"]
+        if record["action_kind"] == "OfficialX402SettlementV1"
+    )
+    different_official["contract_hash"] = "fe" * 32
+    different_record["contract_hash"] = "fe" * 32
+    with pytest.raises(ValueError, match="same v3 deployment"):
+        validate_release_registry_document(different_deployment)
+
+    reused_action = json.loads(json.dumps(registry))
+    exact_item = next(
+        item
+        for item in reused_action["public_items"]
+        if item["proof_type"] == "exact_envelope_v3"
+    )
+    reused_official = next(
+        item
+        for item in reused_action["public_items"]
+        if item["proof_type"] == "official_x402_settlement_v1"
+    )
+    reused_official["action_id"] = exact_item["action_id"]
+    with pytest.raises(
+        ValueError,
+        match=(
+            "public proof lacks an exact internal action binding"
+            "|public/internal proof binding differs"
+            "|action IDs must differ"
+        ),
+    ):
+        validate_release_registry_document(reused_action)
+
+    assert official_record["proposal_id"] == "DAO-PROP-X402-FINALS-2026"
 
 
 def _compose_raw() -> dict[str, object]:
@@ -1267,14 +1414,16 @@ def _caddy_raw() -> dict[str, object]:
                             {
                                 "match": [
                                     {
-                                        "host": ["yiting.47.84.232.193.sslip.io"],
+                                        "host": [_TEST_COHOST_HOST],
                                         "path": ["/mcp"],
                                     }
                                 ],
                                 "handle": [
                                     {
                                         "handler": "reverse_proxy",
-                                        "upstreams": [{"dial": "yiting-gateway:8000"}],
+                                        "upstreams": [
+                                            {"dial": _TEST_COHOST_UPSTREAM}
+                                        ],
                                     }
                                 ],
                             },
@@ -1412,12 +1561,21 @@ def _http_raw(
                 }
             )
         elif semantic == "proof_registry":
+            proposal_id = (
+                "DAO-PROP-X402-FINALS-2026"
+                if probe_id == "proof_registry_official"
+                else "DAO-PROP-6CB25C"
+            )
             body = _canonical(
                 {
                     "schema_version": 1,
                     "generated_at": observed_at,
-                    "proposal_id": "DAO-PROP-6CB25C",
-                    "items": registry_items,
+                    "proposal_id": proposal_id,
+                    "items": [
+                        item
+                        for item in registry_items
+                        if item.get("proposal_id") in {None, proposal_id}
+                    ],
                 }
             )
         elif semantic == "card_chain":
@@ -1899,6 +2057,31 @@ def release_repository(
     module_target.parent.mkdir(parents=True)
     module_target.write_bytes(Path(release_manifest.__file__).read_bytes())
     repository_root = Path(release_manifest.__file__).parents[1]
+    test_cohost_route = {
+        "hosts": [_TEST_COHOST_HOST],
+        "paths": ["/mcp"],
+        "matchers": [
+            {
+                "hosts": [_TEST_COHOST_HOST],
+                "paths": ["/mcp"],
+                "methods": [],
+                "unknown_keys": [],
+            }
+        ],
+        "handlers": [
+            {
+                "handler": "reverse_proxy",
+                "upstreams": [_TEST_COHOST_UPSTREAM],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        release_manifest,
+        "_SHARED_COHOST_MCP_ROUTE_SHA256",
+        hashlib.sha256(
+            release_manifest._canonical_json(test_cohost_route)
+        ).hexdigest(),
+    )
     for relative in (
         "scripts/release_gate_runner.py",
         "shared/release_gate_contract.py",
@@ -2039,6 +2222,18 @@ def release_repository(
         release_manifest,
         "G1_FREEZE_TAG_OBJECT",
         freeze_tag_object,
+    )
+    post_freeze_authority = json.loads(
+        (
+            repository_root
+            / release_manifest._G1_POST_FREEZE_CORRECTIONS_PATH
+        ).read_bytes()
+    )
+    post_freeze_authority["authority_commit"] = source_commit
+    _write(
+        repository,
+        release_manifest._G1_POST_FREEZE_CORRECTIONS_PATH,
+        post_freeze_authority,
     )
     _write(
         repository,
@@ -3186,6 +3381,32 @@ def test_manifest_has_one_to_one_g2_through_g12_evidence_and_external_g13(
     manifest = json.loads((repository / RELEASE_MANIFEST_PATH).read_bytes())
     assert manifest["status"] == "g12_ready"
     assert manifest["overall_status"] == "pending_external"
+    correction_authority = manifest["post_freeze_corrections"]["authority"]
+    assert correction_authority["path"] == "handoff/G1_POST_FREEZE_CORRECTIONS.json"
+    assert correction_authority["schema_id"] == (
+        "concordia.g1-post-freeze-corrections.v1"
+    )
+    assert correction_authority["status"] == "required"
+    assert correction_authority["authority_tag"] == (
+        release_manifest.G1_FREEZE_TAG
+    )
+    assert correction_authority["authority_commit"] == (
+        release_manifest.G1_FREEZE_COMMIT
+    )
+    assert correction_authority["correction_ids"] == [
+        f"G1-C{number}-{suffix}"
+        for number, suffix in (
+            (6, "v3-temporal-order"),
+            (7, "proof-registry-deployment-domain"),
+            (8, "v3-canonical-block-order"),
+            (9, "treasury-authorization-block-hash"),
+            (10, "independent-card-chain-artifact"),
+            (11, "proof-type-provenance-binding"),
+            (12, "proof-observation-chronology"),
+            (13, "independent-historical-odra-artifact"),
+            (14, "official-x402-separate-proposal-and-governance-identity"),
+        )
+    ]
     correction = manifest["post_freeze_corrections"]["corrections"][0]
     assert correction["correction_id"] == (
         "safepay_gateway_wallet_intent_capability_v1"
@@ -3207,6 +3428,14 @@ def test_manifest_has_one_to_one_g2_through_g12_evidence_and_external_g13(
     forged["post_freeze_corrections"]["corrections"][0]["client_interface_version"] = (
         "forged-wallet-intent-interface"
     )
+    with pytest.raises(ReleaseManifestError, match="post-freeze corrections differ"):
+        release_manifest._validate_g12_manifest_offline(
+            repository,
+            forged,
+            canaries=(),
+        )
+    forged = json.loads(json.dumps(manifest))
+    forged["post_freeze_corrections"]["authority"]["correction_ids"].pop()
     with pytest.raises(ReleaseManifestError, match="post-freeze corrections differ"):
         release_manifest._validate_g12_manifest_offline(
             repository,
@@ -4562,7 +4791,7 @@ def test_caddy_rejects_missing_or_failed_live_auth_probe(
 
 
 @pytest.mark.parametrize("mutation", ["path", "host", "upstream"])
-def test_caddy_requires_exact_yiting_mcp_binding(
+def test_caddy_requires_exact_cohost_mcp_binding(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
@@ -4587,7 +4816,7 @@ def test_caddy_requires_exact_yiting_mcp_binding(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
     )
 
-    with pytest.raises(ReleaseManifestError, match="YITING|mcp"):
+    with pytest.raises(ReleaseManifestError, match="cohost|mcp"):
         capture_release_observations_once(repository)
 
 
@@ -4880,21 +5109,37 @@ def test_npm_tarball_is_installed_and_executed_from_an_exact_clean_consumer(
     monkeypatch: pytest.MonkeyPatch,
     extra_installed_file: bool,
 ) -> None:
-    release_commit = "ab" * 20
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.name", "Release Test")
+    _git(repository, "config", "user.email", "release@example.invalid")
+    package_document = {
+        "name": "@concordia-dao/verify",
+        "version": "0.1.0",
+        "type": "module",
+        "bin": {"concordia-verify": "dist/cli.js"},
+        "scripts": {
+            "build": "node build.mjs",
+            "clean": "node clean.mjs",
+            "prepack": "npm run clean && npm run build",
+        },
+    }
     package_files = {
-        "package.json": _canonical(
-            {
-                "name": "@concordia-dao/verify",
-                "version": "0.1.0",
-                "type": "module",
-                "releaseCommit": release_commit,
-                "bin": {"concordia-verify": "dist/cli.js"},
-            }
-        ),
+        "package.json": _canonical(package_document),
         "dist/cli.js": b'#!/usr/bin/env node\nconsole.log("verified")\n',
         "README.md": b"# verifier\n",
         "LICENSE": b"MIT\n",
     }
+    for relative, body in {
+        **package_files,
+        "package-lock.json": b"{}\n",
+        "build.mjs": b"",
+        "clean.mjs": b"",
+    }.items():
+        _write_bytes(repository, f"packages/verify/{relative}", body)
+    release_commit = _commit(repository, "verifier package source")
+
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for relative, body in package_files.items():
@@ -4934,8 +5179,20 @@ def test_npm_tarball_is_installed_and_executed_from_an_exact_clean_consumer(
 
     def fake_run(root: Path, arguments, **kwargs):
         arguments = list(arguments)
+        if arguments[0] == "git":
+            return subprocess.run(
+                arguments,
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
         calls.append((root, arguments))
-        if arguments[0] == "npm":
+        if arguments[:2] == ["npm", "pack"]:
+            filename = "concordia-dao-verify-0.1.0.tgz"
+            (root / filename).write_bytes(buffer.getvalue())
+            stdout = _canonical([{"filename": filename}])
+        elif arguments[0] == "npm" and root.name == "consumer":
             consumer = json.loads((root / "package.json").read_bytes())
             assert consumer["dependencies"] == {
                 "@concordia-dao/verify": "file:../concordia-dao-verify.tgz"
@@ -4944,6 +5201,9 @@ def test_npm_tarball_is_installed_and_executed_from_an_exact_clean_consumer(
             shutil.copytree(root.parent / "package", installed)
             if extra_installed_file:
                 (installed / "UNBOUND.js").write_text("export default false;\n")
+            stdout = b""
+        elif arguments[0] == "npm":
+            assert root.name == "verify"
             stdout = b""
         else:
             assert arguments[0] == "node"
@@ -4967,17 +5227,33 @@ def test_npm_tarball_is_installed_and_executed_from_an_exact_clean_consumer(
     )
     if extra_installed_file:
         with pytest.raises(ReleaseManifestError, match="inventory"):
-            release_manifest._inspect_npm_tarball(buffer.getvalue(), tmp_path)
+            release_manifest._inspect_npm_tarball(
+                buffer.getvalue(),
+                repository,
+                source_commit=release_commit,
+            )
         return
 
-    projection = release_manifest._inspect_npm_tarball(buffer.getvalue(), tmp_path)
+    projection = release_manifest._inspect_npm_tarball(
+        buffer.getvalue(),
+        repository,
+        source_commit=release_commit,
+    )
 
     assert projection["name"] == "@concordia-dao/verify"
-    assert projection["releaseCommit"] == release_commit
+    assert projection["sourceCommit"] == release_commit
     assert len(projection["consumer_install_sha256"]) == 64
-    assert [call[1][0] for call in calls] == ["npm", "node"]
-    assert calls[0][0] == calls[1][0]
-    assert calls[0][0].name == "consumer"
+    assert [call[1][0] for call in calls] == [
+        "npm",
+        "npm",
+        "npm",
+        "npm",
+        "npm",
+        "node",
+    ]
+    assert all(call[0].name == "verify" for call in calls[:4])
+    assert calls[4][0] == calls[5][0]
+    assert calls[4][0].name == "consumer"
 
 
 def test_pages_collector_derives_success_from_deployment_status_api(
@@ -5241,15 +5517,14 @@ def test_assemble_reruns_every_static_verifier_and_rejects_forged_receipt_or_emp
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
 ) -> None:
     repository, _, collector, verifier = release_repository
-    _capture_and_commit(repository)
+    capture_release_observations_once(repository)
     assert len(verifier.calls) == len(ARTIFACT_PATHS)
 
     target = repository / PROOF_RECEIPT_PATHS["safepay_v2"]
-    original_document = json.loads(target.read_bytes())
     document = json.loads(target.read_bytes())
     document["projection"]["derived_identity"]["identity_sha256"] = "00" * 32
     _write(repository, PROOF_RECEIPT_PATHS["safepay_v2"], document)
-    _commit(repository, "forge proof receipt")
+    _commit(repository, "commit forged proof receipt as first-add release data")
     with pytest.raises(ReleaseManifestError, match="verifier receipt|derived"):
         assemble_release_manifest_once(repository)
     assert len(verifier.calls) > len(ARTIFACT_PATHS)
@@ -5258,8 +5533,6 @@ def test_assemble_reruns_every_static_verifier_and_rejects_forged_receipt_or_emp
     # a stale proof receipt can influence assembly.  Capture-time tests exercise
     # the direct verifier; assembly additionally closes the integration tree.
     collector.calls = 1
-    _write(repository, PROOF_RECEIPT_PATHS["safepay_v2"], original_document)
-    _commit(repository, "restore code-generated proof receipt")
     empty = json.loads((repository / ARTIFACT_PATHS["safepay_v2"]).read_bytes())
     empty["quote"] = {}
     _write(repository, ARTIFACT_PATHS["safepay_v2"], empty)
@@ -5275,7 +5548,7 @@ def test_proof_receipt_time_must_equal_fresh_observation_capture(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
 ) -> None:
     repository, _, _, _ = release_repository
-    _capture_and_commit(repository)
+    capture_release_observations_once(repository)
     path = repository / PROOF_RECEIPT_PATHS["safepay_v2"]
     document = json.loads(path.read_bytes())
     document["observed_at"] = "2026-07-22T00:00:00Z"
@@ -5283,7 +5556,7 @@ def test_proof_receipt_time_must_equal_fresh_observation_capture(
         _canonical(document["projection"])
     ).hexdigest()
     path.write_bytes(_canonical(document))
-    _commit(repository, "forge stale proof receipt time")
+    _commit(repository, "commit stale proof time as first-add release data")
 
     with pytest.raises(ReleaseManifestError, match="proof.*observation|observed_at"):
         assemble_release_manifest_once(repository)
@@ -5728,6 +6001,117 @@ def test_committed_python_verifier_cli_rejects_non_private_input(
         release_manifest.run_committed_python_artifact_verifier(
             "v3",
             artifact,
+        )
+
+
+@pytest.mark.parametrize(
+    ("artifact_id", "adapter_name"),
+    (
+        ("safepay_v2", "verify_safepay_v2_artifact"),
+        (
+            "official_x402_settlement_v1",
+            "verify_official_x402_artifact",
+        ),
+    ),
+)
+def test_default_proof_verifier_uses_raw_payment_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_id: str,
+    adapter_name: str,
+) -> None:
+    repository = Path(release_manifest.__file__).parents[1]
+    documents = _artifact_documents("ab" * 20, "cd" * 20)
+    document = documents[artifact_id]
+    raw = _canonical(document)
+    expected = _adapter_results(documents)[artifact_id]
+    calls: list[tuple[dict[str, object], bytes]] = []
+
+    def adapter(
+        candidate: dict[str, object],
+        candidate_raw: bytes,
+    ) -> dict[str, object]:
+        calls.append((candidate, candidate_raw))
+        return expected
+
+    monkeypatch.setattr(
+        release_manifest.release_proof_adapters,
+        adapter_name,
+        adapter,
+    )
+    verifier = release_manifest._DefaultProofVerifier(repository)
+    monkeypatch.setattr(
+        verifier,
+        "_packaged_registry_items",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("raw payment proof must not depend on registry booleans")
+        ),
+    )
+
+    result = verifier.verify(
+        artifact_id=artifact_id,
+        artifact_path=ARTIFACT_PATHS[artifact_id],
+        artifact_bytes=raw,
+        artifact_document=document,
+    )
+
+    assert calls == [(document, raw)]
+    assert result["derived_identity"]["artifact_sha256"] == hashlib.sha256(
+        raw
+    ).hexdigest()
+    assert result["derived_facts"]["adapter_result_sha256"] == hashlib.sha256(
+        _canonical(expected)
+    ).hexdigest()
+    assert result["verifier_id"].endswith(adapter_name)
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    (
+        ("rejected", "raw proof adapter rejected"),
+        ("wrong_artifact", "raw proof adapter identity differs"),
+        ("failed_check", "raw proof adapter returned a non-green check"),
+    ),
+)
+def test_default_proof_verifier_fails_closed_on_payment_adapter_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    repository = Path(release_manifest.__file__).parents[1]
+    documents = _artifact_documents("ab" * 20, "cd" * 20)
+    document = documents["safepay_v2"]
+    raw = _canonical(document)
+    result = _adapter_results(documents)["safepay_v2"]
+
+    def adapter(
+        candidate: dict[str, object],
+        candidate_raw: bytes,
+    ) -> dict[str, object]:
+        assert candidate is document
+        assert candidate_raw == raw
+        if failure == "rejected":
+            raise release_manifest.release_proof_adapters.ReleaseProofAdapterError(
+                "rejected"
+            )
+        if failure == "wrong_artifact":
+            result["artifact_sha256"] = "00" * 32
+        else:
+            result["checks"][0]["passed"] = False
+        return result
+
+    monkeypatch.setattr(
+        release_manifest.release_proof_adapters,
+        "verify_safepay_v2_artifact",
+        adapter,
+    )
+    verifier = release_manifest._DefaultProofVerifier(repository)
+
+    with pytest.raises(ReleaseManifestError, match=message):
+        verifier.verify(
+            artifact_id="safepay_v2",
+            artifact_path=ARTIFACT_PATHS["safepay_v2"],
+            artifact_bytes=raw,
+            artifact_document=document,
         )
 
 

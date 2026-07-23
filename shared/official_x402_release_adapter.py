@@ -15,12 +15,13 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, utils
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
@@ -117,6 +118,10 @@ _EIP712_AUTHORIZATION_FIELDS = (
     ("validAfter", "uint256"),
     ("validBefore", "uint256"),
     ("nonce", "bytes32"),
+)
+_SECP256K1_ORDER = int(
+    "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+    16,
 )
 
 _MASK_64 = (1 << 64) - 1
@@ -733,11 +738,78 @@ def _tagged_account_hash(value: object, label: str) -> bytes:
 
 
 def _account_hash_from_public_key(public_key: bytes) -> bytes:
-    if len(public_key) != 33 or public_key[0] != 1:
+    if len(public_key) == 33 and public_key[0] == 1:
+        return _blake2b256(b"ed25519\x00" + public_key[1:])
+    if len(public_key) == 34 and public_key[0] == 2:
+        try:
+            ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(),
+                public_key[1:],
+            )
+        except ValueError as exc:
+            raise OfficialX402ReleaseAdapterError(
+                "official x402 payer secp256k1 public key is invalid"
+            ) from exc
+        return _blake2b256(b"secp256k1\x00" + public_key[1:])
+    raise OfficialX402ReleaseAdapterError(
+        "official x402 payer key is not tagged Ed25519 or secp256k1"
+    )
+
+
+def _verify_casper_eip712_signature(
+    *,
+    public_key: bytes,
+    signature: bytes,
+    digest: bytes,
+) -> None:
+    if (
+        len(signature) != 65
+        or not public_key
+        or signature[0] != public_key[0]
+    ):
         raise OfficialX402ReleaseAdapterError(
-            "official x402 release requires an Ed25519 payer key"
+            "EIP-712 signature algorithm tag differs from public key"
         )
-    return _blake2b256(b"ed25519\x00" + public_key[1:])
+    if public_key[0] == 1 and len(public_key) == 33:
+        try:
+            ed25519.Ed25519PublicKey.from_public_bytes(public_key[1:]).verify(
+                signature[1:],
+                digest,
+            )
+        except (ValueError, InvalidSignature) as exc:
+            raise OfficialX402ReleaseAdapterError(
+                "Ed25519 EIP-712 signature is invalid"
+            ) from exc
+        return
+    if public_key[0] == 2 and len(public_key) == 34:
+        r = int.from_bytes(signature[1:33], "big")
+        s = int.from_bytes(signature[33:], "big")
+        if not (1 <= r < _SECP256K1_ORDER and 1 <= s < _SECP256K1_ORDER):
+            raise OfficialX402ReleaseAdapterError(
+                "secp256k1 EIP-712 signature scalar is invalid"
+            )
+        if s > _SECP256K1_ORDER // 2:
+            raise OfficialX402ReleaseAdapterError(
+                "secp256k1 EIP-712 signature has non-canonical high-S"
+            )
+        try:
+            verifier = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(),
+                public_key[1:],
+            )
+            verifier.verify(
+                utils.encode_dss_signature(r, s),
+                digest,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        except (ValueError, InvalidSignature) as exc:
+            raise OfficialX402ReleaseAdapterError(
+                "secp256k1 EIP-712 signature is invalid"
+            ) from exc
+        return
+    raise OfficialX402ReleaseAdapterError(
+        "EIP-712 public key is not tagged Ed25519 or secp256k1"
+    )
 
 
 def _verify_v3(
@@ -867,8 +939,18 @@ def _verify_authorization(
     signed_authorization = _mapping(
         payload.get("authorization"), "signed payment authorization"
     )
-    signature = _hex(authorization.get("signature_hex"), 65, "signature")
-    public_key = _hex(authorization.get("public_key_hex"), 33, "public key")
+    signature = bytes.fromhex(
+        _casper_signature(
+            authorization.get("signature_hex"),
+            "signature",
+        )
+    )
+    public_key = bytes.fromhex(
+        _casper_public_key(
+            authorization.get("public_key_hex"),
+            "public key",
+        )
+    )
     if (
         payload.get("signature") != signature.hex()
         or payload.get("publicKey") != public_key.hex()
@@ -936,14 +1018,16 @@ def _verify_authorization(
         authorization.get("eip712_authorization_preimage_base64"),
         "EIP-712 authorization digest",
     )
-    if preimage != digest or signature[0] != 1:
-        _fail(_CHECKS[4], "EIP-712 digest or signature algorithm differs")
+    if preimage != digest:
+        _fail(_CHECKS[4], "EIP-712 digest differs")
     try:
-        ed25519.Ed25519PublicKey.from_public_bytes(public_key[1:]).verify(
-            signature[1:], digest
+        _verify_casper_eip712_signature(
+            public_key=public_key,
+            signature=signature,
+            digest=digest,
         )
-    except (ValueError, InvalidSignature) as exc:
-        _fail(_CHECKS[4], "Ed25519 EIP-712 signature is invalid")
+    except OfficialX402ReleaseAdapterError as exc:
+        _fail(_CHECKS[4], str(exc))
         raise AssertionError from exc
 
     top_level_expected = {
@@ -1260,19 +1344,23 @@ def _verify_wcspr_readback(
         tip_height = tip["height"]
         tip_state_root = str(tip["state_root_hash"])
         tip_timestamp = str(tip["timestamp"])
-        signing_key = str(status_result["our_public_signing_key"])
+        signing_key = _casper_public_key(
+            status_result["our_public_signing_key"],
+            f"{label} signing key",
+        )
+    except OfficialX402ReleaseAdapterError as exc:
+        _fail(check, str(exc))
+        raise AssertionError from exc
     except (KeyError, TypeError) as exc:
         _fail(check, f"{label} status response is malformed")
         raise AssertionError from exc
+    if type(tip_height) is not int or tip_height < 0:
+        _fail(check, f"{label} status tip height is not a nonnegative integer")
     if (
         status_result.get("chainspec_name") != _CHAIN_NAME
-        or type(tip_height) is not int
-        or type(tip_height) is bool
-        or tip_height < 0
         or _hex(tip_hash, 32, f"{label} tip hash").hex() != tip_hash
         or _hex(tip_state_root, 32, f"{label} tip state root").hex()
         != tip_state_root
-        or len(_hex(signing_key, 33, f"{label} signing key")) != 33
     ):
         _fail(check, f"{label} status does not identify a canonical Testnet tip")
     package_result = _rpc_result(
@@ -1381,7 +1469,7 @@ def _decode_http_exchange(
     *,
     label: str,
     check: str,
-) -> tuple[dict[str, Any], dict[str, Any], datetime]:
+) -> tuple[dict[str, Any], dict[str, Any], bytes, datetime]:
     exchange = _mapping(value, label)
     request_raw = _decode_hashed(
         exchange,
@@ -1409,9 +1497,7 @@ def _decode_http_exchange(
     else:
         request = {}
     response = _strict_json_object(response_raw, f"{label} response")
-    if response_raw != _canonical(response):
-        _fail(check, f"{label} response is not canonical JSON")
-    return request, response, _timestamp(
+    return request, response, response_raw, _timestamp(
         exchange.get("observed_at"), f"{label} observed_at"
     )
 
@@ -1422,7 +1508,12 @@ def _verify_facilitator(
     authorization: Mapping[str, Any],
 ) -> dict[str, Any]:
     facilitator = _mapping(document.get("facilitator"), "facilitator evidence")
-    supported_request, supported_response, supported_at = _decode_http_exchange(
+    (
+        supported_request,
+        supported_response,
+        _supported_response_raw,
+        supported_at,
+    ) = _decode_http_exchange(
         facilitator.get("supported"),
         label="facilitator supported",
         check=_CHECKS[12],
@@ -1452,7 +1543,12 @@ def _verify_facilitator(
         "paymentPayload": authorization["signed_payload"],
         "paymentRequirements": authorization["accepted"],
     }
-    verify_request, verify_response, verify_at = _decode_http_exchange(
+    (
+        verify_request,
+        verify_response,
+        _verify_response_raw,
+        verify_at,
+    ) = _decode_http_exchange(
         facilitator.get("verify"),
         label="facilitator verify",
         check=_CHECKS[12],
@@ -1473,7 +1569,12 @@ def _verify_facilitator(
     ):
         _fail(_CHECKS[12], "facilitator verify does not prove exact validity")
 
-    settle_request, settle_response, settle_at = _decode_http_exchange(
+    (
+        settle_request,
+        settle_response,
+        settle_response_raw,
+        settle_at,
+    ) = _decode_http_exchange(
         facilitator.get("settle"),
         label="facilitator settle",
         check=_CHECKS[14],
@@ -1502,7 +1603,7 @@ def _verify_facilitator(
         "request": expected_request,
         "request_raw": _canonical(expected_request),
         "settle_response": settle_response,
-        "settle_response_raw": _canonical(settle_response),
+        "settle_response_raw": settle_response_raw,
         "transaction": settle_response.get("transaction"),
         "supported_at": supported_at,
         "verify_at": verify_at,
@@ -1607,6 +1708,14 @@ def _verify_chain_provider(
     except (KeyError, TypeError, IndexError) as exc:
         _fail(check, "settlement RPC response is malformed")
         raise AssertionError from exc
+    block_header_height = block_header.get("height")
+    if (
+        type(block_height) is not int
+        or block_height < 0
+        or type(block_header_height) is not int
+        or block_header_height < 0
+    ):
+        _fail(check, "settlement block height is not a nonnegative integer")
     if len(runtime_args) != len(expected_args):
         _fail(check, "settlement runtime argument count differs")
     for actual, expected in zip(runtime_args, expected_args, strict=True):
@@ -1639,7 +1748,7 @@ def _verify_chain_provider(
         or target != _WCSPR_PACKAGE
         or entry_point != "transfer_with_authorization"
         or block.get("hash") != block_hash
-        or block_header.get("height") != block_height
+        or block_header_height != block_height
         or transactions.count({"Version1": transaction}) != 1
         or type(block_proofs) is not list
         or not block_proofs
@@ -1697,10 +1806,10 @@ def _verify_chain_provider(
     except (KeyError, TypeError) as exc:
         _fail(check, "settlement status response is malformed")
         raise AssertionError from exc
+    if type(tip_height) is not int or tip_height < 0:
+        _fail(check, "settlement status tip height is not a nonnegative integer")
     if (
         status_result.get("chainspec_name") != _CHAIN_NAME
-        or type(tip_height) is not int
-        or type(tip_height) is bool
         or tip_height - block_height < 8
         or tip_timestamp < _timestamp(
             block_header.get("timestamp"), "settlement block timestamp"
@@ -1835,7 +1944,7 @@ def _expected_fulfillment_row(
         "state": "finalized",
         "settlementTransactionHash": facilitator["transaction"],
         "settlementResponseHash": _sha256(response_raw),
-        "responseJson": response_raw.decode("ascii"),
+        "responseJson": response_raw.decode("utf-8"),
         "settledAt": None,
         "failureReason": None,
         "recoveryLeaseId": None,
@@ -2497,7 +2606,7 @@ def verify_official_x402_artifact(
 
     captured_at = document["captured_at"]
     captured_instant = _timestamp(captured_at, "artifact captured_at")
-    if captured_instant > datetime.now(UTC) + timedelta(minutes=5):
+    if captured_instant > datetime.now(UTC):
         raise OfficialX402ReleaseAdapterError(
             "official x402 artifact captured_at is in the future"
         )
@@ -2763,7 +2872,6 @@ def verify_official_x402_artifact(
         "report_hash": binding["report_hash"],
         "payment_requirements_hash": binding["payment_requirements_hash"],
         "signed_payment_payload_hash": binding["signed_payment_payload_hash"],
-        "settlement_transaction": facilitator["transaction"],
         "verification_status": "verified",
         "observed_at": binding["observed_at"],
         "checks": _exact_checks(binding["observed_at"]),

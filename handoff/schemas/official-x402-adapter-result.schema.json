@@ -145,7 +145,6 @@
         "report_hash",
         "payment_requirements_hash",
         "signed_payment_payload_hash",
-        "settlement_transaction",
         "verification_status",
         "observed_at",
         "checks"
@@ -206,9 +205,6 @@
           "$ref": "#/$defs/hex32"
         },
         "signed_payment_payload_hash": {
-          "$ref": "#/$defs/hex32"
-        },
-        "settlement_transaction": {
           "$ref": "#/$defs/hex32"
         },
         "verification_status": {

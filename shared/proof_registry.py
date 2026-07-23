@@ -282,7 +282,6 @@ INTERNAL_REQUIRED_FIELDS = (
     "report_hash",
     "payment_requirements_hash",
     "signed_payment_payload_hash",
-    "settlement_transaction",
     "verification_status",
     "observed_at",
     "checks",
@@ -498,6 +497,8 @@ def _public_item_errors(item: Any) -> list[str]:
             ):
                 if item.get(field) is None:
                     errors.append(f"x402_identity_missing:{field}")
+        if proof_type == "safepay_v2" and item.get("settlement_transaction") is None:
+            errors.append("safepay_identity_missing:settlement_transaction")
     if proof_type == "snapshot" and item.get("captured_at") is None:
         errors.append("snapshot_capture_missing")
     return errors
@@ -628,7 +629,6 @@ def _internal_record_errors(record: Any) -> list[str]:
         "report_hash",
         "payment_requirements_hash",
         "signed_payment_payload_hash",
-        "settlement_transaction",
     ):
         if record.get(field) is not None and not _is_hex32(record[field]):
             errors.append(f"{field}_invalid")
@@ -666,7 +666,6 @@ def _internal_record_errors(record: Any) -> list[str]:
             "report_hash",
             "payment_requirements_hash",
             "signed_payment_payload_hash",
-            "settlement_transaction",
         ):
             if record.get(field) is None:
                 errors.append(f"x402_field_missing:{field}")
@@ -676,7 +675,6 @@ def _internal_record_errors(record: Any) -> list[str]:
             "report_hash",
             "payment_requirements_hash",
             "signed_payment_payload_hash",
-            "settlement_transaction",
         ):
             if record.get(field) is not None:
                 errors.append(f"native_x402_field_present:{field}")
@@ -800,7 +798,6 @@ def validate_registry_document(value: dict[str, Any]) -> dict[str, Any]:
                 "payment_requirements_hash",
                 "signed_payment_payload_hash",
                 "report_hash",
-                "settlement_transaction",
             ):
                 if item.get(field) != record.get(field):
                     raise ValueError(
@@ -853,6 +850,38 @@ def validate_release_registry_document(value: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 f"release registry proof is not independently green: "
                 f"{item['proof_type']}"
+            )
+
+    by_type = {item["proof_type"]: item for item in public_items}
+    main_item = by_type["exact_envelope_v3"]
+    main_proposal = main_item["proposal_id"]
+    for proof_type in (
+        "historical_odra_receipt_v2",
+        "native_treasury_execution_v1",
+        "safepay_v2",
+    ):
+        if by_type[proof_type]["proposal_id"] != main_proposal:
+            raise ValueError(
+                f"release registry main proposal differs: {proof_type}"
+            )
+
+    official_item = by_type["official_x402_settlement_v1"]
+    if official_item["proposal_id"] == main_proposal:
+        raise ValueError("release registry official x402 proposal must be distinct")
+    if official_item["action_id"] == main_item["action_id"]:
+        raise ValueError("release registry typed action IDs must differ")
+    if official_item["envelope_hash"] == main_item["envelope_hash"]:
+        raise ValueError("release registry typed envelope hashes must differ")
+    for field in (
+        "network",
+        "package_hash",
+        "contract_hash",
+        "deployment_domain",
+    ):
+        if official_item[field] != main_item[field]:
+            raise ValueError(
+                "release registry typed actions must use the same v3 deployment: "
+                f"{field}"
             )
     return validated
 

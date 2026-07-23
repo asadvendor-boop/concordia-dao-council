@@ -14,10 +14,35 @@ import type { ValidatedPayment } from "../src/types.js";
 import type { ServiceConfig } from "../src/config.js";
 import { buildRegistryRecord, makeConfig, makeSignedRequest } from "./helpers.js";
 
+const GOVERNANCE_V3 = {
+  packageHash: "71".repeat(32),
+  contractHash: "72".repeat(32),
+  deploymentDomain: "73".repeat(32),
+} as const;
+
 async function fixture(): Promise<{ config: ServiceConfig; payment: ValidatedPayment }> {
   const config = makeConfig();
   const { payment } = await makeSignedRequest(config);
   return { config, payment };
+}
+
+async function governanceFixture(): Promise<{
+  config: ServiceConfig;
+  payment: ValidatedPayment;
+  record: Record<string, unknown>;
+}> {
+  const config = Object.assign(makeConfig(), {
+    governanceV3PackageHash: GOVERNANCE_V3.packageHash,
+    governanceV3ContractHash: GOVERNANCE_V3.contractHash,
+    governanceV3DeploymentDomain: GOVERNANCE_V3.deploymentDomain,
+  });
+  const { payment } = await makeSignedRequest(config);
+  const record = buildRegistryRecord(payment, config, {
+    package_hash: GOVERNANCE_V3.packageHash,
+    contract_hash: GOVERNANCE_V3.contractHash,
+    deployment_domain: GOVERNANCE_V3.deploymentDomain,
+  });
+  return { config, payment, record };
 }
 
 function codeOf(fn: () => unknown): string {
@@ -29,6 +54,49 @@ function codeOf(fn: () => unknown): string {
   }
   throw new Error("expected a refusal");
 }
+
+describe("validateGovernanceRecord — v3 governance identity", () => {
+  it("accepts configured v3 governance identity while the payment remains WCSPR-bound", async () => {
+    const { config, payment, record } = await governanceFixture();
+
+    expect(payment.requirements.asset).toBe(config.wcsprPackageHash);
+    expect(payment.paymentPayload.accepted.asset).toBe(config.wcsprPackageHash);
+    expect(record["package_hash"]).not.toBe(config.wcsprPackageHash);
+    expect(record["contract_hash"]).not.toBe(config.wcsprContractHash);
+    expect(validateGovernanceRecord(record, payment, config).actionId).toBe(
+      record["action_id"],
+    );
+  });
+
+  it("rejects a governance record that reuses the WCSPR token identity", async () => {
+    const { config, payment, record } = await governanceFixture();
+    record["package_hash"] = config.wcsprPackageHash;
+    record["contract_hash"] = config.wcsprContractHash;
+
+    expect(codeOf(() => validateGovernanceRecord(record, payment, config))).toBe(
+      "governance_record_invalid",
+    );
+  });
+
+  it("rejects a governance record from a different v3 deployment domain", async () => {
+    // Keep package/contract aligned with the legacy comparison so this test
+    // independently proves deployment_domain is now part of the identity.
+    const legacyConfig = makeConfig();
+    const config = Object.assign(legacyConfig, {
+      governanceV3PackageHash: legacyConfig.wcsprPackageHash,
+      governanceV3ContractHash: legacyConfig.wcsprContractHash,
+      governanceV3DeploymentDomain: GOVERNANCE_V3.deploymentDomain,
+    });
+    const { payment } = await makeSignedRequest(config);
+    const record = buildRegistryRecord(payment, config, {
+      deployment_domain: "74".repeat(32),
+    });
+
+    expect(codeOf(() => validateGovernanceRecord(record, payment, config))).toBe(
+      "governance_record_invalid",
+    );
+  });
+});
 
 describe("validateGovernanceRecord — timestamps and chronology", () => {
   it("accepts a fully valid record and returns the binding", async () => {

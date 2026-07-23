@@ -309,7 +309,8 @@ function validateChecks(value: unknown): ValidatedChecks {
 /**
  * Validate the registry record against the frozen schema AND require exact
  * equality with every identity/hash derived from the validated request and
- * frozen configuration. Returns the governance binding stored in the ledger.
+ * validated service configuration. Returns the governance binding stored in
+ * the ledger.
  */
 export function validateGovernanceRecord(
   record: unknown,
@@ -337,14 +338,25 @@ export function validateGovernanceRecord(
   }
   if (record["action_version"] !== 1) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   const envelopeHash = requireHex64(record["envelope_hash"]);
-  requireHex64(record["deployment_domain"]);
+  if (
+    requireHex64(record["deployment_domain"]) !==
+    config.governanceV3DeploymentDomain
+  ) {
+    fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  }
   if (record["network"] !== config.network) {
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
-  if (requireHex64(record["package_hash"]) !== config.wcsprPackageHash) {
+  if (
+    requireHex64(record["package_hash"]) !==
+    config.governanceV3PackageHash
+  ) {
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
-  if (requireHex64(record["contract_hash"]) !== config.wcsprContractHash) {
+  if (
+    requireHex64(record["contract_hash"]) !==
+    config.governanceV3ContractHash
+  ) {
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
   // The top-level boolean is necessary but never sufficient.
