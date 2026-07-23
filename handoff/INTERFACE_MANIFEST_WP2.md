@@ -1,7 +1,7 @@
 # INTERFACE MANIFEST — WP2 (SafePay v2 durable atomic consumption)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `7671543` (correction lineage: `9a4d66f` → `268c90d` → `7671543` bound-evidence re-review fix)
+- Producer commit: `3a4df13` (correction lineage: `9a4d66f` → `268c90d` → `7671543` bound-evidence re-review fix → `3a4df13` final-audit hardening: the observation contract fails CLOSED when `native_transfer_count` is missing/bool/non-int (503 `payment_observer_unavailable`, nothing consumed — never a defaulted count), cross-binding 409 bodies are recorded with the single-source `_CROSS_BINDING_409_DIGEST` at every call site, `summarize_quote_evidence` derives BOTH `duplicate_proof_rejected` and `idempotent_replay_observed` exclusively from bound rows (`response_digest` + `consumed_response_hash` revalidated against independently stored state), and the legacy pinned-false-behavior tests were migrated)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 "SafePay Lite supplemental v2", §2 (encoding)
 - Lane status: 113 tests green x3 stable at `7671543` (test_safepay_ledger + test_safepay_verifier + test_g1_freeze_manifest 16/16), ruff + `git diff --check` clean. Golden vectors (`correlation_id`, `quote_hash`) verified byte-for-byte against an INDEPENDENT reference computed from the spec formulas.

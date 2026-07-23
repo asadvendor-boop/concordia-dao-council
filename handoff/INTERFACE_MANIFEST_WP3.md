@@ -1,7 +1,8 @@
 # INTERFACE MANIFEST — WP3 (approval boundary, demo capability, room identity)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `ca975cb` (correction lineage: `d096403` → `73279a1` → `4b60f1c` re-review fixes → `ca975cb` recovery-ordering fix)
+- Producer commit: `3a4df13` (correction lineage: `d096403` → `73279a1` → `4b60f1c` re-review fixes → `ca975cb` recovery-ordering fix → `3a4df13` final-audit hardening: execution timeout strictly below the RUNNING lease (`_EXECUTION_TIMEOUT_SECONDS=150` < `_RUNNING_LEASE_SECONDS=180`, `asyncio.wait_for` + cancellation), existing-room disclosure gated on membership/matrix auto-join, and route-level identity strictness — see the 401 semantics below)
+- **Room-identity 401 semantics (authoritative):** a caller whose key resolves to the legacy `GATEWAY_SECRET → "gateway"` full-ACL principal (or to no role at all) is UNAUTHENTICATED for room routes **in EVERY environment** — `_role_or_401` (`gateway/routes/rooms.py:127-138`) raises 401 `invalid_agent_key`, identical to auth.py's missing/invalid-credential rejection. This is NOT production-only strictness: test, dev, and prod all observe the same 401. On the integrated tree gateway/auth.py (Codex-owned) removes the fallback globally; this route-level guard makes the observable contract identical before that merge.
 - Fresh per-suite counts at branch HEAD `f550c93` (rerun by the coordinator): test_approval_auth 15 · test_demo_capability 65 · test_room_identity 29 · test_g1_freeze_manifest 16 = 125, three consecutive stable runs
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 (Approval boundary v1 / Demo capability v1 / Room identity v1), §14
