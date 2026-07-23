@@ -15,7 +15,8 @@ import base64
 import copy
 import hashlib
 import json
-import os
+import runpy
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any, Callable
@@ -208,7 +209,7 @@ def _provider(
     state_root: str = STATE_ROOT_HASH,
     tip_height: int = BLOCK_HEIGHT + 8,
 ) -> dict[str, Any]:
-    return {
+    semantic = {
         "endpoint_id": endpoint_id,
         "origin": origin,
         "observed_at": UTC,
@@ -240,6 +241,29 @@ def _provider(
             "response": _status_response(tip_height=tip_height),
         },
     }
+    return {
+        "endpoint_id": endpoint_id,
+        "origin": origin,
+        **{
+            name: {
+                "url": origin,
+                "request_body_base64": _b64(
+                    _canonical(semantic[name]["request"])
+                ),
+                "response_status": 200,
+                "response_content_type": "application/json",
+                "response_body_base64": _b64(
+                    _canonical(semantic[name]["response"])
+                ),
+                "observed_at": UTC,
+            }
+            for name in (
+                "info_get_deploy",
+                "chain_get_block",
+                "info_get_status",
+            )
+        },
+    }
 
 
 def _runtime_identity(container_id: str, started_at: str, observed_at: str) -> dict[str, Any]:
@@ -253,81 +277,114 @@ def _runtime_identity(container_id: str, started_at: str, observed_at: str) -> d
     }
 
 
-def base_bundle() -> dict[str, Any]:
+_REF = runpy.run_path(
+    str(
+        Path(__file__).resolve().parents[1]
+        / "tests"
+        / "test_release_proof_adapters.py"
+    )
+)
+
+
+def _raw_exchange(exchange: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "method",
+        "url",
+        "request_body_base64",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    )
+    return {key: copy.deepcopy(exchange[key]) for key in keys}
+
+
+def _raw_rpc_exchange(exchange: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "url",
+        "request_body_base64",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    )
+    return {key: copy.deepcopy(exchange[key]) for key in keys}
+
+
+def _raw_bundle() -> dict[str, Any]:
+    artifact = _REF["safepay_artifact"]()
+    identity = artifact["capture_identity"]
+    providers = artifact["chain_evidence"]["providers"]
+    ledger = artifact["ledger_evidence"]
     return {
         "bundle_version": BUNDLE_VERSION,
-        "captured_at": UTC,
-        "source_commit": SOURCE_COMMIT,
-        "deployment_commit": DEPLOYMENT_COMMIT,
+        "captured_at": artifact["captured_at"],
+        "source_commit": artifact["source_commit"],
+        "deployment_commit": artifact["deployment_commit"],
         "provider": {
-            "url": PROVIDER_URL,
-            "deployment_id": PROVIDER_DEPLOYMENT_ID,
-            "image_digest": PROVIDER_IMAGE_DIGEST,
+            "url": identity["provider_url"],
+            "deployment_id": identity["provider_deployment_id"],
+            "image_digest": identity["provider_image_digest"],
             "instances": {
-                "before_restart": _runtime_identity(
-                    "90" * 32, "2026-07-23T00:50:00Z", "2026-07-23T01:03:55Z"
-                ),
-                "after_restart": _runtime_identity(
-                    "91" * 32, "2026-07-23T01:04:00Z", "2026-07-23T01:04:50Z"
-                ),
+                name: {
+                    key: copy.deepcopy(value)
+                    for key, value in identity["provider_instances"][name].items()
+                    if key != "instance_id"
+                }
+                for name in ("before_restart", "after_restart")
             },
-        },
-        "quote": {
-            "quote_id": QUOTE_ID,
-            "proposal_id": PROPOSAL_ID,
-            "resource_id": RESOURCE_ID,
-            "payee_account_hash": PAYEE_ACCOUNT,
-            "amount_motes": AMOUNT_MOTES,
-            "issued_at": ISSUED_AT,
-            "expires_at": EXPIRES_AT,
-            "quote_nonce": QUOTE_NONCE,
-        },
-        "report": {
-            "content_base64": _b64(_report_bytes()),
-            "persisted_at": UTC,
-            "released_at": UTC,
         },
         "chain": {
-            "payment_hash": PAYMENT_HASH,
+            "payment_hash": artifact["chain_evidence"]["payment_hash"],
             "providers": [
-                _provider("node-a", "https://node-a.example/rpc", CORRELATION_ID),
-                _provider("node-b", "https://node-b.example/rpc", CORRELATION_ID),
+                {
+                    "endpoint_id": provider["endpoint_id"],
+                    "origin": provider["origin"],
+                    **{
+                        name: _raw_rpc_exchange(provider[name])
+                        for name in (
+                            "info_get_deploy",
+                            "chain_get_block",
+                            "info_get_status",
+                        )
+                    },
+                }
+                for provider in providers
             ],
         },
-        "consumption": {
-            "consumed_at": CONSUMED_AT,
-            "observed_at": UTC,
-            "row_observed": {
-                "before_restart": "2026-07-23T01:03:30Z",
-                "after_restart": "2026-07-23T01:04:40Z",
-            },
-        },
-        "issued_quote_rows_observed": {
-            "before_restart": "2026-07-23T01:03:30Z",
-            "after_restart": "2026-07-23T01:04:40Z",
-        },
         "redemptions": {
-            "first_consumption": {
-                "observed_at": CONSUMED_AT + 1,
-                "exchange_observed_at": UTC,
-            },
-            "exact_retry": {
-                "observed_at": CONSUMED_AT + 2,
-                "exchange_observed_at": UTC,
-            },
-            "cross_binding_reuse": {
-                "quote_id": CROSS_QUOTE_ID,
-                "resource_id": CROSS_RESOURCE_ID,
-                "observed_at": CONSUMED_AT + 70,
-                "exchange_observed_at": UTC,
-            },
+            name: {
+                "exchange": _raw_exchange(
+                    artifact["redemption_observations"][name]["exchange"]
+                )
+            }
+            for name in (
+                "first_consumption",
+                "exact_retry",
+                "cross_binding_reuse",
+            )
         },
         "ledger_snapshots_observed": {
-            "after_first_consumption": "2026-07-23T01:03:10Z",
-            "after_exact_retry": "2026-07-23T01:03:20Z",
-            "after_cross_binding_reuse": "2026-07-23T01:04:30Z",
+            name: {
+                "sqlite_backup_base64": ledger[name][
+                    "sqlite_backup_base64"
+                ],
+                "observed_at": ledger[name]["observed_at"],
+            }
+            for name in (
+                "after_first_consumption",
+                "after_exact_retry",
+                "after_cross_binding_reuse",
+            )
         },
     }
+
+
+_BASE_BUNDLE = _raw_bundle()
+
+
+def base_bundle() -> dict[str, Any]:
+    return copy.deepcopy(_BASE_BUNDLE)
 
 
 # --- positive path ----------------------------------------------------------
@@ -389,9 +446,13 @@ def test_capture_derives_hashes_rather_than_trusting_inputs() -> None:
 # --- create-once private write ---------------------------------------------
 
 
-def test_capture_writes_canonical_bytes_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize("input_mode", [0o400, 0o600])
+def test_capture_reads_private_input_and_writes_canonical_bytes_once(
+    tmp_path: Path, input_mode: int
+) -> None:
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_bytes(_canonical(base_bundle()))
+    bundle_path.chmod(input_mode)
     output = tmp_path / "safepay-v2.json"
 
     document = capture(bundle_path=str(bundle_path), output_path=str(output))
@@ -407,6 +468,7 @@ def test_capture_writes_canonical_bytes_once(tmp_path: Path) -> None:
 def test_capture_refuses_to_overwrite_existing_output(tmp_path: Path) -> None:
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_bytes(_canonical(base_bundle()))
+    bundle_path.chmod(0o600)
     output = tmp_path / "safepay-v2.json"
 
     capture(bundle_path=str(bundle_path), output_path=str(output))
@@ -417,8 +479,50 @@ def test_capture_refuses_to_overwrite_existing_output(tmp_path: Path) -> None:
 def test_capture_rejects_relative_output(tmp_path: Path) -> None:
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_bytes(_canonical(base_bundle()))
+    bundle_path.chmod(0o600)
     with pytest.raises(SafePayV2CaptureError):
         capture(bundle_path=str(bundle_path), output_path="relative-output.json")
+
+
+def test_capture_rejects_world_readable_or_stdin_bundle(
+    tmp_path: Path,
+) -> None:
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_bytes(_canonical(base_bundle()))
+    bundle_path.chmod(0o644)
+    output = tmp_path / "artifact.json"
+
+    with pytest.raises(SafePayV2CaptureError, match="secure|safely"):
+        capture(bundle_path=str(bundle_path), output_path=str(output))
+    with pytest.raises(SafePayV2CaptureError, match="absolute|file|secure"):
+        capture(bundle_path="-", output_path=str(output))
+
+
+def test_capture_rejects_missing_or_tampered_raw_evidence() -> None:
+    missing = base_bundle()
+    del missing["redemptions"]["exact_retry"]
+    with pytest.raises(SafePayV2CaptureError):
+        build_safepay_v2_artifact(missing)
+
+    tampered_exchange = base_bundle()
+    response = tampered_exchange["redemptions"]["first_consumption"][
+        "exchange"
+    ]
+    raw = bytearray(base64.b64decode(response["response_body_base64"]))
+    raw[-1] ^= 1
+    response["response_body_base64"] = _b64(bytes(raw))
+    with pytest.raises(SafePayV2CaptureError):
+        build_safepay_v2_artifact(tampered_exchange)
+
+    tampered_backup = base_bundle()
+    snapshot = tampered_backup["ledger_snapshots_observed"][
+        "after_exact_retry"
+    ]
+    raw = bytearray(base64.b64decode(snapshot["sqlite_backup_base64"]))
+    raw[-1] ^= 1
+    snapshot["sqlite_backup_base64"] = _b64(bytes(raw))
+    with pytest.raises(SafePayV2CaptureError):
+        build_safepay_v2_artifact(tampered_backup)
 
 
 # --- failure-first mutation matrix -----------------------------------------
@@ -426,43 +530,98 @@ def test_capture_rejects_relative_output(tmp_path: Path) -> None:
 Mutation = Callable[[dict[str, Any]], None]
 
 
+def _rewrite_snapshot_databases(
+    bundle: dict[str, Any],
+    statement: str,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    for snapshot in bundle["ledger_snapshots_observed"].values():
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.deserialize(
+                base64.b64decode(snapshot["sqlite_backup_base64"])
+            )
+            connection.execute(statement, parameters)
+            connection.commit()
+            snapshot["sqlite_backup_base64"] = _b64(connection.serialize())
+        finally:
+            connection.close()
+
+
+def _mutate_exchange_json(
+    exchange: dict[str, Any],
+    key: str,
+    mutate: Callable[[dict[str, Any]], None],
+) -> None:
+    document = json.loads(base64.b64decode(exchange[key]))
+    mutate(document)
+    exchange[key] = _b64(_canonical(document))
+
+
 def _mutate_amount(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["amount_motes"] = "2500000001"
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET amount_motes = ?",
+        ("2500000001",),
+    )
 
 
 def _mutate_payee(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["payee_account_hash"] = "aa" * 32
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET payee_account_hash = ?",
+        ("aa" * 32,),
+    )
 
 
 def _mutate_nonce(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["quote_nonce"] = "ab" * 32
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET quote_nonce = ?",
+        ("ab" * 32,),
+    )
 
 
 def _mutate_payee_non_hex(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["payee_account_hash"] = "zz" * 32
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET payee_account_hash = ?",
+        ("zz" * 32,),
+    )
 
 
 def _mutate_zero_nonce(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["quote_nonce"] = "00" * 32
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET quote_nonce = ?",
+        ("00" * 32,),
+    )
 
 
 def _mutate_amount_non_canonical(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["amount_motes"] = "02500000000"
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET amount_motes = ?",
+        ("02500000000",),
+    )
 
 
 def _mutate_rpc_empty_block(bundle: dict[str, Any]) -> None:
-    bundle["chain"]["providers"][0]["chain_get_block"]["response"] = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "result": {},
-    }
+    exchange = bundle["chain"]["providers"][0]["chain_get_block"]
+    exchange["response_body_base64"] = _b64(
+        _canonical({"jsonrpc": "2.0", "id": 2, "result": {}})
+    )
 
 
 def _mutate_rpc_pending_execution(bundle: dict[str, Any]) -> None:
-    deploy = bundle["chain"]["providers"][0]["info_get_deploy"]["response"]
-    deploy["result"]["execution_info"]["execution_result"]["Version2"][
-        "error_message"
-    ] = "Out of gas"
+    exchange = bundle["chain"]["providers"][0]["info_get_deploy"]
+    _mutate_exchange_json(
+        exchange,
+        "response_body_base64",
+        lambda deploy: deploy["result"]["execution_info"][
+            "execution_result"
+        ]["Version2"].__setitem__("error_message", "Out of gas"),
+    )
 
 
 def _mutate_providers_disagree(bundle: dict[str, Any]) -> None:
@@ -481,12 +640,17 @@ def _mutate_low_confirmations(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_report_released_before_block(bundle: dict[str, Any]) -> None:
-    bundle["report"]["persisted_at"] = "2026-07-23T01:00:00Z"
-    bundle["report"]["released_at"] = "2026-07-23T01:01:00Z"
+    bundle["redemptions"]["first_consumption"]["exchange"]["observed_at"] = (
+        "2026-07-23T01:01:00Z"
+    )
 
 
 def _mutate_consumed_after_expiry(bundle: dict[str, Any]) -> None:
-    bundle["consumption"]["consumed_at"] = EXPIRES_AT
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE payment_consumptions SET consumed_at = ?",
+        (EXPIRES_AT,),
+    )
 
 
 def _mutate_mixed_generation(bundle: dict[str, Any]) -> None:
@@ -500,16 +664,29 @@ def _mutate_forged_restart(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_cross_binding_same_quote(bundle: dict[str, Any]) -> None:
-    bundle["redemptions"]["cross_binding_reuse"]["quote_id"] = QUOTE_ID
-    bundle["redemptions"]["cross_binding_reuse"]["resource_id"] = RESOURCE_ID
+    exchange = bundle["redemptions"]["cross_binding_reuse"]["exchange"]
+    _mutate_exchange_json(
+        exchange,
+        "request_body_base64",
+        lambda request: request.update(
+            {"quote_id": QUOTE_ID, "resource_id": RESOURCE_ID}
+        ),
+    )
 
 
 def _mutate_retry_before_first(bundle: dict[str, Any]) -> None:
-    bundle["redemptions"]["exact_retry"]["observed_at"] = CONSUMED_AT
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_redemption_observations SET observed_at = ? "
+        "WHERE kind = 'idempotent_replay'",
+        (CONSUMED_AT,),
+    )
 
 
 def _mutate_ledger_snapshot_order(bundle: dict[str, Any]) -> None:
-    bundle["ledger_snapshots_observed"]["after_exact_retry"] = "2026-07-23T01:03:05Z"
+    bundle["ledger_snapshots_observed"]["after_exact_retry"][
+        "observed_at"
+    ] = "2026-07-23T01:03:05Z"
 
 
 def _mutate_future_capture(bundle: dict[str, Any]) -> None:
@@ -518,7 +695,9 @@ def _mutate_future_capture(bundle: dict[str, Any]) -> None:
 
 def _mutate_restart_observation_order(bundle: dict[str, Any]) -> None:
     # An "after restart" quote row observed before the restart even started.
-    bundle["issued_quote_rows_observed"]["after_restart"] = "2026-07-23T01:03:59Z"
+    bundle["ledger_snapshots_observed"]["after_cross_binding_reuse"][
+        "observed_at"
+    ] = "2026-07-23T01:03:59Z"
 
 
 def _mutate_bad_bundle_version(bundle: dict[str, Any]) -> None:
@@ -530,11 +709,15 @@ def _mutate_missing_key(bundle: dict[str, Any]) -> None:
 
 
 def _mutate_extra_key(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["forced_correlation_id"] = "1"
+    bundle["forced_correlation_id"] = "1"
 
 
 def _mutate_forged_boolean_issued_at(bundle: dict[str, Any]) -> None:
-    bundle["quote"]["issued_at"] = True
+    _rewrite_snapshot_databases(
+        bundle,
+        "UPDATE safepay_quotes SET issued_at = ?",
+        (True,),
+    )
 
 
 @pytest.mark.parametrize(

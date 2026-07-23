@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Assemble the SafePay v2 live-evidence artifact from raw captured inputs.
 
-This tool is deliberately read-only over live systems.  It consumes one JSON
-"capture bundle" that embeds only *raw* evidence -- the quote request inputs,
-the two-node Casper RPC transcripts, the protected report bytes, the redemption
-chronology, and the two provider runtime identities that straddle a restart --
-and it independently *derives* every value the frozen adapter recomputes:
+This tool is deliberately read-only over live systems. It consumes one JSON
+"capture bundle" that embeds only *raw* evidence: two-node Casper RPC
+transcripts, exact provider redemption exchanges, three actual SQLite online
+backups, and two provider runtime identities that straddle a restart. It
+independently derives every value the frozen adapter recomputes:
 
   * the per-quote correlation id, immutable quote hash, report hash and
     fulfillment/response hash (via the frozen ``shared.x402_payments`` crypto),
   * the parsed native transfer, by re-parsing the raw RPC deploy/block/status
     transcripts through the very adapter routine that will judge them,
-  * the provider runtime instance ids, the durable quote/consumption rows, the
-    replay/idempotency/cross-binding redemption observations, and the three
-    progressive SQLite ledger snapshots (built by executing the repository
-    migration and inserting the derived rows), and
+  * the provider runtime instance ids and the quote, report, consumption, and
+    redemption rows read from the supplied immutable SQLite backups,
+  * the first-consumption, idempotent-retry, and cross-binding HTTP evidence
+    from the supplied raw request and response bytes, and
   * all canonical row digests and base64 encodings.
 
 No producer boolean, count, hash or parsed field from the bundle is trusted:
@@ -35,7 +35,6 @@ import hashlib
 import json
 import sqlite3
 import sys
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -47,15 +46,14 @@ from shared.release_proof_adapters import (
     _verify_rpc_providers,
     verify_safepay_v2_artifact,
 )
+from shared.secure_secret_file import (
+    SecureSecretFileError,
+    read_secure_secret_file,
+)
 from shared.x402_payments import (
-    SAFEPAY_V2_BINDING_CHECK_FIELDS,
-    SAFEPAY_V2_OBSERVATION_FIELDS,
     SAFEPAY_V2_QUOTE_FIELDS,
-    safepay_v2_body_digest,
     safepay_v2_correlation_id,
-    safepay_v2_error_body,
     safepay_v2_quote_hash,
-    safepay_v2_response_hash,
 )
 
 BUNDLE_VERSION = "concordia.safepay_v2_capture_bundle.v1"
@@ -95,6 +93,37 @@ _QUOTE_ROW_FIELDS = (
     "expires_at",
     "quote_nonce",
     "quote_hash",
+)
+_CONSUMPTION_ROW_FIELDS = (
+    "network",
+    "payment_hash",
+    "quote_id",
+    "proposal_id",
+    "resource_id",
+    "quote_hash",
+    "report_hash",
+    "correlation_id",
+    "fulfillment_json",
+    "response_hash",
+    "consumed_at",
+)
+_REPORT_ROW_FIELDS = (
+    "report_hash",
+    "report_media_type",
+    "report_bytes",
+    "decoded_length",
+    "created_at",
+)
+_REDEMPTION_ROW_FIELDS = (
+    "kind",
+    "http_status",
+    "network",
+    "payment_hash",
+    "quote_id",
+    "resource_id",
+    "observed_at",
+    "response_digest",
+    "consumed_response_hash",
 )
 
 
@@ -175,13 +204,18 @@ def _canonical_b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-def _decode_report_bytes(value: object, label: str) -> bytes:
+def _decode_b64(
+    value: object, label: str, *, allow_empty: bool = False
+) -> bytes:
     text = _text(value, label)
     try:
         decoded = base64.b64decode(text, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise SafePayV2CaptureError(f"{label} is not canonical base64") from exc
-    if not decoded or base64.b64encode(decoded).decode("ascii") != text:
+    if (
+        (not decoded and not allow_empty)
+        or base64.b64encode(decoded).decode("ascii") != text
+    ):
         raise SafePayV2CaptureError(f"{label} is not canonical base64")
     return decoded
 
@@ -225,23 +259,59 @@ def _runtime_identity(raw: object, *, label: str) -> dict[str, Any]:
     return {**payload, "instance_id": instance_id}
 
 
-def _wire_exchange(
+def _raw_wire_exchange(
+    raw: object,
     *,
-    url: str,
-    request: object,
-    response: object,
-    status: int,
-    observed_at: str,
-    method: str | None,
-) -> dict[str, Any]:
-    request_bytes = _canonical(request)
-    response_bytes = _canonical(response)
+    label: str,
+    expected_url: str,
+    expected_method: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    entry = _obj(raw, label)
+    expected_keys = {
+        "url",
+        "request_body_base64",
+        "response_status",
+        "response_content_type",
+        "response_body_base64",
+        "observed_at",
+    }
+    if expected_method is not None:
+        expected_keys.add("method")
+    _require_keys(entry, expected_keys, label)
+    request_bytes = _decode_b64(
+        entry["request_body_base64"],
+        f"{label} request body",
+        allow_empty=True,
+    )
+    response_bytes = _decode_b64(
+        entry["response_body_base64"], f"{label} response body"
+    )
+    if (
+        entry["url"] != expected_url
+        or entry["response_content_type"] != MEDIA_TYPE
+        or (
+            expected_method is not None
+            and entry["method"] != expected_method
+        )
+    ):
+        raise SafePayV2CaptureError(
+            f"{label} method, URL or content type differs"
+        )
+    status = _integer(entry["response_status"], f"{label} response status")
+    observed_at = _text(entry["observed_at"], f"{label} observed_at")
+    _parse_utc(observed_at, f"{label} observed_at")
+    request = _load_bundle_document(
+        request_bytes, limit=max(1, len(request_bytes))
+    )
+    response = _load_bundle_document(
+        response_bytes, limit=max(1, len(response_bytes))
+    )
     exchange: dict[str, Any] = {}
-    if method is not None:
-        exchange["method"] = method
+    if expected_method is not None:
+        exchange["method"] = expected_method
     exchange.update(
         {
-            "url": url,
+            "url": expected_url,
             "request_body_base64": _canonical_b64(request_bytes),
             "request_body_sha256": _sha(request_bytes),
             "response_status": status,
@@ -251,7 +321,7 @@ def _wire_exchange(
             "observed_at": observed_at,
         }
     )
-    return exchange
+    return exchange, request, response
 
 
 def _rpc_provider_observation(raw: object, *, label: str) -> dict[str, Any]:
@@ -261,7 +331,6 @@ def _rpc_provider_observation(raw: object, *, label: str) -> dict[str, Any]:
         {
             "endpoint_id",
             "origin",
-            "observed_at",
             "info_get_deploy",
             "chain_get_block",
             "info_get_status",
@@ -269,20 +338,15 @@ def _rpc_provider_observation(raw: object, *, label: str) -> dict[str, Any]:
         label,
     )
     origin = _text(provider["origin"], f"{label} origin")
-    observed_at = _text(provider["observed_at"], f"{label} observed_at")
-    _parse_utc(observed_at, f"{label} observed_at")
     exchanges: dict[str, Any] = {}
     for method in ("info_get_deploy", "chain_get_block", "info_get_status"):
-        transcript = _obj(provider[method], f"{label} {method}")
-        _require_keys(transcript, {"request", "response"}, f"{label} {method}")
-        exchanges[method] = _wire_exchange(
-            url=origin,
-            request=_obj(transcript["request"], f"{label} {method} request"),
-            response=_obj(transcript["response"], f"{label} {method} response"),
-            status=200,
-            observed_at=observed_at,
-            method=None,
+        exchange, _request, _response = _raw_wire_exchange(
+            provider[method],
+            label=f"{label} {method}",
+            expected_url=origin,
+            expected_method=None,
         )
+        exchanges[method] = exchange
     return {
         "endpoint_id": _text(provider["endpoint_id"], f"{label} endpoint_id"),
         "origin": origin,
@@ -320,213 +384,142 @@ def _derive_parsed_transfer(
     }
 
 
-def _build_fulfillment(
+def _one_sqlite_row(
+    connection: sqlite3.Connection,
+    query: str,
+    parameters: tuple[object, ...],
     *,
-    quote: Mapping[str, Any],
-    parsed_transfer: Mapping[str, Any],
-    report_object: Mapping[str, Any],
-    response_hash: str,
-    consumed_at: int,
-    observed_at: str,
+    label: str,
 ) -> dict[str, Any]:
-    payment_observation = {
-        "network": parsed_transfer["network"],
-        "payment_hash": parsed_transfer["payment_hash"],
-        "block_hash": parsed_transfer["block_hash"],
-        "block_height": parsed_transfer["block_height"],
-        "execution_status": parsed_transfer["execution_status"],
-        "finality_status": parsed_transfer["finality_status"],
-        "from_account_hash": parsed_transfer["source_account_hash"],
-        "to_account_hash": parsed_transfer["payee_account_hash"],
-        "amount_motes": parsed_transfer["amount_motes"],
-        "transfer_id": parsed_transfer["transfer_id"],
-        "execution_error": parsed_transfer["execution_error"],
-        "observed_at": observed_at,
-    }
-    if set(payment_observation) != set(SAFEPAY_V2_OBSERVATION_FIELDS):
-        raise SafePayV2CaptureError(  # pragma: no cover - guards the frozen field set
-            "derived payment observation fields differ from the frozen schema"
-        )
-    return {
-        "quote": dict(quote),
-        "payment_observation": payment_observation,
-        "consumption": {
-            "network": quote["network"],
-            "payment_hash": parsed_transfer["payment_hash"],
-            "quote_id": quote["quote_id"],
-            "resource_id": quote["resource_id"],
-            "quote_hash": quote["quote_hash"],
-            "response_hash": response_hash,
-            "consumed_at": consumed_at,
-        },
-        "report": dict(report_object),
-        "binding_checks": {name: True for name in SAFEPAY_V2_BINDING_CHECK_FIELDS},
-        "observed_at": observed_at,
-        "response_hash": response_hash,
-    }
+    rows = connection.execute(query, parameters).fetchall()
+    if len(rows) != 1:
+        raise SafePayV2CaptureError(f"{label} is not exactly one persisted row")
+    return dict(rows[0])
 
 
-def _redemption_observation(
+def _ledger_snapshot(
+    raw: object,
     *,
-    kind: str,
-    quote_id: str,
-    resource_id: str,
+    label: str,
+    network: str,
     payment_hash: str,
-    status: int,
-    observed_at: int,
-    response_digest: str,
-    consumed_response_hash: str,
-    body: Mapping[str, Any],
-    provider_url: str,
-    exchange_observed_at: str,
+    quote_id: str,
 ) -> dict[str, Any]:
-    request = {
-        "network": NETWORK,
-        "payment_hash": payment_hash,
-        "quote_id": quote_id,
-        "resource_id": resource_id,
-    }
-    return {
-        "kind": kind,
-        "network": NETWORK,
-        "payment_hash": payment_hash,
-        "quote_id": quote_id,
-        "resource_id": resource_id,
-        "http_status": status,
-        "observed_at": observed_at,
-        "response_digest": response_digest,
-        "consumed_response_hash": consumed_response_hash,
-        "exchange": _wire_exchange(
-            url=provider_url.rstrip("/") + REDEMPTIONS_PATH,
-            request=request,
-            response=dict(body),
-            status=status,
-            observed_at=exchange_observed_at,
-            method="POST",
-        ),
-    }
+    value = _obj(raw, label)
+    _require_keys(value, {"sqlite_backup_base64", "observed_at"}, label)
+    backup = _decode_b64(value["sqlite_backup_base64"], f"{label} SQLite backup")
+    observed_at = _text(value["observed_at"], f"{label} observed_at")
+    _parse_utc(observed_at, f"{label} observed_at")
 
-
-def _sqlite_backup_bytes(connection: sqlite3.Connection, path: Path) -> bytes:
-    destination = sqlite3.connect(path)
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
     try:
-        connection.backup(destination)
-    finally:
-        destination.close()
-    return path.read_bytes()
-
-
-def _build_ledger_evidence(
-    *,
-    quote_row: Mapping[str, Any],
-    consumption_row: Mapping[str, Any],
-    report_bytes: bytes,
-    report_hash: str,
-    decoded_length: int,
-    issued_at: int,
-    redemptions: Mapping[str, Mapping[str, Any]],
-    snapshot_observed: Mapping[str, str],
-    before_instance_id: str,
-    after_instance_id: str,
-) -> dict[str, Any]:
-    try:
-        migration = _MIGRATION_PATH.read_bytes()
-    except OSError as exc:
-        raise SafePayV2CaptureError("repository ledger migration is unavailable") from exc
-
-    stage_specs = (
-        ("after_first_consumption", "first_consumption", before_instance_id),
-        ("after_exact_retry", "exact_retry", before_instance_id),
-        ("after_cross_binding_reuse", "cross_binding_reuse", after_instance_id),
-    )
-    snapshots: dict[str, dict[str, Any]] = {}
-    try:
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            connection = sqlite3.connect(directory / "provider.sqlite3")
-            try:
-                connection.executescript(migration.decode("utf-8"))
-                connection.execute(
-                    "INSERT INTO safepay_reports("
-                    "report_hash, report_media_type, report_bytes, decoded_length, "
-                    "created_at) VALUES(?, ?, ?, ?, ?)",
-                    (report_hash, MEDIA_TYPE, report_bytes, decoded_length, issued_at),
-                )
-                connection.execute(
-                    "INSERT INTO safepay_quotes("
-                    "quote_id, proposal_id, resource_id, network, payee_account_hash, "
-                    "amount_motes, correlation_id, report_version, report_hash, "
-                    "issued_at, expires_at, quote_nonce, quote_hash"
-                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    tuple(quote_row[field] for field in _QUOTE_ROW_FIELDS),
-                )
-                connection.execute(
-                    "INSERT INTO payment_consumptions("
-                    "network, payment_hash, quote_id, proposal_id, resource_id, "
-                    "quote_hash, report_hash, correlation_id, fulfillment_json, "
-                    "response_hash, consumed_at"
-                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    tuple(
-                        consumption_row[field]
-                        for field in (
-                            "network",
-                            "payment_hash",
-                            "quote_id",
-                            "proposal_id",
-                            "resource_id",
-                            "quote_hash",
-                            "report_hash",
-                            "correlation_id",
-                            "fulfillment_json",
-                            "response_hash",
-                            "consumed_at",
-                        )
-                    ),
-                )
-                for stage, redemption_name, instance_id in stage_specs:
-                    observation = redemptions[redemption_name]
-                    connection.execute(
-                        "INSERT INTO safepay_redemption_observations("
-                        "kind, http_status, network, payment_hash, quote_id, "
-                        "resource_id, observed_at, response_digest, "
-                        "consumed_response_hash) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        tuple(
-                            observation[field]
-                            for field in (
-                                "kind",
-                                "http_status",
-                                "network",
-                                "payment_hash",
-                                "quote_id",
-                                "resource_id",
-                                "observed_at",
-                                "response_digest",
-                                "consumed_response_hash",
-                            )
-                        ),
-                    )
-                    connection.commit()
-                    raw = _sqlite_backup_bytes(connection, directory / f"{stage}.sqlite3")
-                    snapshots[stage] = {
-                        "sqlite_backup_base64": _canonical_b64(raw),
-                        "sqlite_backup_sha256": _sha(raw),
-                        "observed_at": snapshot_observed[stage],
-                        "provider_instance_id": instance_id,
-                    }
-            finally:
-                connection.close()
+        connection.deserialize(backup)
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("PRAGMA query_only=ON")
+        if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [
+            ("ok",)
+        ]:
+            raise SafePayV2CaptureError(f"{label} SQLite integrity check failed")
+        quote_row = _one_sqlite_row(
+            connection,
+            "SELECT quote_id, proposal_id, resource_id, network, "
+            "payee_account_hash, amount_motes, correlation_id, report_version, "
+            "report_hash, issued_at, expires_at, quote_nonce, quote_hash "
+            "FROM safepay_quotes WHERE quote_id = ?",
+            (quote_id,),
+            label=f"{label} quote",
+        )
+        consumption_row = _one_sqlite_row(
+            connection,
+            "SELECT network, payment_hash, quote_id, proposal_id, resource_id, "
+            "quote_hash, report_hash, correlation_id, fulfillment_json, "
+            "response_hash, consumed_at FROM payment_consumptions "
+            "WHERE network = ? AND payment_hash = ?",
+            (network, payment_hash),
+            label=f"{label} consumption",
+        )
+        report_row = _one_sqlite_row(
+            connection,
+            "SELECT report_hash, report_media_type, report_bytes, decoded_length, "
+            "created_at FROM safepay_reports WHERE report_hash = ?",
+            (quote_row["report_hash"],),
+            label=f"{label} report",
+        )
+        redemption_rows = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT kind, http_status, network, payment_hash, quote_id, "
+                "resource_id, observed_at, response_digest, "
+                "consumed_response_hash FROM safepay_redemption_observations "
+                "WHERE network = ? AND payment_hash = ? ORDER BY observation_id",
+                (network, payment_hash),
+            ).fetchall()
+        ]
     except sqlite3.Error as exc:
-        raise SafePayV2CaptureError("ledger snapshots could not be built") from exc
+        raise SafePayV2CaptureError(
+            f"{label} is not a readable authoritative SQLite backup"
+        ) from exc
+    finally:
+        connection.close()
 
+    if (
+        set(quote_row) != set(_QUOTE_ROW_FIELDS)
+        or set(consumption_row) != set(_CONSUMPTION_ROW_FIELDS)
+        or set(report_row) != set(_REPORT_ROW_FIELDS)
+        or any(set(row) != set(_REDEMPTION_ROW_FIELDS) for row in redemption_rows)
+    ):
+        raise SafePayV2CaptureError(f"{label} rows differ from the frozen ledger shape")
     return {
-        "authoritative_database_id": AUTHORITATIVE_DATABASE_ID,
-        "authoritative_schema_id": AUTHORITATIVE_SCHEMA_ID,
-        "migration_sql_base64": _canonical_b64(migration),
-        "migration_sql_sha256": _sha(migration),
-        "after_first_consumption": snapshots["after_first_consumption"],
-        "after_exact_retry": snapshots["after_exact_retry"],
-        "after_cross_binding_reuse": snapshots["after_cross_binding_reuse"],
+        "backup": backup,
+        "observed_at": observed_at,
+        "quote_row": quote_row,
+        "consumption_row": consumption_row,
+        "report_row": report_row,
+        "redemption_rows": redemption_rows,
     }
+
+
+def _row_observation(
+    row: Mapping[str, Any],
+    *,
+    observed_at: str,
+    provider_instance_id: str,
+) -> dict[str, Any]:
+    return {
+        "row": dict(row),
+        "row_canonical_json_sha256": _canonical_row_digest(row),
+        "observed_at": observed_at,
+        "provider_instance_id": provider_instance_id,
+    }
+
+
+def _snapshot_artifact(
+    snapshot: Mapping[str, Any], *, provider_instance_id: str
+) -> dict[str, Any]:
+    backup = snapshot["backup"]
+    if type(backup) is not bytes:
+        raise SafePayV2CaptureError("ledger backup bytes are unavailable")
+    return {
+        "sqlite_backup_base64": _canonical_b64(backup),
+        "sqlite_backup_sha256": _sha(backup),
+        "observed_at": snapshot["observed_at"],
+        "provider_instance_id": provider_instance_id,
+    }
+
+
+def _epoch_utc(value: object, *, label: str) -> str:
+    seconds = _integer(value, label)
+    if seconds < 0:
+        raise SafePayV2CaptureError(f"{label} must be non-negative")
+    try:
+        return (
+            datetime.fromtimestamp(seconds, UTC)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+    except (OverflowError, OSError, ValueError) as exc:
+        raise SafePayV2CaptureError(f"{label} is outside the UTC timestamp range") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -553,11 +546,7 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
             "source_commit",
             "deployment_commit",
             "provider",
-            "quote",
-            "report",
             "chain",
-            "consumption",
-            "issued_quote_rows_observed",
             "redemptions",
             "ledger_snapshots_observed",
         },
@@ -592,8 +581,12 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
 
     capture_identity = {
         "provider_url": provider_url,
-        "provider_deployment_id": _text(provider["deployment_id"], "provider deployment_id"),
-        "provider_image_digest": _text(provider["image_digest"], "provider image_digest"),
+        "provider_deployment_id": _text(
+            provider["deployment_id"], "provider deployment_id"
+        ),
+        "provider_image_digest": _text(
+            provider["image_digest"], "provider image_digest"
+        ),
         "capture_tool_commit": source_commit,
         "provider_instances": {
             "before_restart": before_identity,
@@ -601,126 +594,50 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         },
     }
 
-    # -- protected report bytes ---------------------------------------------
-    report_input = _obj(bundle["report"], "report")
-    _require_keys(report_input, {"content_base64", "persisted_at", "released_at"}, "report")
-    report_bytes = _decode_report_bytes(report_input["content_base64"], "report content")
-    report_hash = _sha(report_bytes)
-    decoded_length = len(report_bytes)
+    # -- exact provider HTTP exchanges --------------------------------------
+    redemption_input = _obj(bundle["redemptions"], "redemptions")
+    redemption_names = (
+        "first_consumption",
+        "exact_retry",
+        "cross_binding_reuse",
+    )
+    _require_keys(redemption_input, set(redemption_names), "redemptions")
+    redemption_exchanges: dict[str, dict[str, Any]] = {}
+    redemption_requests: dict[str, dict[str, Any]] = {}
+    redemption_url = provider_url.rstrip("/") + REDEMPTIONS_PATH
+    for name in redemption_names:
+        item = _obj(redemption_input[name], f"{name} redemption")
+        _require_keys(item, {"exchange"}, f"{name} redemption")
+        exchange, request, _response = _raw_wire_exchange(
+            item["exchange"],
+            label=f"{name} redemption exchange",
+            expected_url=redemption_url,
+            expected_method="POST",
+        )
+        redemption_exchanges[name] = exchange
+        redemption_requests[name] = request
 
-    # -- quote (all crypto derived from raw inputs) --------------------------
-    quote_input = _obj(bundle["quote"], "quote")
+    first_request = redemption_requests["first_consumption"]
     _require_keys(
-        quote_input,
-        {
-            "quote_id",
-            "proposal_id",
-            "resource_id",
-            "payee_account_hash",
-            "amount_motes",
-            "issued_at",
-            "expires_at",
-            "quote_nonce",
-        },
-        "quote",
+        first_request,
+        {"network", "payment_hash", "quote_id", "resource_id"},
+        "first redemption request",
     )
-    quote_id = _text(quote_input["quote_id"], "quote_id")
-    proposal_id = _text(quote_input["proposal_id"], "proposal_id")
-    resource_id = _text(quote_input["resource_id"], "resource_id")
-    payee_account_hash = _text(quote_input["payee_account_hash"], "payee_account_hash")
-    amount_motes = _text(quote_input["amount_motes"], "amount_motes")
-    issued_at = _integer(quote_input["issued_at"], "issued_at")
-    expires_at = _integer(quote_input["expires_at"], "expires_at")
-    quote_nonce_hex = _text(quote_input["quote_nonce"], "quote_nonce")
-    try:
-        quote_nonce = bytes.fromhex(quote_nonce_hex)
-        correlation_id = safepay_v2_correlation_id(
-            quote_id, proposal_id, resource_id, quote_nonce
-        )
-        quote_hash = safepay_v2_quote_hash(
-            quote_id=quote_id,
-            proposal_id=proposal_id,
-            resource_id=resource_id,
-            network=NETWORK,
-            payee_account_hash=payee_account_hash,
-            amount_motes=amount_motes,
-            correlation_id=correlation_id,
-            report_version=REPORT_VERSION,
-            report_hash=report_hash,
-            expires_at=expires_at,
-            quote_nonce=quote_nonce,
-        )
-    except (ValueError, TypeError) as exc:
-        raise SafePayV2CaptureError(f"quote preimage is invalid: {exc}") from exc
-    correlation_text = str(correlation_id)
-
-    quote = {
-        "schema_version": "safepay-v2",
-        "quote_id": quote_id,
-        "proposal_id": proposal_id,
-        "resource_id": resource_id,
-        "network": NETWORK,
-        "payee_account_hash": payee_account_hash,
-        "amount_motes": amount_motes,
-        "correlation_id": correlation_text,
-        "report_version": REPORT_VERSION,
-        "report_hash": report_hash,
-        "expires_at": expires_at,
-        "quote_nonce": quote_nonce_hex,
-        "quote_hash": quote_hash,
-    }
-    if set(quote) != set(SAFEPAY_V2_QUOTE_FIELDS):
-        raise SafePayV2CaptureError(  # pragma: no cover - guards the frozen field set
-            "derived quote fields differ from the frozen schema"
-        )
-    quote_row = {
-        "quote_id": quote_id,
-        "proposal_id": proposal_id,
-        "resource_id": resource_id,
-        "network": NETWORK,
-        "payee_account_hash": payee_account_hash,
-        "amount_motes": amount_motes,
-        "correlation_id": correlation_text,
-        "report_version": REPORT_VERSION,
-        "report_hash": report_hash,
-        "issued_at": issued_at,
-        "expires_at": expires_at,
-        "quote_nonce": quote_nonce_hex,
-        "quote_hash": quote_hash,
-    }
-    quote_row_digest = _canonical_row_digest(quote_row)
-
-    quote_rows_observed = _obj(
-        bundle["issued_quote_rows_observed"], "issued_quote_rows_observed"
+    network = _text(first_request["network"], "first redemption network")
+    if network != NETWORK:
+        raise SafePayV2CaptureError("first redemption network is not casper:casper-test")
+    payment_hash = _text(
+        first_request["payment_hash"], "first redemption payment_hash"
     )
-    _require_keys(
-        quote_rows_observed,
-        {"before_restart", "after_restart"},
-        "issued_quote_rows_observed",
-    )
-    issued_quote_rows = {
-        "before_restart": {
-            "row": dict(quote_row),
-            "row_canonical_json_sha256": quote_row_digest,
-            "observed_at": _text(
-                quote_rows_observed["before_restart"], "issued quote row before observed_at"
-            ),
-            "provider_instance_id": before_instance_id,
-        },
-        "after_restart": {
-            "row": dict(quote_row),
-            "row_canonical_json_sha256": quote_row_digest,
-            "observed_at": _text(
-                quote_rows_observed["after_restart"], "issued quote row after observed_at"
-            ),
-            "provider_instance_id": after_instance_id,
-        },
-    }
+    quote_id = _text(first_request["quote_id"], "first redemption quote_id")
 
     # -- chain evidence: parse the raw two-node transcripts ------------------
     chain_input = _obj(bundle["chain"], "chain")
     _require_keys(chain_input, {"payment_hash", "providers"}, "chain")
-    payment_hash = _text(chain_input["payment_hash"], "payment_hash")
+    if _text(chain_input["payment_hash"], "payment_hash") != payment_hash:
+        raise SafePayV2CaptureError(
+            "chain payment hash differs from the raw redemption request"
+        )
     raw_providers = _list(chain_input["providers"], "chain providers")
     if len(raw_providers) != 2:
         raise SafePayV2CaptureError("exactly two RPC provider transcripts are required")
@@ -740,203 +657,193 @@ def build_safepay_v2_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
         "parsed_transfer": parsed_transfer,
     }
 
-    # -- fulfillment / consumption / protected report ------------------------
-    consumption_input = _obj(bundle["consumption"], "consumption")
-    _require_keys(
-        consumption_input,
-        {"consumed_at", "observed_at", "row_observed"},
-        "consumption",
-    )
-    consumed_at = _integer(consumption_input["consumed_at"], "consumed_at")
-    fulfillment_observed_at = _text(
-        consumption_input["observed_at"], "consumption observed_at"
-    )
-    row_observed = _obj(consumption_input["row_observed"], "consumption row_observed")
-    _require_keys(row_observed, {"before_restart", "after_restart"}, "consumption row_observed")
-
-    try:
-        response_hash = safepay_v2_response_hash(
-            quote_hash=quote_hash,
-            payment_hash=parsed_transfer["payment_hash"],
-            block_hash=parsed_transfer["block_hash"],
-            block_height=parsed_transfer["block_height"],
-            report_hash=report_hash,
-            consumed_at=consumed_at,
-        )
-    except (ValueError, TypeError) as exc:
-        raise SafePayV2CaptureError(f"fulfillment preimage is invalid: {exc}") from exc
-
-    report_object = {
-        "report_version": REPORT_VERSION,
-        "proposal_id": proposal_id,
-        "resource_id": resource_id,
-        "correlation_id": correlation_text,
-        "media_type": MEDIA_TYPE,
-        "content_base64": _canonical_b64(report_bytes),
-        "report_hash": report_hash,
-    }
-    protected_report = {
-        **report_object,
-        "decoded_length": decoded_length,
-        "response_hash": response_hash,
-        "persisted_at": _text(report_input["persisted_at"], "report persisted_at"),
-        "released_at": _text(report_input["released_at"], "report released_at"),
-    }
-
-    fulfillment = _build_fulfillment(
-        quote=quote,
-        parsed_transfer=parsed_transfer,
-        report_object=report_object,
-        response_hash=response_hash,
-        consumed_at=consumed_at,
-        observed_at=fulfillment_observed_at,
-    )
-    fulfillment_json = json.dumps(
-        fulfillment, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-    )
-    consumption_row = {
-        "network": NETWORK,
-        "payment_hash": parsed_transfer["payment_hash"],
-        "quote_id": quote_id,
-        "proposal_id": proposal_id,
-        "resource_id": resource_id,
-        "quote_hash": quote_hash,
-        "report_hash": report_hash,
-        "correlation_id": correlation_text,
-        "fulfillment_json": fulfillment_json,
-        "response_hash": response_hash,
-        "consumed_at": consumed_at,
-    }
-    consumption_row_digest = _canonical_row_digest(consumption_row)
-    consumption_rows = {
-        "before_restart": {
-            "row": dict(consumption_row),
-            "row_canonical_json_sha256": consumption_row_digest,
-            "observed_at": _text(
-                row_observed["before_restart"], "consumption row before observed_at"
-            ),
-            "provider_instance_id": before_instance_id,
-        },
-        "after_restart": {
-            "row": dict(consumption_row),
-            "row_canonical_json_sha256": consumption_row_digest,
-            "observed_at": _text(
-                row_observed["after_restart"], "consumption row after observed_at"
-            ),
-            "provider_instance_id": after_instance_id,
-        },
-    }
-
-    # -- redemption observations (first / retry / cross-binding) -------------
-    redemption_input = _obj(bundle["redemptions"], "redemptions")
-    _require_keys(
-        redemption_input,
-        {"first_consumption", "exact_retry", "cross_binding_reuse"},
-        "redemptions",
-    )
-    first_input = _obj(redemption_input["first_consumption"], "first redemption")
-    retry_input = _obj(redemption_input["exact_retry"], "exact-retry redemption")
-    cross_input = _obj(redemption_input["cross_binding_reuse"], "cross-binding redemption")
-    _require_keys(first_input, {"observed_at", "exchange_observed_at"}, "first redemption")
-    _require_keys(retry_input, {"observed_at", "exchange_observed_at"}, "exact-retry redemption")
-    _require_keys(
-        cross_input,
-        {"quote_id", "resource_id", "observed_at", "exchange_observed_at"},
-        "cross-binding redemption",
-    )
-
-    first_body = {
-        "schema_version": "safepay-v2",
-        "fulfillment": fulfillment,
-        "delivery": {"replay_disposition": "first_consumption"},
-    }
-    retry_body = {
-        "schema_version": "safepay-v2",
-        "fulfillment": fulfillment,
-        "delivery": {"replay_disposition": "idempotent_replay"},
-    }
-    cross_body = safepay_v2_error_body(
-        "payment_already_consumed_for_other_binding",
-        False,
-        "cross_binding_rejected",
-    )
-    redemptions = {
-        "first_consumption": _redemption_observation(
-            kind="first_consumption",
-            quote_id=quote_id,
-            resource_id=resource_id,
-            payment_hash=parsed_transfer["payment_hash"],
-            status=200,
-            observed_at=_integer(first_input["observed_at"], "first redemption observed_at"),
-            response_digest=response_hash,
-            consumed_response_hash=response_hash,
-            body=first_body,
-            provider_url=provider_url,
-            exchange_observed_at=_text(
-                first_input["exchange_observed_at"], "first redemption exchange observed_at"
-            ),
-        ),
-        "exact_retry": _redemption_observation(
-            kind="idempotent_replay",
-            quote_id=quote_id,
-            resource_id=resource_id,
-            payment_hash=parsed_transfer["payment_hash"],
-            status=200,
-            observed_at=_integer(retry_input["observed_at"], "exact-retry observed_at"),
-            response_digest=response_hash,
-            consumed_response_hash=response_hash,
-            body=retry_body,
-            provider_url=provider_url,
-            exchange_observed_at=_text(
-                retry_input["exchange_observed_at"], "exact-retry exchange observed_at"
-            ),
-        ),
-        "cross_binding_reuse": _redemption_observation(
-            kind="cross_binding_rejected",
-            quote_id=_text(cross_input["quote_id"], "cross-binding quote_id"),
-            resource_id=_text(cross_input["resource_id"], "cross-binding resource_id"),
-            payment_hash=parsed_transfer["payment_hash"],
-            status=409,
-            observed_at=_integer(cross_input["observed_at"], "cross-binding observed_at"),
-            response_digest=safepay_v2_body_digest(cross_body),
-            consumed_response_hash=response_hash,
-            body=cross_body,
-            provider_url=provider_url,
-            exchange_observed_at=_text(
-                cross_input["exchange_observed_at"], "cross-binding exchange observed_at"
-            ),
-        ),
-    }
-
-    # -- durable ledger snapshots straddling the restart ---------------------
-    snapshot_observed_input = _obj(
+    # -- actual progressive SQLite backups ----------------------------------
+    snapshots_input = _obj(
         bundle["ledger_snapshots_observed"], "ledger_snapshots_observed"
     )
+    stage_specs = (
+        ("after_first_consumption", 1, before_instance_id),
+        ("after_exact_retry", 2, before_instance_id),
+        ("after_cross_binding_reuse", 3, after_instance_id),
+    )
     _require_keys(
-        snapshot_observed_input,
-        {"after_first_consumption", "after_exact_retry", "after_cross_binding_reuse"},
+        snapshots_input,
+        {stage for stage, _count, _instance in stage_specs},
         "ledger_snapshots_observed",
     )
-    snapshot_observed = {
-        stage: _text(snapshot_observed_input[stage], f"ledger {stage} observed_at")
-        for stage in (
-            "after_first_consumption",
-            "after_exact_retry",
-            "after_cross_binding_reuse",
+    snapshots: dict[str, dict[str, Any]] = {}
+    for stage, expected_count, _instance_id in stage_specs:
+        snapshot = _ledger_snapshot(
+            snapshots_input[stage],
+            label=f"ledger {stage}",
+            network=network,
+            payment_hash=payment_hash,
+            quote_id=quote_id,
         )
+        if len(snapshot["redemption_rows"]) != expected_count:
+            raise SafePayV2CaptureError(
+                f"ledger {stage} does not contain the expected redemption progression"
+            )
+        snapshots[stage] = snapshot
+
+    first_snapshot = snapshots["after_first_consumption"]
+    final_snapshot = snapshots["after_cross_binding_reuse"]
+    for stage, expected_count, _instance_id in stage_specs:
+        snapshot = snapshots[stage]
+        if (
+            snapshot["quote_row"] != first_snapshot["quote_row"]
+            or snapshot["consumption_row"] != first_snapshot["consumption_row"]
+            or snapshot["report_row"] != first_snapshot["report_row"]
+            or snapshot["redemption_rows"]
+            != final_snapshot["redemption_rows"][:expected_count]
+        ):
+            raise SafePayV2CaptureError(
+                f"ledger {stage} is not an append-only progression of one fulfillment"
+            )
+
+    quote_row = first_snapshot["quote_row"]
+    consumption_row = first_snapshot["consumption_row"]
+    report_row = first_snapshot["report_row"]
+    report_bytes = report_row["report_bytes"]
+    if type(report_bytes) is not bytes:
+        raise SafePayV2CaptureError("persisted report bytes are not a SQLite BLOB")
+    if (
+        report_row["report_media_type"] != MEDIA_TYPE
+        or report_row["decoded_length"] != len(report_bytes)
+        or report_row["report_hash"] != _sha(report_bytes)
+        or quote_row["report_hash"] != report_row["report_hash"]
+        or consumption_row["report_hash"] != report_row["report_hash"]
+    ):
+        raise SafePayV2CaptureError(
+            "persisted report bytes, length, media type, or binding differ"
+        )
+
+    # -- quote crypto from the persisted row --------------------------------
+    quote_nonce_hex = _text(quote_row["quote_nonce"], "persisted quote_nonce")
+    try:
+        quote_nonce = bytes.fromhex(quote_nonce_hex)
+        correlation_id = safepay_v2_correlation_id(
+            quote_row["quote_id"],
+            quote_row["proposal_id"],
+            quote_row["resource_id"],
+            quote_nonce,
+        )
+        quote_hash = safepay_v2_quote_hash(
+            quote_id=quote_row["quote_id"],
+            proposal_id=quote_row["proposal_id"],
+            resource_id=quote_row["resource_id"],
+            network=quote_row["network"],
+            payee_account_hash=quote_row["payee_account_hash"],
+            amount_motes=quote_row["amount_motes"],
+            correlation_id=correlation_id,
+            report_version=quote_row["report_version"],
+            report_hash=quote_row["report_hash"],
+            expires_at=quote_row["expires_at"],
+            quote_nonce=quote_nonce,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SafePayV2CaptureError(f"persisted quote preimage is invalid: {exc}") from exc
+    if (
+        quote_row["network"] != NETWORK
+        or quote_row["quote_id"] != quote_id
+        or quote_row["correlation_id"] != str(correlation_id)
+        or quote_row["quote_hash"] != quote_hash
+        or quote_row["report_version"] != REPORT_VERSION
+    ):
+        raise SafePayV2CaptureError(
+            "persisted quote differs from its frozen cryptographic preimage"
+        )
+    quote = {
+        "schema_version": "safepay-v2",
+        **{field: quote_row[field] for field in _QUOTE_ROW_FIELDS if field != "issued_at"},
     }
-    ledger_evidence = _build_ledger_evidence(
-        quote_row=quote_row,
-        consumption_row=consumption_row,
-        report_bytes=report_bytes,
-        report_hash=report_hash,
-        decoded_length=decoded_length,
-        issued_at=issued_at,
-        redemptions=redemptions,
-        snapshot_observed=snapshot_observed,
-        before_instance_id=before_instance_id,
-        after_instance_id=after_instance_id,
+    if set(quote) != set(SAFEPAY_V2_QUOTE_FIELDS):
+        raise SafePayV2CaptureError(
+            "persisted quote fields differ from the frozen schema"
+        )
+
+    # -- persisted fulfillment and protected report -------------------------
+    fulfillment_json = _text(
+        consumption_row["fulfillment_json"], "persisted fulfillment_json"
     )
+    fulfillment = _load_bundle_document(
+        fulfillment_json.encode("utf-8"),
+        limit=max(1, len(fulfillment_json.encode("utf-8"))),
+    )
+    report_projection = {
+        "report_version": quote["report_version"],
+        "proposal_id": quote["proposal_id"],
+        "resource_id": quote["resource_id"],
+        "correlation_id": quote["correlation_id"],
+        "media_type": report_row["report_media_type"],
+        "content_base64": _canonical_b64(report_bytes),
+        "report_hash": report_row["report_hash"],
+    }
+    if fulfillment.get("report") != report_projection:
+        raise SafePayV2CaptureError(
+            "persisted fulfillment report differs from the authoritative report row"
+        )
+    protected_report = {
+        **report_projection,
+        "decoded_length": report_row["decoded_length"],
+        "response_hash": consumption_row["response_hash"],
+        "persisted_at": _epoch_utc(
+            report_row["created_at"], label="persisted report created_at"
+        ),
+        "released_at": redemption_exchanges["first_consumption"]["observed_at"],
+    }
+
+    # -- durable rows and exact HTTP observations ----------------------------
+    issued_quote_rows = {
+        "before_restart": _row_observation(
+            quote_row,
+            observed_at=first_snapshot["observed_at"],
+            provider_instance_id=before_instance_id,
+        ),
+        "after_restart": _row_observation(
+            quote_row,
+            observed_at=final_snapshot["observed_at"],
+            provider_instance_id=after_instance_id,
+        ),
+    }
+    consumption_rows = {
+        "before_restart": _row_observation(
+            consumption_row,
+            observed_at=first_snapshot["observed_at"],
+            provider_instance_id=before_instance_id,
+        ),
+        "after_restart": _row_observation(
+            consumption_row,
+            observed_at=final_snapshot["observed_at"],
+            provider_instance_id=after_instance_id,
+        ),
+    }
+    redemptions = {
+        name: {
+            **final_snapshot["redemption_rows"][index],
+            "exchange": redemption_exchanges[name],
+        }
+        for index, name in enumerate(redemption_names)
+    }
+
+    try:
+        migration = _MIGRATION_PATH.read_bytes()
+    except OSError as exc:
+        raise SafePayV2CaptureError(
+            "repository ledger migration is unavailable"
+        ) from exc
+    ledger_evidence = {
+        "authoritative_database_id": AUTHORITATIVE_DATABASE_ID,
+        "authoritative_schema_id": AUTHORITATIVE_SCHEMA_ID,
+        "migration_sql_base64": _canonical_b64(migration),
+        "migration_sql_sha256": _sha(migration),
+        **{
+            stage: _snapshot_artifact(
+                snapshots[stage], provider_instance_id=instance_id
+            )
+            for stage, _count, instance_id in stage_specs
+        },
+    }
 
     document = {
         "schema_version": "safepay-v2",
@@ -975,21 +882,18 @@ def canonical_artifact_bytes(document: Mapping[str, Any]) -> bytes:
 
 def _read_bundle_bytes(path_value: str, *, limit: int) -> bytes:
     if path_value == "-":
-        raw = sys.stdin.buffer.read(limit + 1)
-    else:
-        path = Path(path_value)
-        try:
-            metadata = path.stat()
-            if not path.is_file() or path.is_symlink():
-                raise SafePayV2CaptureError("capture bundle must be a regular file")
-            if metadata.st_size > limit:
-                raise SafePayV2CaptureError("capture bundle exceeds its size limit")
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise SafePayV2CaptureError("capture bundle is unavailable") from exc
-    if len(raw) > limit:
-        raise SafePayV2CaptureError("capture bundle exceeds its size limit")
-    return raw
+        raise SafePayV2CaptureError(
+            "capture bundle must be an absolute owner-private file, not stdin"
+        )
+    path = Path(path_value)
+    if not path.is_absolute():
+        raise SafePayV2CaptureError("capture bundle path must be absolute")
+    try:
+        return read_secure_secret_file(path, max_bytes=limit)
+    except SecureSecretFileError as exc:
+        raise SafePayV2CaptureError(
+            f"capture bundle could not be read securely: {exc}"
+        ) from exc
 
 
 def capture(*, bundle_path: str, output_path: str) -> dict[str, Any]:
@@ -1020,7 +924,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "capture", help="assemble and verify a SafePay v2 artifact from a raw bundle"
     )
     capture_parser.add_argument(
-        "--bundle", required=True, help="capture bundle JSON file, or - for stdin"
+        "--bundle",
+        required=True,
+        help="absolute path to an owner-private capture bundle JSON file",
     )
     capture_parser.add_argument(
         "--output", required=True, help="absolute artifact output path (create-once)"
