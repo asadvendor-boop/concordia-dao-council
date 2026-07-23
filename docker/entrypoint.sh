@@ -38,6 +38,7 @@ service="${CONCORDIA_SERVICE:-${1:-gateway}}"
 
 case "$service" in
   gateway)
+    python -m shared.runtime_release_mounts
     exec uv run --no-sync uvicorn gateway.app:app --host "${GATEWAY_HOST:-0.0.0.0}" --port "${GATEWAY_PORT:-8000}"
     ;;
   simulator)

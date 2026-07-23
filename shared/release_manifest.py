@@ -1883,6 +1883,200 @@ def _load_bound_file(root: Path, relative: str, limit: int) -> _BoundFile:
     )
 
 
+def _bound_repository_directory_sha256(
+    root: Path,
+    relative: str,
+    *,
+    total_limit: int = 128 * 1024 * 1024,
+    file_limit: int = _ARTIFACT_LIMIT,
+    file_count_limit: int = 4096,
+) -> str:
+    """Hash one clean, tracked directory without following filesystem links."""
+
+    parts = _validate_relative_path(relative)
+    directory = root.joinpath(*parts)
+    try:
+        metadata = directory.lstat()
+    except OSError as exc:
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} is unavailable"
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} is not a safe directory"
+        )
+
+    drift = _git(
+        root,
+        ["diff", "--quiet", "HEAD", "--", relative],
+        check=False,
+        limit=_CONTROL_LIMIT,
+    )
+    if drift.returncode != 0:
+        if drift.returncode == 1:
+            raise ReleaseManifestError(
+                f"bound Compose directory {relative} differs from HEAD"
+            )
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} cannot be compared to HEAD"
+        )
+    untracked = _git(
+        root,
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", relative],
+        limit=_GIT_OUTPUT_LIMIT,
+    ).stdout
+    if untracked:
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} contains untracked files"
+        )
+    listing = _git(
+        root,
+        ["ls-files", "-z", "--", relative],
+        limit=_GIT_OUTPUT_LIMIT,
+    ).stdout
+    try:
+        files = sorted(
+            path
+            for path in listing.decode("utf-8", errors="strict").split("\0")
+            if path
+        )
+    except UnicodeDecodeError as exc:
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} has a non-UTF-8 path"
+        ) from exc
+    prefix = relative + "/"
+    if (
+        not files
+        or len(files) > file_count_limit
+        or any(not path.startswith(prefix) for path in files)
+    ):
+        raise ReleaseManifestError(
+            f"bound Compose directory {relative} file inventory is invalid"
+        )
+
+    digest = hashlib.sha256()
+    digest.update(b"CONCORDIA_COMPOSE_BOUND_DIRECTORY_V1\0")
+    digest.update(len(files).to_bytes(8, "big"))
+    total = 0
+    for path in files:
+        read = _read_bounded_repository_file(root, path, file_limit)
+        total += len(read.raw)
+        if total > total_limit:
+            raise ReleaseManifestError(
+                f"bound Compose directory {relative} exceeds its total size limit"
+            )
+        encoded_path = path.encode("utf-8")
+        digest.update(len(encoded_path).to_bytes(4, "big"))
+        digest.update(encoded_path)
+        digest.update(len(read.raw).to_bytes(8, "big"))
+        digest.update(hashlib.sha256(read.raw).digest())
+    return digest.hexdigest()
+
+
+def _bound_external_directory_sha256(
+    directory: Path,
+    *,
+    label: str,
+    total_limit: int = 128 * 1024 * 1024,
+    file_limit: int = _ARTIFACT_LIMIT,
+    file_count_limit: int = 4096,
+) -> str:
+    """Hash one release-private directory without serializing its contents."""
+
+    try:
+        metadata = directory.lstat()
+    except OSError as exc:
+        raise ReleaseManifestError(f"{label} is unavailable") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ReleaseManifestError(f"{label} is not a safe directory")
+    files: list[tuple[str, Path]] = []
+    try:
+        for current, directories, names in os.walk(
+            directory,
+            topdown=True,
+            followlinks=False,
+        ):
+            current_path = Path(current)
+            for name in directories:
+                nested = current_path / name
+                nested_metadata = nested.lstat()
+                if stat.S_ISLNK(nested_metadata.st_mode) or not stat.S_ISDIR(
+                    nested_metadata.st_mode
+                ):
+                    raise ReleaseManifestError(
+                        f"{label} contains an unsafe directory entry"
+                    )
+            for name in names:
+                nested = current_path / name
+                nested_metadata = nested.lstat()
+                if stat.S_ISLNK(nested_metadata.st_mode) or not stat.S_ISREG(
+                    nested_metadata.st_mode
+                ):
+                    raise ReleaseManifestError(
+                        f"{label} contains an unsafe file entry"
+                    )
+                relative = nested.relative_to(directory).as_posix()
+                _validate_relative_path(relative)
+                files.append((relative, nested))
+    except OSError as exc:
+        raise ReleaseManifestError(f"{label} cannot be inventoried safely") from exc
+    files.sort()
+    if not files or len(files) > file_count_limit:
+        raise ReleaseManifestError(f"{label} file inventory is invalid")
+
+    digest = hashlib.sha256()
+    digest.update(b"CONCORDIA_COMPOSE_BOUND_DIRECTORY_V1\0")
+    digest.update(len(files).to_bytes(8, "big"))
+    total = 0
+    for relative, path in files:
+        flags = _safe_open_flags(directory=False)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            raise ReleaseManifestError(f"{label} file is unreadable") from exc
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_size > file_limit:
+                raise ReleaseManifestError(f"{label} file exceeds its policy")
+            chunks: list[bytes] = []
+            remaining = file_limit + 1
+            while remaining:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if (
+                len(raw) > file_limit
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                )
+            ):
+                raise ReleaseManifestError(f"{label} changed while being read")
+        finally:
+            os.close(descriptor)
+        total += len(raw)
+        if total > total_limit:
+            raise ReleaseManifestError(f"{label} exceeds its total size limit")
+        encoded_path = relative.encode("utf-8")
+        digest.update(len(encoded_path).to_bytes(4, "big"))
+        digest.update(encoded_path)
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(hashlib.sha256(raw).digest())
+    return digest.hexdigest()
+
+
 def _load_immutable_bound_file(
     root: Path,
     relative: str,
@@ -3227,7 +3421,18 @@ _COMPOSE_BUILD_ALLOWLIST = frozenset(
     {"dashboard", "gateway", "x402-official"}
 )
 _COMPOSE_VOLUME_ALLOWLIST = {
-    "gateway": frozenset({("volume", "concordia-data", "/data", False)}),
+    "gateway": frozenset(
+        {
+            ("volume", "concordia-data", "/data", False),
+            ("bind", "artifacts", "/app/artifacts", True),
+            (
+                "bind",
+                "artifacts/live/proof-registry",
+                "/run/config/proof-registry",
+                True,
+            ),
+        }
+    ),
     "ipfs": frozenset(
         {("volume", "concordia-ipfs-data", "/data/ipfs", False)}
     ),
@@ -3242,10 +3447,18 @@ _COMPOSE_VOLUME_ALLOWLIST = {
         }
     ),
     "x402-official": frozenset(
-        {("volume", "concordia-x402-official-data", "/data", False)}
+        {
+            ("volume", "x402_official_data", "/data", False),
+            (
+                "bind",
+                "@release-config/x402-official",
+                "/run/config",
+                True,
+            ),
+        }
     ),
     "x402-provider": frozenset(
-        {("volume", "concordia-safepay-data", "/data", False)}
+        {("volume", "x402_provider_data", "/data", False)}
     ),
 }
 _COMPOSE_LOCAL_IMAGES = frozenset(
@@ -3960,20 +4173,41 @@ def _compose_projection(
         observed_mounts: set[tuple[str, str, str, bool]] = set()
         for raw_volume in service.get("volumes") or []:
             volume = _mapping(raw_volume, f"{service_id} volume")
-            if set(volume) not in (
-                {"type", "source", "target"},
-                {"type", "source", "target", "read_only"},
-            ):
-                raise ReleaseManifestError("Compose mount shape is not exact")
             kind = str(volume.get("type", "volume"))
+            common_fields = {"type", "source", "target", "read_only"}
+            option_fields = set(volume) - common_fields
+            if kind == "bind":
+                if option_fields - {"bind"}:
+                    raise ReleaseManifestError("Compose bind shape is not exact")
+                bind_options = _mapping(
+                    volume.get("bind") or {},
+                    f"{service_id} bind options",
+                )
+                if set(bind_options) - {"create_host_path"}:
+                    raise ReleaseManifestError(
+                        "Compose bind options are outside the allowlist"
+                    )
+            elif kind == "volume":
+                if option_fields - {"volume"}:
+                    raise ReleaseManifestError("Compose volume shape is not exact")
+                if _mapping(
+                    volume.get("volume") or {},
+                    f"{service_id} volume options",
+                ):
+                    raise ReleaseManifestError(
+                        "Compose volume options are outside the allowlist"
+                    )
+                bind_options = {}
+            else:
+                raise ReleaseManifestError("Compose mount type is outside allowlist")
+            if not {"type", "source", "target"}.issubset(volume):
+                raise ReleaseManifestError("Compose mount shape is not exact")
             source = str(volume.get("source", ""))
             target = _text(volume.get("target"), f"{service_id} volume target")
             read_only = bool(
                 volume.get("read_only") is True
                 or str(volume.get("mode", "")).lower() == "ro"
             )
-            if kind not in {"bind", "volume"}:
-                raise ReleaseManifestError("Compose mount type is outside allowlist")
             if kind == "bind":
                 if source.startswith("/run/secrets/") or target.startswith(
                     "/run/secrets/"
@@ -3981,25 +4215,80 @@ def _compose_projection(
                     raise ReleaseManifestError(
                         "Compose secret bind mount is forbidden"
                     )
-                try:
-                    source_path = Path(source)
-                    if (
-                        allow_normalized_argv_digests
-                        and not source_path.is_absolute()
-                    ):
-                        source_path = root / source_path
-                    relative_source = (
-                        source_path.resolve(strict=True).relative_to(
-                            root.resolve(strict=True)
-                        )
-                    ).as_posix()
-                except (OSError, ValueError) as exc:
+                external_marker = "@release-config/x402-official:"
+                source_digest: str | None = None
+                if allow_normalized_argv_digests and source.startswith(
+                    external_marker
+                ):
+                    source_digest = _hash32(
+                        source.removeprefix(external_marker),
+                        "normalized release-config directory digest",
+                    )
+                    source_identity = "@release-config/x402-official"
+                else:
+                    try:
+                        source_path = Path(source)
+                        if (
+                            allow_normalized_argv_digests
+                            and not source_path.is_absolute()
+                        ):
+                            source_path = root / source_path
+                        resolved_source = source_path.resolve(strict=True)
+                        try:
+                            relative_source = resolved_source.relative_to(
+                                root.resolve(strict=True)
+                            ).as_posix()
+                        except ValueError:
+                            expected_external = (
+                                root.parent / "config/x402-official"
+                            ).resolve(strict=True)
+                            if (
+                                target != "/run/config"
+                                or resolved_source != expected_external
+                            ):
+                                raise ReleaseManifestError(
+                                    "Compose bind source is outside its release scope"
+                                )
+                            source_identity = "@release-config/x402-official"
+                            source_digest = _bound_external_directory_sha256(
+                                resolved_source,
+                                label="release-scoped x402 config",
+                            )
+                        else:
+                            source_identity = relative_source
+                    except ReleaseManifestError:
+                        raise
+                    except (OSError, ValueError) as exc:
+                        raise ReleaseManifestError(
+                            "Compose bind source is unavailable"
+                        ) from exc
+                expected_create_host_path = (
+                    False
+                    if source_identity
+                    in {
+                        "artifacts",
+                        "artifacts/live/proof-registry",
+                        "@release-config/x402-official",
+                    }
+                    else None
+                )
+                if (
+                    expected_create_host_path is False
+                    and bind_options.get("create_host_path") is not False
+                ):
                     raise ReleaseManifestError(
-                        "Compose bind source is outside the repository"
-                    ) from exc
-                source_identity = relative_source
+                        "release artifact bind may not create its host path"
+                    )
+                if (
+                    expected_create_host_path is None
+                    and bind_options.get("create_host_path") not in {None, True}
+                ):
+                    raise ReleaseManifestError(
+                        "Compose repository-file bind options differ"
+                    )
             else:
                 source_identity = source
+                source_digest = None
             observed_mounts.add((kind, source_identity, target, read_only))
             item: dict[str, object] = {
                 "type": kind,
@@ -4011,9 +4300,21 @@ def _compose_projection(
                     volume.get("source"), f"{service_id} volume name"
                 )
             else:
-                item["source_sha256"] = _load_bound_file(
-                    root, source_identity, _CONTROL_LIMIT
-                ).sha256
+                source_path = root / source_identity
+                if source_digest is not None:
+                    item["source_sha256"] = source_digest
+                    item["source_type"] = "directory"
+                elif source_path.is_dir():
+                    item["source_sha256"] = _bound_repository_directory_sha256(
+                        root,
+                        source_identity,
+                    )
+                    item["source_type"] = "directory"
+                else:
+                    item["source_sha256"] = _load_bound_file(
+                        root, source_identity, _CONTROL_LIMIT
+                    ).sha256
+                    item["source_type"] = "file"
             volumes.append(item)
         if observed_mounts != set(_COMPOSE_VOLUME_ALLOWLIST.get(service_id, ())):
             raise ReleaseManifestError(
@@ -6584,9 +6885,29 @@ def _normalized_compose_observation(
                 if not source.is_absolute():
                     source = root / source
                 try:
-                    volume["source"] = source.resolve(strict=True).relative_to(
-                        root.resolve(strict=True)
-                    ).as_posix()
+                    resolved_source = source.resolve(strict=True)
+                    try:
+                        volume["source"] = resolved_source.relative_to(
+                            root.resolve(strict=True)
+                        ).as_posix()
+                    except ValueError:
+                        expected_external = (
+                            root.parent / "config/x402-official"
+                        ).resolve(strict=True)
+                        if (
+                            volume.get("target") != "/run/config"
+                            or resolved_source != expected_external
+                        ):
+                            raise ReleaseManifestError(
+                                "Compose bind source cannot be normalized"
+                            )
+                        digest = _bound_external_directory_sha256(
+                            resolved_source,
+                            label="release-scoped x402 config",
+                        )
+                        volume["source"] = (
+                            "@release-config/x402-official:" + digest
+                        )
                 except (OSError, ValueError) as exc:
                     raise ReleaseManifestError(
                         "Compose bind source cannot be normalized"

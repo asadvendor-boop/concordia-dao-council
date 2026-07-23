@@ -20,8 +20,6 @@ COPY agents ./agents
 COPY proposal-simulator ./proposal-simulator
 COPY integrations ./integrations
 COPY scripts ./scripts
-COPY artifacts/live ./artifacts/live
-COPY artifacts/rwa ./artifacts/rwa
 COPY docs ./docs
 COPY dashboard/app/proof ./dashboard/app/proof
 COPY dashboard/app/judge ./dashboard/app/judge

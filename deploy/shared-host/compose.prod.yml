@@ -135,9 +135,24 @@ services:
       CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
       CSPR_CLOUD_SERVICE_SCOPE: mercer
       X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
+      CONCORDIA_RELEASE_ARTIFACTS_DIR: /app/artifacts
+      CONCORDIA_PROOF_REGISTRY_DIR: /run/config/proof-registry
+      CONCORDIA_CARD_CHAIN_ROOTS_FILE: /app/artifacts/live/card-chain-roots-v1.json
     secrets: *concordia-secrets
     volumes:
       - concordia-data:/data
+      - type: bind
+        source: ${CONCORDIA_RELEASE_ARTIFACTS_HOST_DIR:?Set CONCORDIA_RELEASE_ARTIFACTS_HOST_DIR}
+        target: /app/artifacts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CONCORDIA_PROOF_REGISTRY_HOST_DIR:?Set CONCORDIA_PROOF_REGISTRY_HOST_DIR}
+        target: /run/config/proof-registry
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       concordia-edge:
         aliases:
@@ -230,7 +245,12 @@ services:
       - x402_official_gateway_token
     volumes:
       - x402_official_data:/data
-      - ${X402_OFFICIAL_CONFIG_DIR:-/opt/apps/concordia/config/x402-official}:/run/config:ro
+      - type: bind
+        source: ${X402_OFFICIAL_CONFIG_DIR:?Set X402_OFFICIAL_CONFIG_DIR}
+        target: /run/config
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       concordia-edge:
         aliases:

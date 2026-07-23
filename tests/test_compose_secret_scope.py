@@ -276,13 +276,19 @@ def test_official_x402_service_is_frozen_internal_and_persistent() -> None:
             "/run/secrets/x402_official_gateway_token"
         ),
     }
-    assert set(service["volumes"]) == {
+    assert service["volumes"] == [
         "x402_official_data:/data",
-        (
-            "${X402_OFFICIAL_CONFIG_DIR:-/opt/apps/concordia/config/"
-            "x402-official}:/run/config:ro"
-        ),
-    }
+        {
+            "type": "bind",
+            "source": (
+                "${X402_OFFICIAL_CONFIG_DIR:"
+                "?Set X402_OFFICIAL_CONFIG_DIR}"
+            ),
+            "target": "/run/config",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
     assert "x402_official_data" in document["volumes"]
     assert set(service["networks"]) == {"concordia-edge", "concordia-internal"}
     assert service["networks"]["concordia-internal"]["aliases"] == [

@@ -1227,7 +1227,22 @@ def _compose_raw() -> dict[str, object]:
                 "type": "volume",
                 "source": "concordia-data",
                 "target": "/data",
-            }
+                "volume": {},
+            },
+            {
+                "type": "bind",
+                "source": "artifacts",
+                "target": "/app/artifacts",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            },
+            {
+                "type": "bind",
+                "source": "artifacts/live/proof-registry",
+                "target": "/run/config/proof-registry",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            },
         ],
         "ipfs": [
             {
@@ -1242,20 +1257,30 @@ def _compose_raw() -> dict[str, object]:
                 "source": "deploy/shared-host/otel-collector-config.yml",
                 "target": "/etc/otelcol/config.yml",
                 "read_only": True,
+                "bind": {},
             }
         ],
         "x402-official": [
             {
                 "type": "volume",
-                "source": "concordia-x402-official-data",
+                "source": "x402_official_data",
                 "target": "/data",
-            }
+                "volume": {},
+            },
+            {
+                "type": "bind",
+                "source": "@release-config/x402-official",
+                "target": "/run/config",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            },
         ],
         "x402-provider": [
             {
                 "type": "volume",
-                "source": "concordia-safepay-data",
+                "source": "x402_provider_data",
                 "target": "/data",
+                "volume": {},
             }
         ],
     }
@@ -1958,6 +1983,15 @@ def _snapshot(
     compose["services"]["otel-collector"]["volumes"][0]["source"] = str(
         repository / "deploy/shared-host/otel-collector-config.yml"
     )
+    compose["services"]["gateway"]["volumes"][1]["source"] = str(
+        repository / "artifacts"
+    )
+    compose["services"]["gateway"]["volumes"][2]["source"] = str(
+        repository / "artifacts/live/proof-registry"
+    )
+    compose["services"]["x402-official"]["volumes"][1]["source"] = str(
+        repository.parent / "config/x402-official"
+    )
     integration_commit = json.loads(
         (repository / COMMAND_GATE_RECEIPT_PATHS["G2"]).read_bytes()
     )["integration_commit"]
@@ -2047,6 +2081,14 @@ def release_repository(
 ) -> tuple[Path, dict[str, str], FakeCollector, FakeVerifier]:
     repository = tmp_path / "repository"
     repository.mkdir()
+    release_config = tmp_path / "config/x402-official"
+    release_config.mkdir(parents=True)
+    (release_config / "x402-governance-v3.json").write_bytes(
+        b'{"schema_version":"fixture.governance.v1"}\n'
+    )
+    (release_config / "x402-resources.json").write_bytes(
+        b'{"resources":[]}\n'
+    )
     _git(repository, "init", "-b", "main")
     _git(repository, "config", "user.name", "Release Test")
     _git(repository, "config", "user.email", "release@example.invalid")
@@ -3697,6 +3739,57 @@ def test_compose_rejects_unexpected_or_legacy_payment_secret_targets(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
     )
     with pytest.raises(ReleaseManifestError, match="secret target|legacy"):
+        capture_release_observations_once(repository)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "artifact_auto_create",
+        "registry_auto_create",
+        "missing_registry_override",
+        "external_artifact_source",
+        "unscoped_x402_config",
+    ],
+)
+def test_compose_rejects_mutable_or_unscoped_release_directory_binds(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    repository, commits, _, verifier = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    gateway_volumes = snapshot.compose["services"]["gateway"]["volumes"]
+    official_volumes = snapshot.compose["services"]["x402-official"]["volumes"]
+    if mutation == "artifact_auto_create":
+        gateway_volumes[1]["bind"]["create_host_path"] = True
+    elif mutation == "registry_auto_create":
+        gateway_volumes[2]["bind"]["create_host_path"] = True
+    elif mutation == "missing_registry_override":
+        gateway_volumes.pop(2)
+    elif mutation == "external_artifact_source":
+        gateway_volumes[1]["source"] = str(repository.parent / "config")
+    else:
+        other = repository.parent / "unscoped-x402"
+        other.mkdir()
+        (other / "x402-resources.json").write_text(
+            '{"resources":[]}\n',
+            encoding="ascii",
+        )
+        official_volumes[1]["source"] = str(other)
+    monkeypatch.setattr(
+        release_manifest,
+        "_collector_factory",
+        lambda root: FakeCollector([snapshot]),
+    )
+    monkeypatch.setattr(
+        release_manifest, "_proof_verifier_factory", lambda root: verifier
+    )
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="mount allowlist|host path|outside|release scope|may not create",
+    ):
         capture_release_observations_once(repository)
 
 

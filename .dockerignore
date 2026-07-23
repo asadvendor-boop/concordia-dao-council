@@ -16,3 +16,4 @@ dist
 build
 *.zip
 .pytest_cache
+artifacts/
