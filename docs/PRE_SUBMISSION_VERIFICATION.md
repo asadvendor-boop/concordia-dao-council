@@ -31,6 +31,64 @@ The qualification-round proof below remains historical context. Finals v3,
 treasury, SafePay v2, and official-x402 claims are published only after their
 separately versioned live artifacts and release gates pass.
 
+### Rendered-link gate invocation
+
+The organizer crawl is a separate, locked, read-only Playwright collector. It
+does not replace or weaken G12 or G13. Its request file fixes the public
+origins, 11 dashboard route states, five Proof tabs, proposal/recording query
+states, custom-domain and documentation surfaces, repository, DoraHacks,
+initial-round video, socials, and every historical Casper receipt linked to
+judges. The collector also discovers rendered anchors, first-party downloads,
+and first-party assets from the DOM.
+
+It fails closed on any non-read application request, invalid URL, doubled
+`/dashboard/dashboard` base path, missing document anchor, undocumented
+redirect, page/console error, failed or 4xx first-party request, empty download,
+route/query mismatch, or Proof-tab mismatch. Redirects are allowed only when
+their exact source, destination, and status are committed in
+`handoff/ORGANIZER_LINK_GATE_REQUEST.json`; there is no runtime override.
+
+Run this against the exact deployed release-candidate SHA before G12:
+
+```bash
+mkdir -p release/organizer
+node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
+  > release/organizer/RENDERED_LINK_AUDIT.json
+test "$(jq -r .verdict release/organizer/RENDERED_LINK_AUDIT.json)" = PASS
+```
+
+The stdout document is canonical JSON and is the machine-readable G12 link
+receipt. Commit it with the exact release candidate and bind that commit in the
+normal release manifest. A failed collector writes no success document.
+
+After the new video and DoraHacks edit, run the independent organizer crawl
+again before G13; G13's existing video/embed/link receipt still runs afterward:
+
+```bash
+node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
+  > release/organizer/RENDERED_LINK_AUDIT_G13.json
+test "$(jq -r .verdict release/organizer/RENDERED_LINK_AUDIT_G13.json)" = PASS
+node scripts/run_g13_submission_gate.mjs --help
+```
+
+The G13 result is separately named so the committed G12 audit is never silently
+overwritten. Both outputs are generated observations; neither may be
+hand-edited into a pass.
+
+For deterministic offline CI, replay the same inventory and validators with
+the committed synthetic fixture:
+
+```bash
+node scripts/run_organizer_link_gate.mjs \
+  --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
+  --fixture tests/fixtures/organizer-link-gate-pass.json
+```
+
+Fixture mode never launches a browser or opens a network connection. It proves
+the gate mechanics, census, canonical serialization, and refusal paths; it is
+never release evidence and must never be written to either release audit path.
+Only `collection_mode: live_incognito` qualifies for G12/G13.
+
 ## Core proof path
 
 The final proof is Locke submitting the approved governance receipt to a deployed Casper Testnet contract. A mock receipt hash is only for rehearsal.
