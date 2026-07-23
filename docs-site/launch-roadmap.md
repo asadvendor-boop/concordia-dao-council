@@ -19,13 +19,18 @@ Each of these is `PENDING_PROOF` until its publication gate passes (see
 - **Native treasury execution** and the **two corrected payment rails** —
   [Treasury Execution](treasury-execution.md), [SafePay Lite](safepay-lite.md),
   and [Official x402](official-x402.md).
+- **Separately versioned Mainnet canary** — only after the complete Testnet
+  release candidate is green: a Mainnet-native v3 build, tiny spend-capped
+  pre-quorum refusal → exact authorization → one bound transfer sequence. It
+  never replaces or relabels the Testnet/canonical proof.
+  `PENDING_PROOF`: reproducible Mainnet build + independently verified canary.
 
 ## Beyond the final round
 
 - A DAO adoption pack and policy templates for DeFi treasuries and tokenized-RWA
   proposals (see [Policy Matrix](policy-matrix.md)).
-- Productizing the quorum-enforced, exact-envelope execution path toward Casper
-  mainnet, with the mainnet build first replacing the build-time dependencies
+- Productizing the narrow, separately versioned Mainnet canary into an
+  operational Mainnet deployment, after replacing the build-time dependencies
   dismissed in the security register.
 
 ## What is already live

@@ -25,7 +25,7 @@ from a generated, schema-validated release manifest after live capture and are
 | Browser wallet receipt | `56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf` |
 | Supplemental dynamic lifecycle proof | `DAO-PROP-DYN-002` → `68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0` |
 | Supplemental RWA receipt | `DAO-PROP-RWA-001` → `3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc` |
-| x402 SafePay Lite payment (historical, v1 flow) | `dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c` |
+| SafePay Lite / HTTP-402-style native-CSPR payment (historical, v1 flow) | `dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c` |
 | IPFS archive CID | `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq` |
 
 ## The Proof Center

@@ -22,9 +22,12 @@ dismissed-findings register — is the repository's
 
 ## Deterministic authority
 
-Models advise; the deterministic Concordia Core owns policy checks, nonce
-binding, exact-envelope validation, quorum gating, and Casper execution. A human
-keeps the final no. See [Agent & Role Taxonomy](agent-taxonomy.md) and
+Models advise. The deterministic Concordia Core owns off-chain policy checks,
+nonce binding, exact-envelope authorization, and the trusted execution boundary;
+the Casper contract independently owns the on-chain quorum gate. The v3 contract
+adds on-chain exact-envelope authorization only when its separately versioned
+live proof passes. A human keeps the final no. See
+[Agent & Role Taxonomy](agent-taxonomy.md) and
 [Architecture & Trust Boundaries](architecture.md).
 
 ## Approval boundary

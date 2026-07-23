@@ -9,13 +9,42 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from shared.proof_registry import proof_item_is_green
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _load_proof_item_is_green():
+    """Load the stdlib-only registry module without importing shared.__init__.
+
+    ``shared.__init__`` intentionally exports application models that require
+    third-party packages.  This reviewer-facing checker is advertised as
+    dependency-free, so it loads the fixed repository module directly and
+    exposes only its fail-closed predicate.
+    """
+
+    module_path = ROOT / "shared" / "proof_registry.py"
+    spec = importlib.util.spec_from_file_location(
+        "_concordia_receipt_proof_registry", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("proof registry verifier could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    predicate = getattr(module, "proof_item_is_green", None)
+    if not callable(predicate):
+        raise RuntimeError("proof registry verifier is unavailable")
+    return predicate
+
+
+proof_item_is_green = _load_proof_item_is_green()
 
 
 HASH64_RE = re.compile(r"^[0-9a-fA-F]{64}$")

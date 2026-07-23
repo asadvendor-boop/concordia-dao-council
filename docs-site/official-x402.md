@@ -5,14 +5,14 @@ Concordia integrates the **official Casper x402 payment standard**: WCSPR
 (Wrapped CSPR) transfers authorized off-chain and settled through the
 CSPR.cloud x402 facilitator.
 
-!!! warning "Status: integration in progress — no live settlement evidence yet"
-    The official x402 service described here is current work (its WP5 corrected
-    commit is not yet integrated). It depends on the v3 exact-envelope receipt
-    contract (see [On-Chain Governance Receipts](governance-receipts.md)), which
-    is not yet live. No live official-x402 settlement transaction exists to cite.
-    The design below is what is being built, and it is fail-closed at every step:
-    until its own proofs pass, the honest status is *not proven live* — never
-    "assumed working". `PENDING_PROOF`: official x402 settlement — facilitator
+!!! warning "Status: implemented locally — no live settlement evidence yet"
+    The official x402 service described here is present in the local release
+    candidate and remains fail-closed while integration gates run. It depends on
+    the v3 exact-envelope receipt contract (see
+    [On-Chain Governance Receipts](governance-receipts.md)), which is not yet
+    live. No official-x402 settlement transaction exists to cite. Until its own
+    hosted proofs pass, the honest status is *not proven live* — never "assumed
+    working". `PENDING_PROOF`: official x402 settlement — facilitator
     `success:true` + finalized WCSPR `transfer_with_authorization` +
     post-settlement on-chain readback.
 
@@ -80,4 +80,4 @@ checked via `GET /supported` (x402 version 2, `exact` scheme,
 | Authorization | On-chain transfer with quote-derived transfer ID | Signed off-chain `transfer_with_authorization` |
 | Settlement authority | Concordia Risk Oracle provider (consumption ledger) | CSPR.cloud x402 facilitator, governance-gated |
 | Duplicate protection | Durable `(network, payment_hash)` consumption ledger | Durable `(network, signed_payment_payload_hash)` fulfillment ledger |
-| Status | Implemented; live v2 evidence pending | In progress; depends on v3, no live evidence yet |
+| Status | Implemented locally; live v2 evidence pending | Implemented locally; acceptance and live v3-bound evidence pending |

@@ -17,9 +17,10 @@ The constitutional execution firewall for AI-run DAOs on Casper.
 
 Concordia DAO Council is the Casper governance firewall for AI-run DAOs: four
 deliberative agents advise, a deterministic core owns every state transition and
-binds execution to the exact approved envelope, dissent is preserved as an
-on-chain receipt, and browser-wallet quorum is proven on-chain — the same action
-is reverted before quorum and accepted after quorum.
+binds off-chain execution to the exact approved envelope, dissent is preserved in
+the evidence chain and its hash is anchored in the on-chain receipt, and
+browser-wallet quorum is proven on-chain — the same action is reverted before
+quorum and accepted after quorum.
 
 ## The problem — a DeFi and RWA treasury-risk problem
 
@@ -48,14 +49,17 @@ Concordia has six named personas, but they do not carry equal authority:
 - **Locke** is an authorization-bound, model-involved execution role — not a
   fifth deliberative agent. It submits only the exact envelope the deterministic
   core has authorized.
-- **Concordia Core** is deterministic infrastructure, not a model. It owns every
-  policy check, nonce, quorum gate, exact-envelope binding, and Casper execution.
+- **Concordia Core** is deterministic infrastructure, not a model. It owns the
+  off-chain policy checks, nonces, exact-envelope authorization, and trusted
+  execution boundary. Casper contracts independently enforce on-chain quorum;
+  the v3 contract adds on-chain exact-envelope authorization once its separately
+  versioned live proof passes.
 - **Wells** is a non-reasoning archival/presentation persona. The deterministic
   archive is produced by Locke/Core; Wells presents the record and performs no
   model reasoning.
 
-No model has authority. Agents advise; the chain decides; a human keeps the
-final no.
+No model has authority. Agents advise; deterministic Core constrains off-chain
+authorization; the contract decides on-chain quorum; a human keeps the final no.
 
 ## Honest council-depth comparison
 
@@ -108,13 +112,14 @@ receipt.
 
 ### 1. Treasury execution — native CSPR, authorized on-chain
 
-A real treasury transfer, authorized by on-chain quorum, bound to the approved
-envelope hash, executed as a native transfer (a 625 CSPR snapshot → a 50 CSPR
-transfer, transfer ID bound to the authorized envelope). One-time v3 finalization
-is authorization, not execution; the executor's durable journal is the replay
-lock. Documented boundary, stated plainly: Concordia prevents duplicate execution
-through its trusted executor; it cannot prevent an independently compromised
-treasury key from bypassing that executor.
+The finals live sequence is designed to execute one real native-CSPR treasury
+transfer authorized by on-chain quorum and bound to the approved envelope hash
+(a 625 CSPR snapshot → a 50 CSPR transfer, with the transfer ID bound to the
+authorized envelope). One-time v3 finalization is authorization, not execution;
+the executor's durable journal is the replay lock. Documented boundary, stated
+plainly: once the pending live gate passes, this proves duplicate prevention
+inside Concordia's trusted executor; it cannot prevent an independently
+compromised treasury key from bypassing that executor.
 `PENDING_PROOF`: treasury execution — finalized native-transfer deploy
 (625 CSPR snapshot → 50 CSPR transfer, bound transfer ID) + execution artifact.
 
@@ -124,25 +129,27 @@ The historical, verified receipt: the council pays for an external specialist
 risk report, and 2.5 CSPR settles on-chain before that evidence is allowed to
 influence the decision — `dcb35f42…`, verified at block 8,339,447, in **native
 CSPR** through SafePay Lite (a naming correction from round 1, which imprecisely
-labelled it "x402"). The finals upgrade gives SafePay Lite durable single-use
-consumption (v2): every issued quote is persisted immutably, every payment is
-consumed exactly once, an exact same-resource retry is idempotent, any
-cross-resource reuse is terminally rejected, and all of it survives provider
-restart.
+labelled it "x402"). The locally verified finals implementation adds durable
+single-use consumption (v2): every issued quote is persisted immutably, every
+payment is consumed exactly once, an exact same-resource retry is idempotent,
+any cross-resource reuse is terminally rejected, and all of it survives provider
+restart. Those are implementation properties, not a hosted/live claim until the
+pending exercise below passes.
 `PENDING_PROOF`: SafePay Lite v2 replay-safe live artifact — idempotent
 same-resource retry + terminal cross-resource rejection, both surviving provider
 restart.
 
 ### 3. Official x402 — WCSPR via the CSPR.cloud facilitator
 
-A separate, greenfield settlement service implements the official x402 protocol
-(x402 version 2, `exact` scheme, network `casper:casper-test`): a signed
+The finals candidate contains a separate greenfield service for the official
+x402 protocol (x402 version 2, `exact` scheme, network
+`casper:casper-test`). Its intended live sequence is a signed
 `transfer_with_authorization` over **WCSPR** — a wrapped token distinct from
-native CSPR — verified and settled through the official CSPR.cloud facilitator,
-gated behind on-chain v3 finalization of the governing envelope. The service is
-fail-closed: HTTP 200, `/supported`, or `isValid:true` are never treated as
+native CSPR — verified and settled through the CSPR.cloud facilitator, gated
+behind on-chain v3 finalization of the governing envelope. The local service
+fails closed: HTTP 200, `/supported`, or `isValid:true` are never treated as
 settlement success; only `success:true` plus a finalized, read-back on-chain
-transfer counts.
+transfer can lift the pending live gate.
 `PENDING_PROOF`: official x402 settlement — facilitator `success:true` +
 finalized WCSPR `transfer_with_authorization` + post-settlement on-chain
 readback.
@@ -156,11 +163,12 @@ readback.
   broken links, and we re-run it throughout the judging window.
 - **Failure handling promoted to the headline.** The unhappy path is the demo,
   and judges can reproduce it live.
-- **No fixture mode in the judge path.** The deployment you are testing runs with
-  mocking disabled — model calls, chain reads, and payments are live against
-  Casper Testnet. The judge walkthrough replays a genuine recorded run from its
-  sealed evidence chain (labelled as a reconstruction, never a fabricated
-  animation), and you can trigger a fresh proposal yourself from the dashboard.
+- **No fabricated proof in the judge path.** The current walkthrough replays a
+  genuine recorded run from its sealed evidence chain (labelled as a
+  reconstruction, never a fabricated animation). The finals release will enable
+  its judge-safe fresh-proposal path only after the hosted configuration proves
+  live model calls, chain reads, and payment boundaries.
+  `PENDING_PROOF`: hosted RC configuration + fresh-proposal capability exercise.
 - **Finals engineering upgrade.** A typed exact-envelope v3 contract, three
   cleanly separated payment claims, a hardened judge-demo path, a public docs
   site, and an npm verifier package — each carries its own proof status; nothing
