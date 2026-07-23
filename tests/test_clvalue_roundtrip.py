@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 import scripts.run_v3_live_proof as live_proof_runner
+import scripts.verify_v3_proof as proof_verifier
 from pycspr import serializer
 from pycspr.factory.accounts import parse_private_key_bytes
 from pycspr.factory.deploys import (
@@ -74,6 +75,58 @@ DEPLOYMENT_MANIFEST = (
     ROOT / "contracts/odra-governance-receipt-v3/deployment.manifest.json"
 )
 HISTORICAL_ODRA_MANIFEST = ROOT / "handoff/HISTORICAL_ODRA_SHA256.txt"
+
+
+def _test_git(repository: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ("/usr/bin/git", *arguments),
+        cwd=repository,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _release_identity_lineage(
+    tmp_path: Path,
+    *,
+    change_release_tree: bool = False,
+) -> tuple[Path, str, str, str]:
+    repository = tmp_path / "release-lineage"
+    repository.mkdir()
+    _test_git(repository, "init", "--quiet")
+    _test_git(repository, "config", "user.name", "Concordia Test")
+    _test_git(repository, "config", "user.email", "concordia@example.invalid")
+    for index, relative in enumerate(proof_verifier._V3_RELEASE_IDENTITY_PATHS):
+        release_path = repository / relative
+        release_path.parent.mkdir(parents=True, exist_ok=True)
+        release_path.write_bytes(f"release-file-{index}\n".encode("ascii"))
+    _test_git(repository, "add", "--all")
+    _test_git(repository, "commit", "--quiet", "-m", "source release")
+    source_commit = _test_git(repository, "rev-parse", "HEAD^{commit}")
+
+    if change_release_tree:
+        changed = repository / proof_verifier._V3_RELEASE_IDENTITY_PATHS[1]
+        changed.write_bytes(b"changed release file\n")
+    (repository / "deployment-event.txt").write_text(
+        "deployment completed\n",
+        encoding="utf-8",
+    )
+    _test_git(repository, "add", "--all")
+    _test_git(repository, "commit", "--quiet", "-m", "deployment event")
+    deployment_commit = _test_git(repository, "rev-parse", "HEAD^{commit}")
+
+    (repository / "post-deployment-receipt.txt").write_text(
+        "receipt committed\n",
+        encoding="utf-8",
+    )
+    _test_git(repository, "add", "--all")
+    _test_git(repository, "commit", "--quiet", "-m", "post-deployment receipt")
+    head_commit = _test_git(repository, "rev-parse", "HEAD^{commit}")
+    assert len({source_commit, deployment_commit, head_commit}) == 3
+    return repository, source_commit, deployment_commit, head_commit
 
 
 @pytest.mark.parametrize(
@@ -1204,6 +1257,66 @@ def test_offline_verifier_rejects_arbitrary_valid_git40_release_commits(
 
     with pytest.raises(ProofVerificationError, match="release commit identity"):
         verify_v3_proof_document(proof)
+
+
+def test_release_commit_identity_accepts_distinct_lineage_with_unchanged_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, source_commit, deployment_commit, _head_commit = (
+        _release_identity_lineage(tmp_path)
+    )
+    monkeypatch.setattr(proof_verifier, "ROOT", repository)
+
+    proof_verifier._verify_release_commit_identity(
+        source_commit=source_commit,
+        deployment_commit=deployment_commit,
+    )
+
+
+def test_release_commit_identity_rejects_distinct_lineage_with_changed_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, source_commit, deployment_commit, _head_commit = (
+        _release_identity_lineage(tmp_path, change_release_tree=True)
+    )
+    monkeypatch.setattr(proof_verifier, "ROOT", repository)
+
+    with pytest.raises(ProofVerificationError, match="release commit identity"):
+        proof_verifier._verify_release_commit_identity(
+            source_commit=source_commit,
+            deployment_commit=deployment_commit,
+        )
+
+
+def test_release_commit_identity_ignores_path_git_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, source_commit, deployment_commit, _head_commit = (
+        _release_identity_lineage(tmp_path)
+    )
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        ': > "$0.invoked"\n'
+        "exit 97\n",
+        encoding="ascii",
+    )
+    fake_git.chmod(0o755)
+    invoked = fake_bin / "git.invoked"
+    monkeypatch.setattr(proof_verifier, "ROOT", repository)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    proof_verifier._verify_release_commit_identity(
+        source_commit=source_commit,
+        deployment_commit=deployment_commit,
+    )
+
+    assert not invoked.exists()
 
 
 @pytest.mark.parametrize(

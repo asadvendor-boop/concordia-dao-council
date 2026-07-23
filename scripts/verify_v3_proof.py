@@ -9,7 +9,6 @@ import hashlib
 import hmac
 import json
 import re
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -29,6 +28,7 @@ from scripts.install_governance_receipt_v3 import (
 )
 from scripts.prepare_v3_envelope import prepare_v3_envelope
 from scripts.read_v3_state import validate_verified_readback, verify_and_seal_readback_artifact
+from shared.bound_command import BoundCommandError, BoundCommandResult, _run_bound_git
 
 
 class ProofVerificationError(ValueError):
@@ -229,15 +229,21 @@ def _verify_release_commit_identity(
 ) -> None:
     error = "deployment release commit identity cannot be verified"
 
-    def git_output(*arguments: str) -> bytes:
+    def git_run(
+        *arguments: str,
+        check: bool = True,
+    ) -> BoundCommandResult:
         try:
-            return subprocess.check_output(
-                ["git", *arguments],
-                cwd=ROOT,
-                stderr=subprocess.DEVNULL,
+            return _run_bound_git(
+                ROOT,
+                arguments,
+                check=check,
             )
-        except (OSError, subprocess.CalledProcessError) as exc:
+        except (BoundCommandError, OSError) as exc:
             raise ProofVerificationError(error) from exc
+
+    def git_output(*arguments: str) -> bytes:
+        return git_run(*arguments).stdout
 
     head = git_output("rev-parse", "--verify", "HEAD^{commit}").decode().strip().lower()
     resolved_source = (
@@ -262,38 +268,26 @@ def _verify_release_commit_identity(
         (source_commit, deployment_commit),
         (deployment_commit, head),
     ):
-        try:
-            ancestry = subprocess.run(
-                ["git", "merge-base", "--is-ancestor", ancestor, descendant],
-                cwd=ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        except OSError as exc:
-            raise ProofVerificationError(error) from exc
+        ancestry = git_run(
+            "merge-base",
+            "--is-ancestor",
+            ancestor,
+            descendant,
+            check=False,
+        )
         if ancestry.returncode != 0:
             raise ProofVerificationError(error)
 
-    try:
-        worktree = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--quiet",
-                "--no-ext-diff",
-                "--no-textconv",
-                "HEAD",
-                "--",
-                *_V3_RELEASE_IDENTITY_PATHS,
-            ],
-            cwd=ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError as exc:
-        raise ProofVerificationError(error) from exc
+    worktree = git_run(
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        "HEAD",
+        "--",
+        *_V3_RELEASE_IDENTITY_PATHS,
+        check=False,
+    )
     if worktree.returncode != 0:
         raise ProofVerificationError(error)
 
