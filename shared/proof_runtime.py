@@ -775,6 +775,21 @@ def build_judge_walkthrough(evidence: dict[str, Any]) -> dict[str, Any]:
     safepay = build_safepay_lite(evidence)
     mandate = build_dao_mandate(evidence)
     invariants = build_invariant_runner(evidence, safepay)
+    quorum_item = _quorum_blocking_proof_item(
+        str(evidence.get("proposal_id") or CANONICAL_PROPOSAL_ID)
+    )
+    quorum_step = {
+        "step": 7,
+        "title": "Quorum approval",
+        "summary": (
+            "The current exact-envelope v3 pre-quorum rejection was independently verified."
+            if quorum_item is not None
+            else "No unique green current exact-envelope v3 quorum observation is available."
+        ),
+        "status": "verified" if quorum_item is not None else "unavailable",
+    }
+    if quorum_item is not None:
+        quorum_step["proof_id"] = quorum_item["proof_id"]
     return {
         "title": "Verify Concordia in 90 seconds",
         "positioning": PRODUCT_FRAMING,
@@ -787,7 +802,7 @@ def build_judge_walkthrough(evidence: dict[str, Any]) -> dict[str, Any]:
             {"step": 4, "title": "Invariant runner", "summary": "Machine-verifiable checks catch unsafe conditions.", "status": invariants["status"]},
             {"step": 5, "title": "Verity dissent", "summary": "Dissent and policy violation are preserved in the proof chain."},
             {"step": 6, "title": "DAO Mandate", "summary": mandate["custody_rule"], "mandate_hash": mandate["mandate_hash"]},
-            {"step": 7, "title": "Quorum approval", "summary": "Supplemental quorum proof confirms the safe envelope path."},
+            quorum_step,
             {"step": 8, "title": "Locke execution", "summary": "Locke executes only the approved mandate."},
             {"step": 9, "title": "Public proof", "summary": "CSPR.live, IPFS, proof pack, and certificate verify the result."},
         ],
