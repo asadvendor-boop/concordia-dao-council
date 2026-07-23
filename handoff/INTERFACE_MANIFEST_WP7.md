@@ -1,7 +1,7 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `9d623a7` (corrections for CODEX_REVIEW_CLAUDE_WP7, on top of `dfa3cd2`)
+- Producer commit: `c700fcc` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` re-review predicate fixes; Playwright 65 x3 + contract 17/17 at `c700fcc`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §13 (provenance-aware proof registry), §12 (SafePay v2 / official x402)
 - Lane status: production build clean; 40/40 Playwright green x3 consecutive; `tests/test_dashboard_contract.py` 17/17 (fully migrated, nothing deleted); `git diff --check` clean.
@@ -15,6 +15,14 @@
 The dashboard now renders honest **pending** states wherever the new registry
 payload isn't served yet. To light up the verified surfaces, Codex must serve
 the payloads below with the EXACT `G1_CROSS_LANE_SCHEMAS.json` shapes.
+
+## Re-review predicate pass (at `c700fcc`) — new Codex-owned observations the fail-closed dashboard consumes
+All ten reproduced fail-open predicates are fixed: affirmative-decision-only approvals (every card type), recovery ≠ verification (including `deriveProposalFacts.receiptVerified`, mandating test deliberately migrated), exact proposal/plan-hash binding (missing = NOT bound), per-check observed fields instead of one recycled `chain_valid`, explicit-predicate-only ProofCenter safety/reputation/live/IPFS panels, and zero static online indicators (including the workspace room header). **Consequence: live runs render the honest non-asserted state until the gateway emits these observations (all Codex-owned):**
+- an explicit affirmative `decision` field on the authorization card (`APPROVED`/equivalent) — presence/not-denied no longer authorizes;
+- the SEALED ResponsePlan card hash as the approval's plan-hash binding (the pre-seal SHA-256 no longer matches);
+- `evidence.sender_roles_verified === true` (new field; renders "unavailable" until emitted);
+- explicit `receipt_verified: true` observations on execution receipts (recovery events no longer count);
+- `run.human_intervention === true` as the consumed-authorization observation.
 
 ## Public proof registry — `GET /proof-registry/v1/{proposal_id}` (Codex / WP4)
 Serve the exact `public_proof_registry_v1` shape: `{schema_version:1, generated_at, proposal_id, items:[...]}`, each item the full 28-field object with `checks:[{name, required, passed, source, observed_at, detail_code?}]`. Dashboard binding contracts:
