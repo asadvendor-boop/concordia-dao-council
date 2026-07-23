@@ -218,12 +218,12 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "install_ttl",
         "finality",
         "verified_install_deploy",
+        "two_node_finality",
         "raw_rpc",
     }
-    if not isinstance(value, Mapping) or frozenset(value) not in {
-        frozenset(expected_keys),
-        frozenset(expected_keys | {"two_node_finality"}),
-    }:
+    if isinstance(value, Mapping) and "two_node_finality" not in value:
+        raise ProofVerificationError("deployment two-node finality is required")
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
         raise ProofVerificationError("deployment manifest field set is not finalized/frozen")
     if value["status"] != "finalized" or value["network"] != "casper-test":
         raise ProofVerificationError("deployment manifest is not finalized on casper-test")
@@ -289,7 +289,6 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
             "status": "response_lost_reconciled_by_hash",
             "deploy_hash": value["install_deploy_hash"],
         }
-        and "two_node_finality" in value
     )
     if not broadcast_is_exact and not broadcast_was_reconciled:
         raise ProofVerificationError("deployment broadcast evidence is invalid")
@@ -316,24 +315,77 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "deploy_hash": install_facts["deploy_hash"],
     }:
         raise ProofVerificationError("deployment finality summary differs from raw node evidence")
-    if "two_node_finality" in value:
-        raw_two_node = value["two_node_finality"]
-        if not isinstance(raw_two_node, Mapping):
-            raise ProofVerificationError("deployment two-node finality is invalid")
-        try:
-            two_node = verify_two_node_deploy_finality(
-                raw_two_node.get("node_observations", []),
-                deploy_hash=install_facts["deploy_hash"],
-            )
-        except InstallValidationError as exc:
-            raise ProofVerificationError(
-                "deployment two-node finality is invalid"
-            ) from exc
-        for field in ("deploy_hash", "block_hash", "block_height"):
-            if two_node[field] != raw_two_node.get(field):
-                raise ProofVerificationError(
-                    "deployment two-node finality summary differs from raw evidence"
-                )
+    raw_two_node = value["two_node_finality"]
+    expected_two_node_fields = {
+        "status",
+        "block_hash",
+        "block_height",
+        "state_root_hash",
+        "block_timestamp",
+        "finalized_at",
+        "observed_at",
+        "deploy_hash",
+        "corroboration_count",
+        "success",
+        "user_error",
+        "node_observations",
+        "endpoint_identities",
+    }
+    if (
+        not isinstance(raw_two_node, Mapping)
+        or set(raw_two_node) != expected_two_node_fields
+        or not isinstance(raw_two_node["node_observations"], list)
+        or len(raw_two_node["node_observations"]) != 2
+        or any(
+            not isinstance(observation, Mapping)
+            for observation in raw_two_node["node_observations"]
+        )
+    ):
+        raise ProofVerificationError("deployment two-node finality is invalid")
+    try:
+        two_node = verify_two_node_deploy_finality(
+            raw_two_node["node_observations"],
+            deploy_hash=install_facts["deploy_hash"],
+        )
+    except InstallValidationError as exc:
+        raise ProofVerificationError(
+            "deployment two-node finality is invalid"
+        ) from exc
+    derived_two_node_fields = {
+        "block_hash",
+        "block_height",
+        "state_root_hash",
+        "block_timestamp",
+        "finalized_at",
+        "deploy_hash",
+        "corroboration_count",
+        "success",
+        "user_error",
+        "endpoint_identities",
+    }
+    if (
+        raw_two_node["status"] != "finalized"
+        or any(
+            raw_two_node[field] != two_node[field]
+            for field in derived_two_node_fields
+        )
+        or two_node["block_hash"] != install_facts["block_hash"]
+        or two_node["block_height"] != install_facts["block_height"]
+        or two_node["state_root_hash"] != value["install_state_root_hash"]
+    ):
+        raise ProofVerificationError(
+            "deployment two-node finality summary differs from raw evidence"
+        )
+    finalized_time = _utc_timestamp(
+        raw_two_node["finalized_at"], "deployment two-node finality finalized_at"
+    )
+    observed_time = _utc_timestamp(
+        raw_two_node["observed_at"], "deployment two-node finality observed_at"
+    )
+    if observed_time < finalized_time:
+        raise ProofVerificationError(
+            "deployment two-node finality observation predates finalization"
+        )
 
     state_root = _install_rpc(raw["state_root"], method="chain_get_state_root_hash")
     if state_root["request"]["params"] != {"block_identifier": {"Hash": value["install_block_hash"]}}:
@@ -390,6 +442,7 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         "install_deploy_hash": install_facts["deploy_hash"],
         "install_block_hash": install_facts["block_hash"],
         "install_block_height": install_facts["block_height"],
+        "install_observed_at": raw_two_node["observed_at"],
     }
 
 
@@ -856,6 +909,13 @@ def verify_v3_proof_document(value: object) -> dict[str, Any]:
         value["readback"],
         install_block_height=deployment["install_block_height"],
     )
+    first_step = live_run["outcomes"]["propose_exact"]
+    if _utc_timestamp(
+        deployment["install_observed_at"], "deployment two-node finality observed_at"
+    ) > _utc_timestamp(first_step["observed_at"], "propose_exact observed_at"):
+        raise ProofVerificationError(
+            "deployment two-node finality observation follows the first contract step"
+        )
     try:
         readback = validate_verified_readback(
             verify_and_seal_readback_artifact(value["readback"])

@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import scripts.assemble_proof_registry as registry_assembler
 
 from scripts.assemble_proof_registry import (
     AssemblyError,
@@ -672,6 +674,178 @@ def test_live_output_requires_release_flag_clean_git_and_historical_artifact(
             output_path=live,
             release=True,
             historical_v1_path=None,
+        )
+
+
+def _release_assembly_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    roots_path: Path | None = None,
+    verification_hook: Callable[[], None] | None = None,
+) -> tuple[dict[str, object], Path, bytes]:
+    repository_root = tmp_path / "repository"
+    bundle_root = repository_root / "artifacts/live/proof-registry"
+    artifact_root = bundle_root / "artifacts"
+    artifact_root.mkdir(parents=True)
+    output = bundle_root / "registry.json"
+    proposal_id = "DAO-PROP-RELEASE-ROOTS"
+    generated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+    exact_path = artifact_root / "exact.json"
+    treasury_path = artifact_root / "treasury.json"
+    historical_path = artifact_root / "historical.json"
+    exact_path.write_bytes(b'{"deployment":{"install_block_height":9001}}\n')
+    treasury_path.write_bytes(b'{"treasury":true}\n')
+    historical_path.write_bytes(b'{"historical":true}\n')
+    roots_payload = _canonical_bytes(
+        {
+            "schema_version": "concordia.card_chain_roots.v1",
+            "roots": {proposal_id: "11" * 32},
+        }
+    )
+    canonical_roots = repository_root / "artifacts/live/card-chain-roots-v1.json"
+    canonical_roots.parent.mkdir(parents=True, exist_ok=True)
+    canonical_roots.write_bytes(roots_payload)
+    selected_roots = roots_path or canonical_roots
+
+    exact_item = {
+        "proof_id": "exact-release",
+        "proposal_id": proposal_id,
+        "action_id": "22" * 32,
+        "captured_at": generated_at,
+        "source_commit": "ab" * 20,
+        "deployment_commit": "cd" * 20,
+    }
+    treasury_item = {
+        "proof_id": "treasury-release",
+        "proposal_id": proposal_id,
+        "captured_at": generated_at,
+        "source_commit": "ab" * 20,
+        "deployment_commit": "cd" * 20,
+    }
+    historical_item = {
+        "proof_id": "historical-release",
+        "proposal_id": proposal_id,
+        "captured_at": generated_at,
+        "source_commit": "ab" * 20,
+        "deployment_commit": "cd" * 20,
+    }
+    public_items = [historical_item, exact_item, treasury_item]
+
+    monkeypatch.setattr(registry_assembler, "_git_worktree_is_clean", lambda _root: True)
+    monkeypatch.setattr(
+        registry_assembler,
+        "_exact_item",
+        lambda _artifact, verification_observed_at: (exact_item, {}),
+    )
+    monkeypatch.setattr(
+        registry_assembler,
+        "_treasury_item",
+        lambda _artifact: (treasury_item, {}),
+    )
+    monkeypatch.setattr(
+        registry_assembler,
+        "_historical_item",
+        lambda _artifact: (historical_item, {"blockHeight": 9000}),
+    )
+    monkeypatch.setattr(registry_assembler, "_same_binding", lambda *_args: None)
+    monkeypatch.setattr(
+        registry_assembler,
+        "derive_card_chain_release_roots",
+        lambda _raw: roots_payload,
+    )
+    monkeypatch.setattr(registry_assembler, "proof_item_is_green", lambda _item: True)
+    monkeypatch.setattr(
+        registry_assembler,
+        "build_public_registry",
+        lambda _proposal, items, **_kwargs: {"items": list(items)},
+    )
+
+    def verify_packaged(**_kwargs: object) -> None:
+        if verification_hook is not None:
+            verification_hook()
+
+    monkeypatch.setattr(registry_assembler, "_verify_with_packaged_cli", verify_packaged)
+    monkeypatch.setattr(
+        registry_assembler,
+        "_internal_record",
+        lambda _artifact, _item: {"v3_finalized_exact": True},
+    )
+    monkeypatch.setattr(registry_assembler, "_git_commit_exists", lambda *_args: True)
+
+    class FakeRepository:
+        def __init__(self, _root: Path) -> None:
+            pass
+
+        def public_document(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            return {"items": public_items}
+
+        def by_action_id(self, _action_id: str) -> dict[str, object]:
+            return {"v3_finalized_exact": True}
+
+    monkeypatch.setattr(registry_assembler, "ProofRegistryRepository", FakeRepository)
+    document = assemble_proof_registry(
+        repository_root=repository_root,
+        output_path=output,
+        historical_v1_path=historical_path,
+        card_chain_roots_path=selected_roots,
+        exact_v3_path=exact_path,
+        native_treasury_path=treasury_path,
+        generated_at=generated_at,
+        release=True,
+    )
+    return document, canonical_roots, roots_payload
+
+
+def test_release_assembly_rejects_equal_alternate_card_chain_roots_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alternate = tmp_path / "alternate-card-chain-roots.json"
+    alternate.write_bytes(
+        _canonical_bytes(
+            {
+                "schema_version": "concordia.card_chain_roots.v1",
+                "roots": {"DAO-PROP-RELEASE-ROOTS": "11" * 32},
+            }
+        )
+    )
+
+    with pytest.raises(AssemblyError, match="canonical.*card-chain roots"):
+        _release_assembly_case(tmp_path, monkeypatch, roots_path=alternate)
+
+
+def test_release_output_binds_canonical_card_chain_roots_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document, canonical_roots, roots_payload = _release_assembly_case(
+        tmp_path, monkeypatch
+    )
+
+    assert document["card_chain_roots"] == {
+        "artifact_path": "artifacts/live/card-chain-roots-v1.json",
+        "artifact_sha256": hashlib.sha256(roots_payload).hexdigest(),
+    }
+    assert canonical_roots.read_bytes() == roots_payload
+    loaded = ProofRegistryRepository(canonical_roots.parent / "proof-registry")._documents()
+    assert loaded[0]["card_chain_roots"] == document["card_chain_roots"]
+
+
+def test_release_assembly_rejects_roots_changed_after_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository_root = tmp_path / "repository"
+    canonical_roots = repository_root / "artifacts/live/card-chain-roots-v1.json"
+
+    def alter_validated_roots() -> None:
+        canonical_roots.write_bytes(b'{"changed":true}\n')
+
+    with pytest.raises(AssemblyError, match="card-chain roots changed during verification"):
+        _release_assembly_case(
+            tmp_path,
+            monkeypatch,
+            verification_hook=alter_validated_roots,
         )
 
 
