@@ -1,0 +1,27 @@
+{
+  "schema_id": "concordia.mainnet-canary.step-observation.v1",
+  "step_id": null,
+  "deploy_hash": null,
+  "chain_name_observed": "casper",
+  "block": {
+    "status": null,
+    "block_hash": null,
+    "block_height": null,
+    "state_root_hash": null,
+    "era_id": null,
+    "block_proofs_present": null,
+    "deploy_is_member": null
+  },
+  "execution": {
+    "success": null,
+    "error_message": null,
+    "cost_motes": null
+  },
+  "target": {
+    "package_hash": null,
+    "contract_hash": null,
+    "entry_point": null,
+    "typed_args": null,
+    "transfer": null
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema_id": "concordia.mainnet-canary.testnet-measured-costs.v1",
+  "measured_motes": {
+    "contract_install": null,
+    "propose_envelope": null,
+    "approve_envelope_vote_a": null,
+    "approve_envelope_vote_b": null,
+    "prequorum_finalize_refusal": null,
+    "finalize_native_transfer": null,
+    "wrong_envelope_refusal_optional": null,
+    "native_transfer": null
+  }
+}

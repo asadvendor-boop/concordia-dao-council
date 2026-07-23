@@ -1,0 +1,91 @@
+{
+  "schema_id": "concordia.mainnet-canary.interface-manifest.v1",
+  "producer": "claude/mainnet-canary-prep",
+  "prep_base_sha": "7668fa46629cca02a7eb087b9a9873c0a8479912",
+  "base_branch": "codex/finals-core-v3",
+  "write_scope_used": [
+    "tools/mainnet_canary/**",
+    "tests/mainnet_canary/**",
+    "handoff/MAINNET_CANARY_PREP.md",
+    "handoff/MAINNET_CANARY_INTERFACE_MANIFEST.json",
+    "handoff/MAINNET_CANARY_COST_MODEL.json"
+  ],
+  "files_outside_scope_modified": [],
+  "blocking_findings": [
+    {
+      "id": "B1",
+      "severity": "BLOCKING",
+      "title": "The frozen Testnet RC Wasm cannot initialise on Mainnet",
+      "detail": "contracts/odra-governance-receipt-v3/src/encoding.rs pins CASPER_CHAIN_NAME=\"casper-test\" and the constructor path (derive_deployment_domain, CommonHeader::validate_basic) reverts for any other chain name. A byte-for-byte install of the Testnet RC Wasm on Casper Mainnet therefore cannot be constructed with casper_chain_name=\"casper\", which the release dependency requires. This contradicts 'byte-for-byte the RC Wasm' + 'chain name exactly casper' simultaneously.",
+      "proposed_resolution": "Codex resolves one of: (a) the Testnet-RC tag additionally attests a reproducible Mainnet-chain build (identical source except the single chain constant, built with the pinned toolchain, SHA-256 recorded as mainnet_wasm_sha256 with mainnet_wasm_chain_name=\"casper\" in the RC declaration); or (b) the freeze is amended to parameterise the chain constant at build time with both hashes recorded. The prep tooling refuses fail-closed (RC_MAINNET_WASM_UNATTESTED) until the RC declaration carries a Mainnet-chain attestation, and separately refuses if that attestation reuses the Testnet build hash.",
+      "no_file_edited": "This lane did not modify contracts/**; the finding is documented only."
+    },
+    {
+      "id": "B2",
+      "severity": "ADVISORY",
+      "title": "shared/envelope_v3.py is Testnet-frozen by design",
+      "detail": "shared/envelope_v3.py hard-codes casper-test in _validate_header and derive_deployment_domain, so the shared FULL deriver cannot compute a Mainnet envelope. The canary carries a fresh from-spec implementation (tools/mainnet_canary/encoding.py) with a parameterised chain name, cross-checked byte-for-byte against the frozen shared primitives (encode_fields/blake2b256/length_prefix) and against the immutable G1 golden vectors on every plan. No shared/ change is requested; if Codex later generalises shared/, the crosscheck gains a third full-deriver check for chain casper.",
+      "no_file_edited": "shared/** untouched."
+    },
+    {
+      "id": "B3",
+      "severity": "ADVISORY",
+      "title": "Second disjoint-host public Mainnet RPC endpoint not pinned",
+      "detail": "shared/casper_rpc_transport.py's read policy requires two distinct public hosts with disjoint addresses. Only the official https://node.mainnet.casper.network/rpc is pinned (verified live, credential-free, chainspec_name=casper, protocol 2.2.2, observed 2026-07-23T06:45Z). Guessing a second 'official' endpoint would violate the pin policy; Codex must nominate it before dual-endpoint verification is possible."
+    }
+  ],
+  "cli_contract": {
+    "entry_point": "python3 -m tools.mainnet_canary <mode>",
+    "modes": ["inventory", "estimate", "plan", "stage", "verify", "broadcast"],
+    "exit_codes": {"0": "success", "2": "fail-closed refusal with {refusal:{code,detail}} JSON"},
+    "no_bypass": "no --yes/--force/--no-confirm flags exist; no environment variable is read anywhere in the package; broadcast submission is structurally absent in this lane"
+  },
+  "operator_input_schemas": {
+    "rc_declaration": {
+      "schema_id": "concordia.mainnet-canary.rc-declaration.v1",
+      "supplied_by": "Codex, derived from the annotated Testnet-RC tag",
+      "path_convention": "handoff/testnet-rc-declaration.json (operator-passed --rc-declaration)",
+      "fields": "see tests/mainnet_canary/fixtures/schema-only/rc-declaration.schema-only.json",
+      "validation": "strict field set; all five gates must be true; peeled commit must equal worktree HEAD; tracked tree recomputed clean; Wasm SHA-256 recomputed from the tracked artifact; historical inventory re-hashed file-by-file; chain exactly casper; endpoint exactly the pinned official URL; expected_prequorum_error_message must be the Testnet-RC-measured 'User error: <code>' rendering"
+    },
+    "public_key_inventory": {
+      "schema_id": "concordia.mainnet-canary.public-key-inventory.v1",
+      "supplied_by": "Codex/Asad via file mount only",
+      "mount": "/run/concordia/mainnet_canary/public_key_inventory.json",
+      "validation": "public halves only; account hashes recomputed from public keys via BLAKE2b-256(algorithm||0x00||raw_key); pairwise-distinct governance roles; source!=recipient; key-file references must sit below /run/secrets/mainnet_canary/ and are never opened; any secret-like content refuses the whole document without echoing it"
+    },
+    "canary_parameters": {"schema_id": "concordia.mainnet-canary.parameters.v1", "supplied_by": "Codex from the live governance run", "notes": "includes max_amount_motes, the deliberately-tiny cap the derived amount may not exceed"},
+    "treasury_snapshot_observation": {"schema_id": "concordia.mainnet-canary.treasury-snapshot-observation.v1", "supplied_by": "Codex via credential-free public RPC read", "freshness": "refused when >32 blocks or >600s behind the paired chain-status observation"},
+    "chain_status_observation": {"schema_id": "concordia.mainnet-canary.chain-status-observation.v1"},
+    "measured_testnet_costs": {"schema_id": "concordia.mainnet-canary.testnet-measured-costs.v1", "future_path": "artifacts/mainnet-canary/testnet-measured-costs.v1.json"},
+    "spend_ceiling": {"schema_id": "concordia.mainnet-canary.spend-ceiling.v1", "supplied_by": "Asad (public approval document, no secret)"},
+    "live_authorization": {
+      "schema_id": "concordia.mainnet-canary.live-authorization.v1",
+      "supplied_by": "Codex only, after the Testnet-RC gate is green",
+      "mount": "/run/concordia/mainnet_canary/live_authorization.json",
+      "notes": "fixed mount path; no CLI parameter can relocate it; binds rc_tag, exact plan hash, max_total_motes, per_step_confirmation_required=true"
+    },
+    "step_observations": {"schema_id": "concordia.mainnet-canary.step-observation.v1", "supplied_by": "Codex via credential-free public RPC readback", "consumed_by": "verify mode; fail-closed evaluators for finalized membership, exact QuorumNotMet refusal, exact envelope acceptance, exact transfer binding"}
+  },
+  "journal_contract": {
+    "format": "append-only JSONL, SHA-256 hash chain (prev_hash + record_hash), fsync before progress",
+    "states": ["PLANNED", "STAGED", "AUTHORIZATION_VALIDATED", "SIGNED", "SUBMITTED", "SUBMISSION_UNKNOWN", "CONFIRMED_FINALIZED", "FAILED_FINALIZED", "RECONCILED_CONFIRMED", "RECONCILED_FAILED"],
+    "restart_semantics": "a step in SIGNED/SUBMITTED/SUBMISSION_UNKNOWN blocks all new economic actions (DUPLICATE_ECONOMIC_ACTION) and only reconciles against its ORIGINAL deploy hash (RECONCILIATION_REQUIRED otherwise); tampering fails load (JOURNAL_TAMPERED)"
+  },
+  "unsigned_intent_contract": {
+    "domain": "CONCORDIA_MAINNET_CANARY_UNSIGNED_INTENT_V1\\0",
+    "content": "domain || canonical JSON {plan_hash, step_id, kind, chain_name, signing_role, signing_account_hash, entry_point, typed_args, expected_outcome}",
+    "addressing": "SHA-256 content address; stage stores <sha256>.unsigned-intent.bin outside artifacts/**",
+    "rationale": "wire-format deploy headers (timestamp/TTL/payment) are chosen only inside the future authorized live lane; the signer must re-derive them from the same plan hash, so no stale signable bytes ever exist in this lane"
+  },
+  "artifact_lineage": {
+    "future_live_namespace": "artifacts/mainnet-canary/v3/<canary-id>/**",
+    "provenance": "mainnet_supplemental",
+    "protected_prefixes": ["artifacts/live/", "artifacts/rwa/", "handoff/HISTORICAL_"],
+    "prep_lane_behaviour": "stage refuses to write anywhere below artifacts/ (LIVE_ARTIFACTS_UNAVAILABLE_IN_PREP) and refuses protected prefixes outright (CANONICAL_NAMESPACE_PROTECTED); Mainnet supplemental records can never replace canonical/Testnet registry entries"
+  },
+  "verification_wording": "Concordia v3 enforced quorum and the exact approved envelope on Casper Mainnet. After independent readback, Concordia's durable executor submitted one native-CSPR transfer bound to that authorization.",
+  "claims_policy": "every deployed/verified claim emitted by this lane is BLOCKED_PENDING_LIVE_PROOF; verify mode reports observation_consistent per step and never asserts a Mainnet-verified release state — release claims remain Codex's",
+  "dependency_audit": "tools/mainnet_canary uses only the Python standard library plus repo-internal shared/ imports for the crosscheck path; no new third-party dependency was added; no Authorization header is ever constructed",
+  "statement": "NO MAINNET OR TESTNET MUTATION PERFORMED"
+}

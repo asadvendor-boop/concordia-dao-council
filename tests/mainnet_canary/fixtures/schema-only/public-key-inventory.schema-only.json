@@ -1,0 +1,42 @@
+{
+  "schema_id": "concordia.mainnet-canary.public-key-inventory.v1",
+  "network": "casper",
+  "threshold": null,
+  "roles": {
+    "proposer": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/proposer_public_reference"
+    },
+    "finalizer": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/finalizer_public_reference"
+    },
+    "signer_a": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/signer_a_public_reference"
+    },
+    "signer_b": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/signer_b_public_reference"
+    },
+    "signer_c": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/signer_c_public_reference"
+    },
+    "treasury_source": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/treasury_source_public_reference"
+    },
+    "recipient": {
+      "public_key_hex": null,
+      "account_hash_hex": null,
+      "key_file_mount_path": "/run/secrets/mainnet_canary/recipient_public_reference"
+    }
+  }
+}

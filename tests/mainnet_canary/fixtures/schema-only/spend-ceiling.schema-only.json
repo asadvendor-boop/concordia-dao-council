@@ -1,0 +1,7 @@
+{
+  "schema_id": "concordia.mainnet-canary.spend-ceiling.v1",
+  "max_total_motes": null,
+  "approved_by": [],
+  "approval_reference": null,
+  "wrong_envelope_refusal_approved": null
+}

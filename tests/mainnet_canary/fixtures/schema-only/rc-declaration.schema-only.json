@@ -1,0 +1,19 @@
+{
+  "schema_id": "concordia.mainnet-canary.rc-declaration.v1",
+  "rc_tag": null,
+  "peeled_commit_sha": null,
+  "testnet_wasm_sha256": null,
+  "mainnet_wasm_sha256": null,
+  "mainnet_wasm_chain_name": null,
+  "mainnet_chain_name": "casper",
+  "mainnet_rpc_url": "https://node.mainnet.casper.network/rpc",
+  "historical_odra_inventory_sha256": null,
+  "expected_prequorum_error_message": null,
+  "gates": {
+    "testnet_gates_green": null,
+    "local_gates_green": null,
+    "hosted_gates_green": null,
+    "historical_manifest_unchanged": null,
+    "source_tree_clean_at_tag": null
+  }
+}

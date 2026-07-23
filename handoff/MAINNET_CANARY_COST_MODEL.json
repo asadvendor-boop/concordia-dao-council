@@ -1,0 +1,38 @@
+{
+  "schema_id": "concordia.mainnet-canary.cost-model-handoff.v1",
+  "prep_base_sha": "7668fa46629cca02a7eb087b9a9873c0a8479912",
+  "status": "REFUSED_ALL_LINES_UNKNOWN",
+  "grounding_policy": "Every line must be grounded in a measured Testnet cost from an EXACT equivalent deploy of the v3 RC (same Wasm class, same entry point, same argument shape). Anything else is UNKNOWN and the estimate refuses approval. Refusal proofs are never free: the pre-quorum QuorumNotMet deploy and the optional wrong-envelope deploy consume real fees and carry their own lines.",
+  "search_performed": {
+    "searched_read_only": [
+      "artifacts/live/**",
+      "artifacts/rwa/**",
+      "docs/**",
+      "contracts/odra-governance-receipt-v3/deployment.manifest.json"
+    ],
+    "findings": "contracts/odra-governance-receipt-v3/deployment.manifest.json records status=built_uninstalled at the prep base: the v3 contract has never been deployed to Testnet in this tree, so no exact-equivalent measured costs exist. Historical artifacts contain v1/v2-era payments (payment_amount 5000000000 motes, gas_price 1, e.g. artifacts/live/casper-final-receipt-cspr-live.json) from DIFFERENT Wasm and entry points; they are recorded here as non-equivalent context only and are deliberately NOT used to ground any line."
+  },
+  "lines": [
+    {"item": "contract_install", "motes": null, "status": "UNKNOWN", "reason": "no measured v3 RC install on Testnet exists at the prep base"},
+    {"item": "propose_envelope", "motes": null, "status": "UNKNOWN", "reason": "no measured v3 propose_envelope deploy exists"},
+    {"item": "approve_envelope_vote_a", "motes": null, "status": "UNKNOWN", "reason": "no measured v3 approve_envelope deploy exists"},
+    {"item": "approve_envelope_vote_b", "motes": null, "status": "UNKNOWN", "reason": "no measured v3 approve_envelope deploy exists"},
+    {"item": "prequorum_finalize_refusal", "motes": null, "status": "UNKNOWN", "reason": "failed-deploy fee for the exact QuorumNotMet refusal; refusal proof is never free and must be measured on Testnet"},
+    {"item": "finalize_native_transfer", "motes": null, "status": "UNKNOWN", "reason": "no measured v3 finalize_native_transfer deploy exists"},
+    {"item": "wrong_envelope_refusal_optional", "motes": null, "status": "UNKNOWN_AND_NOT_SEPARATELY_APPROVED", "reason": "requires both a Testnet measurement and explicit approval in the public ceiling document"},
+    {"item": "native_transfer", "motes": null, "status": "UNKNOWN", "reason": "must be measured from the exact executor-style Testnet native transfer of the RC"},
+    {"item": "safety_buffer", "motes": null, "status": "UNKNOWN", "reason": "derived as ceil(20% of measured subtotal); cannot exist before every other line is MEASURED"}
+  ],
+  "total_motes": null,
+  "ceiling": {
+    "status": "ABSENT",
+    "required_form": "public approval document concordia.mainnet-canary.spend-ceiling.v1 (schema-only fixture in tests/mainnet_canary/fixtures/schema-only/spend-ceiling.schema-only.json), signed off by Asad, containing no secret"
+  },
+  "unblocking_inputs": [
+    "Codex publishes artifacts/mainnet-canary/testnet-measured-costs.v1.json from exact-equivalent Testnet RC deploys (schema concordia.mainnet-canary.testnet-measured-costs.v1)",
+    "Asad supplies the signed-off public maximum-expenditure ceiling document",
+    "Codex decides whether the optional wrong-envelope refusal proof is separately approved"
+  ],
+  "refusal_behaviour": "tools/mainnet_canary estimate exits 2 with COST_LINE_UNKNOWN and COST_CEILING_ABSENT until both inputs exist; stage and broadcast re-run the same gate and cannot proceed while it refuses",
+  "network_execution_status": "BLOCKED_PENDING_LIVE_PROOF"
+}

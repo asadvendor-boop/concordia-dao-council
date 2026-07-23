@@ -1,0 +1,9 @@
+{
+  "schema_id": "concordia.mainnet-canary.live-authorization.v1",
+  "issued_by": "codex-integration-operator",
+  "rc_tag": null,
+  "plan_hash": null,
+  "max_total_motes": null,
+  "per_step_confirmation_required": true,
+  "expires_at_unix": null
+}
