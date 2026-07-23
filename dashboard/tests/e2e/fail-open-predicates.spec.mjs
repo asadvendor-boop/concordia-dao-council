@@ -127,6 +127,46 @@ test.describe("affirmative approval requires an explicit decision", () => {
     await expect(page.getByText("Exact action authorized")).toHaveCount(0);
     await expect(page.getByText("Authorization verified and consumed")).toHaveCount(0);
   });
+
+  // Reviewer truth-contract pass: the PolicyAuthorization SUMMARY string must
+  // also require an explicit affirmative decision — a missing/unknown decision
+  // must never read as "issued ... authorization". The replay page renders
+  // cardSummary for the current card, so it exercises the summary directly.
+  test("a PolicyAuthorization summary with NO decision never says authorization was issued", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText(/no authorization is asserted/).first()).toBeVisible();
+    await expect(page.getByText(/issued a bounded low-risk authorization/)).toHaveCount(0);
+  });
+
+  test("positive control: an explicit affirmative PolicyAuthorization summary says the grant was issued", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { decision: "AUTHORIZED", policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText(/issued a bounded low-risk authorization/).first()).toBeVisible();
+    await expect(page.getByText(/no authorization is asserted/)).toHaveCount(0);
+  });
+
+  test("an explicitly REFUSED PolicyAuthorization summary says refused, never issued", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { decision: "REJECT", policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText(/refused authorization/).first()).toBeVisible();
+    await expect(page.getByText(/issued a bounded low-risk authorization/)).toHaveCount(0);
+  });
 });
 
 test.describe("approval binding requires explicit proposal + plan-hash equality", () => {
@@ -352,12 +392,49 @@ test.describe("proof center predicates each require their own asserting field", 
     await expect(page.getByText("Live read incomplete")).toBeVisible();
   });
 
-  test("positive control: a complete live read renders Live data source", async ({ page }) => {
+  // DELIBERATE MIGRATION (reviewer truth-contract pass): the live-read
+  // predicate now requires the frozen Testnet network, an INTEGER block
+  // height, a 64-LOWERCASE-hex state root, and explicit observation
+  // provenance (source + status) — the positive control carries all of them
+  // and each negative below isolates exactly one malformed dimension.
+  test("positive control: a complete well-formed live read renders Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
-      proofPayload: { mercer_live_casper_read: { network: "casper-test", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC / CSPR.live public status", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
     });
     await expect(page.getByText("Live data source", { exact: true })).toBeVisible();
     await expect(page.getByText("Live read incomplete")).toHaveCount(0);
+  });
+
+  test("a live read with the WRONG network never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
+  });
+
+  test("a live read with a STRING block height never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: "8340490", state_root_hash: "a".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
+  });
+
+  test("a live read with a malformed (uppercase) state root never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: 8340490, state_root_hash: "A".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
+  });
+
+  test("a live read without observation provenance (source) never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
   });
 
   test("a CID without a verified pin predicate never claims Pinned", async ({ page }) => {

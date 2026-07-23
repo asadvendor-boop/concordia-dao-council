@@ -518,12 +518,21 @@ export function isAuthorizedApproval(card, proposalId, planCard) {
     && isApprovalBoundToAction(card, planCard);
 }
 // Shared strict Casper live-read predicate: a live-read object asserts a live
-// Casper observation ONLY when its asserting fields are explicitly present —
-// a block height AND a state root. Object presence alone proves nothing.
+// Casper observation ONLY when every asserting field is explicitly present AND
+// well-formed — the frozen Testnet network, a nonnegative integer block
+// height, a 64-lowercase-hex state root, and explicit observation provenance
+// (non-empty source and status). Presence alone, or any malformed value,
+// never produces the green "Live data source" state.
+const STATE_ROOT_HEX_RE = /^[0-9a-f]{64}$/;
 export function isCasperLiveReadComplete(liveRead) {
   return Boolean(liveRead)
-    && liveRead.latest_block_height !== undefined && liveRead.latest_block_height !== null && liveRead.latest_block_height !== ""
-    && Boolean(liveRead.state_root_hash);
+    && liveRead.network === "casper-test"
+    && Number.isInteger(liveRead.latest_block_height)
+    && liveRead.latest_block_height >= 0
+    && typeof liveRead.state_root_hash === "string"
+    && STATE_ROOT_HEX_RE.test(liveRead.state_root_hash)
+    && typeof liveRead.source === "string" && liveRead.source.trim() !== ""
+    && typeof liveRead.status === "string" && liveRead.status.trim() !== "";
 }
 
 export function cardSummary(card) {
@@ -544,9 +553,14 @@ export function cardSummary(card) {
     case "StructuredApproval": return isAffirmativeApproval(card)
       ? `Multisig decision: ${data.decision || "APPROVED"}. The authorization is bound to the exact plan and action hashes and can be consumed only once.`
       : `Multisig decision: ${data.decision || "recorded"}. No execution authorization is granted for a non-approval decision.`;
+    // Authorization is asserted ONLY from an explicit affirmative decision —
+    // a missing/unknown decision is recorded work, never an issued grant
+    // (mirrors the cardTone three-state below).
     case "PolicyAuthorization": return isDeniedApproval(card)
       ? "The deterministic policy engine refused authorization."
-      : "The deterministic policy engine issued a bounded low-risk authorization.";
+      : isAffirmativeApproval(card)
+        ? "The deterministic policy engine issued a bounded low-risk authorization."
+        : "Policy authorization recorded · no explicit decision field is present, so no authorization is asserted.";
     case "CasperExecutionReceipt": return firstDefined(data.resolution_summary, isReceiptVerified(card)
       ? "Casper Execution Agent executed every approved action exactly once and Casper transaction verification passed."
       : "Casper execution receipt recorded. Transaction verification is asserted only from a positively verified receipt.");

@@ -193,14 +193,22 @@ const HEX32_RE = /^[0-9a-f]{64}$/;
 const GIT_SHA_RE = /^[0-9a-f]{40}$/;
 const PROPOSAL_RE = /^[A-Z0-9-]{1,64}$/;
 const IDENTIFIER_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-const CHECK_NAME_RE = /^[a-z][a-z0-9_]{0,127}$/;
+// Max 96 chars total — mirrors Python's _CHECK_NAME_RE ^[a-z][a-z0-9_]{0,95}$
+// exactly (a 97-char name must be rejected by BOTH validators).
+const CHECK_NAME_RE = /^[a-z][a-z0-9_]{0,95}$/;
 const RFC3339_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
 function isHex32(value) { return typeof value === "string" && HEX32_RE.test(value); }
 export function parseRfc3339Utc(value) {
   if (typeof value !== "string" || !RFC3339_UTC_RE.test(value)) return null;
   const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : ms;
+  if (Number.isNaN(ms)) return null;
+  // Round-trip guard: Date.parse silently rolls impossible calendar dates
+  // over (e.g. 2026-02-30 becomes March 2) while Python's fromisoformat
+  // rejects them. The parsed instant must render back to the exact same
+  // YYYY-MM-DDTHH:MM:SS prefix or the value is not a real calendar date.
+  if (!new Date(ms).toISOString().startsWith(value.slice(0, 19))) return null;
+  return ms;
 }
 function isRfc3339Utc(value) { return parseRfc3339Utc(value) !== null; }
 function safeRepositoryPath(value) {

@@ -147,7 +147,10 @@ function healthRow(page, label) {
   return page.locator(".health-list > div").filter({ hasText: label });
 }
 
-const COMPLETE_LIVE_READ = { network: "casper-test", latest_block_height: 8340490, state_root_hash: "a".repeat(64), source: "Casper Node RPC" };
+// DELIBERATE MIGRATION (reviewer truth-contract pass): a "complete" live read
+// now also requires explicit observation provenance — a non-empty status
+// alongside the source — matching the strengthened isCasperLiveReadComplete.
+const COMPLETE_LIVE_READ = { network: "casper-test", status: "visible_in_evidence", latest_block_height: 8340490, state_root_hash: "a".repeat(64), source: "Casper Node RPC" };
 
 test.describe("1. overview unobserved/initial state never renders positive protocol cues", () => {
   test("with every payload still pending, health pills read Checking and nothing is Operational/Connected/Healthy/LIVE", async ({ page }) => {
@@ -475,10 +478,42 @@ test.describe("5. verified/complete label families require real predicates", () 
     await expect(page.getByText("recorded handoffs").first()).toBeVisible();
   });
 
-  test("positive control: replay handoffs are Verified only from chain_valid === true", async ({ page }) => {
-    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true } });
+  // DELIBERATE MIGRATION (reviewer truth-contract pass): "Verified" replay
+  // labels now ALSO require the evidence payload to be bound to the selected
+  // proposal (payload proposal_id === selectedId), so the positive control
+  // carries the binding and two new negatives isolate the binding dimension.
+  test("positive control: replay handoffs are Verified only from chain_valid === true on a BOUND payload", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
     await expect(page.getByText("Verified handoff").first()).toBeVisible();
     await expect(page.getByText("Recorded handoff")).toHaveCount(0);
+    await expect(page.getByText("Runs & Verified Replay")).toBeVisible();
+  });
+
+  test("replay: chain_valid without payload proposal binding renders Recorded, never Verified", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true } });
+    await expect(page.getByText("Recorded handoff").first()).toBeVisible();
+    await expect(page.getByText("Verified handoff")).toHaveCount(0);
+    await expect(page.getByText("Runs & Recorded Replay")).toBeVisible();
+    await expect(page.getByText("Runs & Verified Replay")).toHaveCount(0);
+  });
+
+  test("replay: chain_valid bound to a DIFFERENT proposal renders Recorded, never Verified", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true, proposal_id: "DAO-PROP-UNRELATED" } });
+    await expect(page.getByText("Recorded handoff").first()).toBeVisible();
+    await expect(page.getByText("Verified handoff")).toHaveCount(0);
+  });
+
+  test("recording mode: unverified replay shows Recorded Run Replay and NO Canonical receipt chip", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true } });
+    await expect(page.getByText("Recorded Run Replay")).toBeVisible();
+    await expect(page.getByText("Verified Run Replay")).toHaveCount(0);
+    await expect(page.getByText("Canonical receipt")).toHaveCount(0);
+  });
+
+  test("positive control: verified bound canonical replay in recording mode shows the Canonical receipt chip", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
+    await expect(page.getByText("Verified Run Replay")).toBeVisible();
+    await expect(page.getByText("Canonical receipt")).toBeVisible();
   });
 });
 
@@ -541,8 +576,11 @@ test.describe("SOURCE regression: the four fail-open patterns are banned", () =>
     expect(shared).toContain("recorded June 2026");
     const replay = read(path.join("pages", "ReplayPage.js"));
     expect(replay).not.toContain(">Verified handoff · sequence");
-    expect(replay).toMatch(/chainValid \? "Verified handoff" : "Recorded handoff"/);
-    expect(replay).toMatch(/chainValid \? "verified" : "recorded"/);
+    // Migrated pin: the gate is now replayVerified = chain_valid === true AND
+    // payload-to-selected-proposal binding (strictly stronger than chainValid).
+    expect(replay).toMatch(/replayVerified \? "Verified handoff" : "Recorded handoff"/);
+    expect(replay).toMatch(/replayVerified \? "verified" : "recorded"/);
+    expect(replay).toMatch(/replayVerified = chainValid && evidenceBound/);
   });
 
   test("lib.js isAuthorizedApproval requires the exact action binding on every surface", () => {

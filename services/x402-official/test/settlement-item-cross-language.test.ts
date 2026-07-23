@@ -28,10 +28,11 @@
  *
  * NOTE (worktree state): this branch does not yet carry
  * shared/proof_registry.py. The suite prefers the in-tree file when present
- * (post-merge state) and otherwise materializes the CURRENT registry from the
- * repository's git object store — the newest commit across all refs that
- * touched shared/proof_registry.py — into a temp package. Only read-only git
- * commands (log/show) are used.
+ * (post-merge state) and otherwise materializes the EXPLICITLY PINNED
+ * accepted registry commit (PINNED_ACCEPTED_REGISTRY_COMMIT below) from the
+ * git object store into a temp package — never "the newest commit on any
+ * ref", so unrelated or rejected branches can never control the test
+ * authority. Only the read-only `git show` command is used.
  */
 
 import { execFileSync } from "node:child_process";
@@ -105,32 +106,49 @@ let registryRoot = REPO_ROOT;
 let registrySource = "worktree shared/proof_registry.py";
 let materializedRoot: string | null = null;
 
+// Reviewer finding (test-authority nondeterminism): the previous fallback ran
+// `git log --all` and let the NEWEST commit on ANY ref — including unrelated,
+// experimental, or rejected branches — control which registry this suite
+// validated against. The authority is now either the in-tree accepted registry
+// (post-merge state) or this EXPLICITLY PINNED accepted commit, nothing else.
+// Pin provenance: codex/finals-integration-preview `fix: derive public proof
+// truth fail closed` — the accepted WP4 registry lineage this suite's 22-check
+// and 29-field constants were verified against. Advancing the pin is a
+// deliberate reviewed change, never an accident of ref state.
+const PINNED_ACCEPTED_REGISTRY_COMMIT =
+  "7170c873fd20c1ff2e9e3115ec1523b9b1ea2c9b";
+
 beforeAll(() => {
   if (existsSync(path.join(REPO_ROOT, "shared", "proof_registry.py"))) {
     return; // post-merge state: the in-tree registry is the authority.
   }
-  const commit = execFileSync(
-    "git",
-    ["-C", REPO_ROOT, "log", "--all", "-1", "--format=%H", "--", "shared/proof_registry.py"],
-    { encoding: "utf8" },
-  ).trim();
-  if (!/^[0-9a-f]{40}$/.test(commit)) {
+  let content: string;
+  try {
+    content = execFileSync(
+      "git",
+      [
+        "-C",
+        REPO_ROOT,
+        "show",
+        `${PINNED_ACCEPTED_REGISTRY_COMMIT}:shared/proof_registry.py`,
+      ],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    );
+  } catch (error) {
     throw new Error(
-      "shared/proof_registry.py not found in the worktree or in any ref — cannot run cross-language validation",
+      "shared/proof_registry.py is not in the worktree and the pinned " +
+        `accepted registry commit ${PINNED_ACCEPTED_REGISTRY_COMMIT} is not ` +
+        "available in this repository — cannot run cross-language " +
+        `validation (${String(error)})`,
     );
   }
-  const content = execFileSync(
-    "git",
-    ["-C", REPO_ROOT, "show", `${commit}:shared/proof_registry.py`],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
   materializedRoot = mkdtempSync(path.join(tmpdir(), "x402-proof-registry-"));
   mkdirSync(path.join(materializedRoot, "shared"));
   // Empty package init: proof_registry.py itself imports only the stdlib.
   writeFileSync(path.join(materializedRoot, "shared", "__init__.py"), "");
   writeFileSync(path.join(materializedRoot, "shared", "proof_registry.py"), content);
   registryRoot = materializedRoot;
-  registrySource = `git object store, newest registry commit ${commit.slice(0, 12)}`;
+  registrySource = `git object store, pinned accepted registry commit ${PINNED_ACCEPTED_REGISTRY_COMMIT.slice(0, 12)}`;
 });
 
 afterAll(() => {
@@ -462,5 +480,79 @@ describe("schema-drift mutations: builder, Python, and dashboard reject identica
     expect(
       registrySource.startsWith("worktree ") || registrySource.startsWith("git object store"),
     ).toBe(true);
+  });
+});
+
+describe("validator boundary agreement: Python and the dashboard draw the SAME lines", () => {
+  // Reviewer finding: the dashboard's check-name limit (128) and timestamp
+  // parsing (Date.parse rollover) were WEAKER than Python's (96 chars,
+  // fromisoformat). These pins prove both validators now agree at the exact
+  // boundary — a name/timestamp accepted or rejected by one is treated
+  // identically by the other.
+  const NAME_96 = `a${"x".repeat(95)}`; // exactly 96 chars — the maximum
+  const NAME_97 = `a${"x".repeat(96)}`; // one over — must be rejected
+
+  it("a 96-character check name is within the shared grammar for BOTH validators", () => {
+    const item = realEmittedItem();
+    item.checks[0]!.name = NAME_96;
+    // Renaming a required check makes the item incomplete on both sides —
+    // but the NAME ITSELF must be grammatical on both (no check_name_invalid).
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).not.toContain("check_name_invalid");
+    expect(verdict.errors).toContain(
+      "required_check_missing:exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash",
+    );
+    const dashboardErrors = registryItemErrors(item);
+    expect(dashboardErrors).not.toContain("check_name_invalid");
+    expect(dashboardErrors).toContain(
+      "required_check_missing:exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash",
+    );
+  });
+
+  it("a 97-character check name is rejected by BOTH validators (Python caps at 96)", () => {
+    const item = realEmittedItem();
+    item.checks[0]!.name = NAME_97;
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toContain("check_name_invalid");
+    expect(verdict.verification_status).toBe("invalid");
+    expect(verdict.green).toBe(false);
+    expect(registryItemErrors(item)).toContain("check_name_invalid");
+    expect(itemGreenVerified(item)).toBe(false);
+  });
+
+  it("an impossible calendar date (February 30) is rejected by BOTH validators", () => {
+    // Date.parse silently rolls 2026-02-30 over to March 2; Python's
+    // fromisoformat raises. Both must refuse it as a timestamp.
+    const item = realEmittedItem();
+    item.checks[0]!.observed_at = "2026-02-30T12:00:00Z";
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toContain("check_observed_at_invalid");
+    expect(verdict.verification_status).toBe("invalid");
+    expect(verdict.green).toBe(false);
+    expect(registryItemErrors(item)).toContain("check_observed_at_invalid");
+    expect(itemGreenVerified(item)).toBe(false);
+  });
+
+  it("an impossible captured_at (February 30) is rejected by BOTH validators", () => {
+    const item = realEmittedItem();
+    (item as { captured_at: string }).captured_at = "2026-02-30T12:00:00Z";
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toContain("captured_at_invalid");
+    expect(verdict.green).toBe(false);
+    expect(registryItemErrors(item)).toContain("captured_at_invalid");
+    expect(itemGreenVerified(item)).toBe(false);
+  });
+
+  it("a real leap-day timestamp (2024-02-29) is accepted by BOTH validators", () => {
+    // Positive control for the round-trip guard: a valid but calendar-tricky
+    // date must NOT be over-rejected by either side.
+    const item = realEmittedItem();
+    item.checks[0]!.observed_at = "2024-02-29T00:00:00Z";
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toEqual([]);
+    expect(verdict.verification_status).toBe("verified");
+    expect(verdict.green).toBe(true);
+    expect(registryItemErrors(item)).toEqual([]);
+    expect(itemGreenVerified(item)).toBe(true);
   });
 });
