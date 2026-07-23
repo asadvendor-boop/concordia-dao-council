@@ -16,6 +16,7 @@ import { validateVerifySettleRequest } from "./validation.js";
 import {
   buildPaymentRequired,
   buildPaymentRequirements,
+  isSettlementReady,
   reportReleasableRow,
   runSettle,
   runVerify,
@@ -29,6 +30,39 @@ export const PAYMENT_HEADERS = {
   signature: "payment-signature",
   response: "payment-response",
 } as const;
+
+export interface ThrottleOptions {
+  limit: number;
+  windowMs: number;
+}
+
+/** Frozen default throttle for the public /verify and /settle endpoints. */
+export const DEFAULT_THROTTLE: ThrottleOptions = { limit: 120, windowMs: 60_000 };
+
+/**
+ * Minimal fixed-window per-client throttle for the public settlement surface.
+ * Keyed by remote address + route; expired windows are pruned lazily so the map
+ * cannot grow without bound.
+ */
+class FixedWindowThrottle {
+  private readonly hits = new Map<string, { count: number; resetAt: number }>();
+
+  constructor(private readonly options: ThrottleOptions) {}
+
+  allow(key: string, now: number): boolean {
+    if (this.hits.size > 8192) {
+      for (const [k, v] of this.hits) if (now >= v.resetAt) this.hits.delete(k);
+    }
+    const entry = this.hits.get(key);
+    if (entry === undefined || now >= entry.resetAt) {
+      this.hits.set(key, { count: 1, resetAt: now + this.options.windowMs });
+      return true;
+    }
+    if (entry.count >= this.options.limit) return false;
+    entry.count += 1;
+    return true;
+  }
+}
 
 function log(entry: Record<string, string | number>): void {
   // Only stable machine fields. Never free-form text from any request/error.
@@ -78,24 +112,32 @@ function refusalCode(error: unknown): { status: number; code: string } {
   return { status: 500, code: "internal_error" };
 }
 
-export function createService(deps: PipelineDeps): Server {
+export function createService(
+  deps: PipelineDeps,
+  options: { throttle?: ThrottleOptions } = {},
+): Server {
   const { config } = deps;
+  const throttle = new FixedWindowThrottle(options.throttle ?? DEFAULT_THROTTLE);
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
+    const clientKey = req.socket.remoteAddress ?? "unknown";
     let route = path;
     let status = 404;
     let code = "";
     try {
       if (method === "GET" && path === "/health") {
         route = "/health";
-        // Minimal liveness + frozen fail-closed settlement state. No secrets.
+        // Liveness (always ok while responding) is reported separately from
+        // settlement readiness, which is only green for a proven live gate
+        // (§11, WP5-6). No secrets are ever included.
         status = 200;
         send(res, 200, {
           status: "ok",
           settlement_state: deps.ledger.getSettlementState(),
+          settlement_ready: isSettlementReady(deps),
         });
         return;
       }
@@ -187,6 +229,12 @@ export function createService(deps: PipelineDeps): Server {
       }
       if (method === "POST" && path === "/verify") {
         route = "/verify";
+        if (!throttle.allow(`verify:${clientKey}`, Date.now())) {
+          status = 429;
+          code = "rate_limited";
+          send(res, 429, { isValid: false, invalidReason: "rate_limited" });
+          return;
+        }
         try {
           const body = await readJsonBody(req);
           const verifyResponse = await runVerify(body, deps);
@@ -204,6 +252,17 @@ export function createService(deps: PipelineDeps): Server {
       }
       if (method === "POST" && path === "/settle") {
         route = "/settle";
+        if (!throttle.allow(`settle:${clientKey}`, Date.now())) {
+          status = 429;
+          code = "rate_limited";
+          send(res, 429, {
+            success: false,
+            errorReason: "rate_limited",
+            transaction: "",
+            network: config.network,
+          });
+          return;
+        }
         try {
           const body = await readJsonBody(req);
           const settleResponse = await runSettle(body, deps);

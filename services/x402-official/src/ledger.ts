@@ -57,7 +57,11 @@ export interface FulfillmentBinding {
   payerAccountHash: string;
   payeeAccountHash: string;
   valueAtomic: string;
+  validAfter: string;
+  validBefore: string;
   authorizationNonce: string;
+  publicKey: string;
+  signature: string;
   wcsprContract: string;
 }
 
@@ -89,7 +93,11 @@ CREATE TABLE IF NOT EXISTS x402_fulfillments (
   payer_account_hash TEXT NOT NULL,
   payee_account_hash TEXT NOT NULL,
   value_atomic TEXT NOT NULL,
+  valid_after TEXT NOT NULL,
+  valid_before TEXT NOT NULL,
   authorization_nonce TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  signature TEXT NOT NULL,
   wcspr_contract TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN (
     'claimed','verified','submission_started','transaction_observed',
@@ -124,7 +132,11 @@ interface DbRow {
   payer_account_hash: string;
   payee_account_hash: string;
   value_atomic: string;
+  valid_after: string;
+  valid_before: string;
   authorization_nonce: string;
+  public_key: string;
+  signature: string;
   wcspr_contract: string;
   state: RowState;
   settlement_transaction_hash: string | null;
@@ -149,7 +161,11 @@ function toRow(r: DbRow): FulfillmentRow {
     payerAccountHash: r.payer_account_hash,
     payeeAccountHash: r.payee_account_hash,
     valueAtomic: r.value_atomic,
+    validAfter: r.valid_after,
+    validBefore: r.valid_before,
     authorizationNonce: r.authorization_nonce,
+    publicKey: r.public_key,
+    signature: r.signature,
     wcsprContract: r.wcspr_contract,
     state: r.state,
     settlementTransactionHash: r.settlement_transaction_hash,
@@ -175,7 +191,11 @@ function bindingEquals(a: FulfillmentBinding, b: FulfillmentBinding): boolean {
     a.payerAccountHash === b.payerAccountHash &&
     a.payeeAccountHash === b.payeeAccountHash &&
     a.valueAtomic === b.valueAtomic &&
+    a.validAfter === b.validAfter &&
+    a.validBefore === b.validBefore &&
     a.authorizationNonce === b.authorizationNonce &&
+    a.publicKey === b.publicKey &&
+    a.signature === b.signature &&
     a.wcsprContract === b.wcsprContract
   );
 }
@@ -251,9 +271,10 @@ export class FulfillmentLedger {
              network, signed_payment_payload_hash, resource_id, action_id,
              envelope_hash, resource_url_hash, report_hash,
              payment_requirements_hash, payer_account_hash, payee_account_hash,
-             value_atomic, authorization_nonce, wcspr_contract, state,
+             value_atomic, valid_after, valid_before, authorization_nonce,
+             public_key, signature, wcspr_contract, state,
              created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'claimed', ?, ?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'claimed', ?, ?)`,
         )
         .run(
           binding.network,
@@ -267,7 +288,11 @@ export class FulfillmentLedger {
           binding.payerAccountHash,
           binding.payeeAccountHash,
           binding.valueAtomic,
+          binding.validAfter,
+          binding.validBefore,
           binding.authorizationNonce,
+          binding.publicKey,
+          binding.signature,
           binding.wcsprContract,
           now,
           now,

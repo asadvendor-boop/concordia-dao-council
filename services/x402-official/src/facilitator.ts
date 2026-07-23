@@ -21,6 +21,7 @@ import {
   REFUSAL_CODES,
   ServiceRefusal,
 } from "./errors.js";
+import { readBoundedJson } from "./http.js";
 import type {
   FacilitatorTransport,
   PaymentPayloadWire,
@@ -31,11 +32,83 @@ import type {
   VerifyResponseWire,
 } from "./types.js";
 
+/** Frozen production facilitator origin — no environment-proxy override (WP5-4). */
+export const FROZEN_FACILITATOR_ORIGIN = "https://x402-facilitator.cspr.cloud";
+
+const CREDENTIALED_FETCH_TIMEOUT_MS = 15_000;
+const MAX_FACILITATOR_RESPONSE_BYTES = 65_536;
+
+/**
+ * Bounded allowlist of upstream facilitator reasons that may be echoed as
+ * stable local codes. Anything else (arbitrary/oversized/credential-reflecting
+ * text) collapses to a generic code and is never surfaced in a body or a log
+ * (WP5 hardening: bound and map upstream reason strings).
+ */
+const ALLOWED_FACILITATOR_REASONS: ReadonlySet<string> = new Set([
+  "insufficient_funds",
+  "invalid_signature",
+  "invalid_scheme",
+  "invalid_network",
+  "invalid_payload",
+  "invalid_amount",
+  "invalid_nonce",
+  "expired",
+  "unsupported",
+]);
+
+const REASON_GRAMMAR = /^[a-z][a-z0-9_]{0,47}$/;
+
+/**
+ * Map an untrusted upstream reason to a bounded, stable local code. Only a
+ * grammar-conforming, explicitly allowlisted token is passed through; every
+ * other value (including credential-reflecting or oversized text) becomes the
+ * generic fallback.
+ */
+export function boundFacilitatorReason(
+  raw: string | undefined,
+  fallback: string,
+): string {
+  if (
+    typeof raw === "string" &&
+    REASON_GRAMMAR.test(raw) &&
+    ALLOWED_FACILITATOR_REASONS.has(raw)
+  ) {
+    return raw;
+  }
+  return fallback;
+}
+
+/**
+ * Test-only knobs. Production NEVER sets any of these; the origin is frozen and
+ * the timeout/body caps take their frozen defaults (WP5-4).
+ */
+export interface FacilitatorTransportTestOptions {
+  allowUnfrozenOriginForTest?: boolean;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+}
+
 export class HttpFacilitatorTransport implements FacilitatorTransport {
+  private readonly timeoutMs: number;
+  private readonly maxResponseBytes: number;
+
   constructor(
     private readonly baseUrl: string,
     private readonly tokenProvider: () => string,
-  ) {}
+    options: FacilitatorTransportTestOptions = {},
+  ) {
+    // Freeze the credentialed origin: reject any non-frozen, non-HTTPS, or
+    // path-bearing base URL so a redirected env can never exfiltrate the token.
+    if (options.allowUnfrozenOriginForTest !== true && baseUrl !== FROZEN_FACILITATOR_ORIGIN) {
+      throw new ServiceRefusal(
+        500,
+        "facilitator_origin_not_frozen",
+        "internal",
+      );
+    }
+    this.timeoutMs = options.timeoutMs ?? CREDENTIALED_FETCH_TIMEOUT_MS;
+    this.maxResponseBytes = options.maxResponseBytes ?? MAX_FACILITATOR_RESPONSE_BYTES;
+  }
 
   private async request(method: string, path: string, body?: unknown): Promise<unknown> {
     const token = this.tokenProvider();
@@ -48,10 +121,16 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
           authorization: token,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
+        // A credentialed request must never follow a redirect (the Location
+        // could exfiltrate the token to an attacker-chosen origin) and must be
+        // bounded in time (WP5-4).
+        redirect: "error",
+        signal: AbortSignal.timeout(this.timeoutMs),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      // No exception details propagate: fetch errors can embed request data.
+      // No exception details propagate: fetch errors can embed request data,
+      // and a redirect/timeout aborts here without ever exposing the token.
       throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
     }
     if (!response.ok) {
@@ -67,7 +146,7 @@ export class HttpFacilitatorTransport implements FacilitatorTransport {
       throw new ServiceRefusal(502, `facilitator_http_${response.status}`, "upstream_malformed");
     }
     try {
-      return await response.json();
+      return await readBoundedJson(response, this.maxResponseBytes);
     } catch {
       throw upstreamMalformed(REFUSAL_CODES.MALFORMED_FACILITATOR_RESPONSE);
     }

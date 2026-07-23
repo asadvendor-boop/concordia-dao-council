@@ -13,7 +13,12 @@ import { FulfillmentLedger } from "./ledger.js";
 import { HttpFacilitatorTransport, createLocalVerifier } from "./facilitator.js";
 import { HttpRegistryTransport } from "./registry.js";
 import { FailClosedChainTransport } from "./chain.js";
-import { reconcileLedgerOnStartup, type PipelineDeps } from "./pipeline.js";
+import {
+  reconcileLedgerOnStartup,
+  probePackageHealthOnStartup,
+  isSettlementReady,
+  type PipelineDeps,
+} from "./pipeline.js";
 import { createService } from "./server.js";
 
 async function main(): Promise<void> {
@@ -38,10 +43,15 @@ async function main(): Promise<void> {
     localVerifier: createLocalVerifier(config.network, chainName),
   };
   const reconciliation = await reconcileLedgerOnStartup(deps);
+  // Startup readiness probe: current package drift/unavailability must never
+  // leave the operational settlement state green (§11, WP5-6).
+  const packageHealthy = await probePackageHealthOnStartup(deps);
   console.log(
     JSON.stringify({
       event: "startup",
       settlement_state: ledger.getSettlementState(),
+      settlement_ready: isSettlementReady(deps),
+      package_healthy: packageHealthy,
       reconciled_finalized: reconciliation.finalized,
       reconciled_failed: reconciliation.failed,
       reconciliation_pending: reconciliation.pending,

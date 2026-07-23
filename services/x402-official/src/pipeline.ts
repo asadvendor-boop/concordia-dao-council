@@ -1,27 +1,35 @@
 /**
  * Verify/settle pipelines (§11, §12).
  *
- * Frozen processing order for both endpoints:
- *   1. local shape / canonical-number / account / signature validation
- *   2. offline official EIP-712 verification (pinned scheme, stub signer)
- *   3. signed_payment_payload_hash computed from the validated request
- *   4. unique verified v3 registry lookup (governance interlock)
- *   5. fresh active-v8 drift guard
- *   6. credentialed hosted facilitator call
+ * Settlement processing order (WP5-5 durable idempotency):
+ *   1. strict parse + canonical validation + signed_payment_payload_hash
+ *   2. ledger consult BEFORE any volatile gate:
+ *        - terminal row  → validated stored response (survives expiry/outage)
+ *        - in-flight row → reconcile/recover, never a second settlement
+ *   3. NEW claim only: current-time official EIP-712 verify, unique verified v3
+ *      registry binding, atomic ledger claim
+ *   4. fresh pre-verify + pre-settle active-v8 drift guards (lockStatus+version)
+ *   5. credentialed hosted facilitator verify + settle
+ *   6. post-settle readback of all eight typed args + exact transaction identity
  *
- * An ungoverned, ambiguous, stale, or invalid payload causes ZERO upstream
- * facilitator calls. Settlement additionally claims the durable ledger before
- * any submission, journals submission_started BEFORE the facilitator settle
- * call, and releases nothing until the on-chain readback proves the exact v8
- * transfer. HTTP 200 from the facilitator is never success by itself.
+ * A `finalized:false` readback is PENDING, resumable, never terminal (WP5-2).
+ * A lost `/settle` response is recovered by exact payer/package/nonce identity
+ * without ever issuing a second settlement (WP5-3). Untrusted upstream reason
+ * strings are mapped to bounded local codes and never echoed or logged.
  */
 
-import { ServiceRefusal, upstreamUnavailable, REFUSAL_CODES } from "./errors.js";
+import {
+  ServiceRefusal,
+  PendingFinalityError,
+  upstreamUnavailable,
+  REFUSAL_CODES,
+} from "./errors.js";
 import { SETTLEMENT_STATES, type ServiceConfig } from "./config.js";
 import { validateVerifySettleRequest } from "./validation.js";
 import {
   validateVerifyResponse,
   validateSettleResponse,
+  boundFacilitatorReason,
   type LocalVerifier,
 } from "./facilitator.js";
 import { validateGovernanceRecord } from "./registry.js";
@@ -31,7 +39,13 @@ import {
   validateSettlementReadback,
   type ExpectedSettlement,
 } from "./chain.js";
-import { responseHash, type FulfillmentLedger, type FulfillmentRow } from "./ledger.js";
+import {
+  responseHash,
+  type FulfillmentBinding,
+  type FulfillmentLedger,
+  type FulfillmentRow,
+  type RowState,
+} from "./ledger.js";
 import type {
   ChainTransport,
   ConfiguredResource,
@@ -94,16 +108,256 @@ function markDrift(deps: PipelineDeps, error: unknown): void {
   }
 }
 
-/**
- * Local gates shared by verify and settle: strict validation, offline
- * official EIP-712 verification, and the governance interlock. Zero
- * facilitator calls happen inside this function.
- */
-async function runLocalGates(
-  body: unknown,
+/** Readiness (distinct from liveness): only a proven live gate is "ready". */
+export function isSettlementReady(deps: PipelineDeps): boolean {
+  return (
+    deps.ledger.getSettlementState() ===
+    SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE
+  );
+}
+
+function expectedFromPayment(
+  payment: ValidatedPayment,
+  transactionHashHex: string,
+): ExpectedSettlement {
+  return {
+    transactionHashHex,
+    payerAccountHashHex: payment.payerAccountHash.toString("hex"),
+    payeeAccountHashHex: payment.payeeAccountHash.toString("hex"),
+    valueAtomic: payment.valueAtomic.toString(10),
+    validAfter: payment.validAfter.toString(10),
+    validBefore: payment.validBefore.toString(10),
+    nonceHex: payment.nonce.toString("hex"),
+    publicKeyHex: payment.publicKeyBytes.toString("hex"),
+    signatureHex: payment.signature.toString("hex"),
+  };
+}
+
+function expectedFromRow(row: FulfillmentRow): ExpectedSettlement {
+  return {
+    transactionHashHex: row.settlementTransactionHash ?? "",
+    payerAccountHashHex: row.payerAccountHash,
+    payeeAccountHashHex: row.payeeAccountHash,
+    valueAtomic: row.valueAtomic,
+    validAfter: row.validAfter,
+    validBefore: row.validBefore,
+    nonceHex: row.authorizationNonce,
+    publicKeyHex: row.publicKey,
+    signatureHex: row.signature,
+  };
+}
+
+function bindingFrom(
+  payment: ValidatedPayment,
+  governance: GovernanceBinding,
+  config: ServiceConfig,
+): FulfillmentBinding {
+  return {
+    network: config.network,
+    signedPaymentPayloadHash: payment.signedPaymentPayloadHashHex,
+    resourceId: payment.resource.id,
+    actionId: governance.actionId,
+    envelopeHash: governance.envelopeHash,
+    resourceUrlHash: payment.resource.resourceUrlHashHex,
+    reportHash: payment.resource.reportHashHex,
+    paymentRequirementsHash: payment.paymentRequirementsHashHex,
+    payerAccountHash: payment.payerAccountHash.toString("hex"),
+    payeeAccountHash: payment.payeeAccountHash.toString("hex"),
+    valueAtomic: payment.valueAtomic.toString(10),
+    validAfter: payment.validAfter.toString(10),
+    validBefore: payment.validBefore.toString(10),
+    authorizationNonce: payment.nonce.toString("hex"),
+    publicKey: payment.publicKeyBytes.toString("hex"),
+    signature: payment.signature.toString("hex"),
+    wcsprContract: config.wcsprContractHash,
+  };
+}
+
+function settleSuccessResponse(
+  payerAccountHashHex: string,
+  transaction: string,
+  network: string,
+): SettleResponseWire {
+  return {
+    success: true,
+    transaction,
+    network,
+    payer: `00${payerAccountHashHex}`,
+  };
+}
+
+/** Exact terminal retry: re-validate and return the stored response (WP5-5). */
+function validatedStoredResponse(
+  row: FulfillmentRow,
+  config: ServiceConfig,
+): SettleResponseWire {
+  if (row.responseJson !== null) {
+    try {
+      return validateSettleResponse(JSON.parse(row.responseJson), config.network);
+    } catch {
+      /* corrupt stored body: fall through to deterministic derivation */
+    }
+  }
+  if (row.state === "finalized") {
+    return settleSuccessResponse(
+      row.payerAccountHash,
+      row.settlementTransactionHash ?? "",
+      row.network,
+    );
+  }
+  return {
+    success: false,
+    errorReason: row.failureReason ?? "failed_terminal",
+    transaction: row.settlementTransactionHash ?? "",
+    network: row.network,
+  };
+}
+
+function writeTerminalFailure(
   deps: PipelineDeps,
-): Promise<{ payment: ValidatedPayment; governance: GovernanceBinding }> {
-  const payment = validateVerifySettleRequest(body, deps.config);
+  hash: string,
+  from: RowState[],
+  code: string,
+  transaction: string,
+): SettleResponseWire {
+  const body: SettleResponseWire = {
+    success: false,
+    errorReason: code,
+    transaction,
+    network: deps.config.network,
+  };
+  const json = JSON.stringify(body);
+  deps.ledger.transition(deps.config.network, hash, from, "failed_terminal", {
+    failureReason: code,
+    responseJson: json,
+    settlementResponseHash: responseHash(json),
+  });
+  return body;
+}
+
+function writeFinalized(
+  deps: PipelineDeps,
+  hash: string,
+  payerAccountHashHex: string,
+  transaction: string,
+): SettleResponseWire {
+  const body = settleSuccessResponse(payerAccountHashHex, transaction, deps.config.network);
+  const json = JSON.stringify(body);
+  deps.ledger.transition(deps.config.network, hash, ["transaction_observed"], "finalized", {
+    responseJson: json,
+    settlementResponseHash: responseHash(json),
+    settledAt: new Date().toISOString(),
+  });
+  deps.ledger.setSettlementState(SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE);
+  return body;
+}
+
+type Recovery =
+  | { status: "finalized"; response: SettleResponseWire }
+  | { status: "failed"; response: SettleResponseWire }
+  | { status: "pending" }
+  | { status: "unconsumed" };
+
+/**
+ * Apply a chain readback to an observed row. A pending readback leaves the row
+ * resumable in transaction_observed (WP5-2); a terminal mismatch writes
+ * failed_terminal; an exact match finalizes.
+ */
+function applyReadback(
+  deps: PipelineDeps,
+  ctx: { hash: string; payerAccountHashHex: string },
+  expected: ExpectedSettlement,
+  readback: Parameters<typeof validateSettlementReadback>[0],
+): Recovery {
+  try {
+    validateSettlementReadback(readback, deps.config, expected);
+  } catch (error) {
+    if (error instanceof PendingFinalityError) return { status: "pending" };
+    markDrift(deps, error);
+    const code =
+      error instanceof ServiceRefusal ? error.code : REFUSAL_CODES.POST_SETTLE_READBACK_FAILED;
+    const response = writeTerminalFailure(
+      deps,
+      ctx.hash,
+      ["transaction_observed"],
+      code,
+      expected.transactionHashHex,
+    );
+    return { status: "failed", response };
+  }
+  const response = writeFinalized(
+    deps,
+    ctx.hash,
+    ctx.payerAccountHashHex,
+    expected.transactionHashHex,
+  );
+  return { status: "finalized", response };
+}
+
+/**
+ * Reconcile one in-flight row against the chain. For a row with a recorded
+ * deploy hash, read it back. For a row whose `/settle` response was lost (no
+ * recorded hash), recover the deploy by exact authorization identity — adopting
+ * an already-submitted transaction WITHOUT a second settlement, or proving the
+ * nonce is unconsumed so the caller may submit exactly once (WP5-3). Never
+ * issues a facilitator call.
+ */
+async function recoverInFlightRow(
+  deps: PipelineDeps,
+  row: FulfillmentRow,
+): Promise<Recovery> {
+  let current = row;
+  if (current.settlementTransactionHash === null) {
+    let locator;
+    try {
+      locator = await deps.chain.locateSettlementByAuthorization({
+        packageHashHex: deps.config.wcsprPackageHash,
+        contractHashHex: current.wcsprContract,
+        payerAccountHashHex: current.payerAccountHash,
+        payerPublicKeyHex: current.publicKey,
+        authorizationNonceHex: current.authorizationNonce,
+      });
+    } catch {
+      return { status: "pending" };
+    }
+    if (!locator.found) {
+      // Authoritatively unconsumed: no settlement happened.
+      return { status: "unconsumed" };
+    }
+    current = deps.ledger.transition(
+      current.network,
+      current.signedPaymentPayloadHash,
+      ["submission_started"],
+      "transaction_observed",
+      { settlementTransactionHash: locator.transactionHash },
+    );
+  }
+  const txHash = current.settlementTransactionHash;
+  if (txHash === null) return { status: "pending" };
+  let readback;
+  try {
+    readback = await deps.chain.getFinalizedTransaction(txHash);
+  } catch {
+    return { status: "pending" };
+  }
+  return applyReadback(
+    deps,
+    { hash: current.signedPaymentPayloadHash, payerAccountHashHex: current.payerAccountHash },
+    expectedFromRow(current),
+    readback,
+  );
+}
+
+/**
+ * Current-time governance/signature gates. Runs the offline official EIP-712
+ * verification (validity window vs the current clock) and the unique verified
+ * v3 registry lookup. Only ever runs for a NEW claim (WP5-5). Zero facilitator
+ * calls happen here.
+ */
+async function runCurrentTimeGates(
+  payment: ValidatedPayment,
+  deps: PipelineDeps,
+): Promise<GovernanceBinding> {
   const local = await deps.localVerifier.verify(
     payment.paymentPayload,
     payment.requirements,
@@ -128,15 +382,15 @@ async function runLocalGates(
       "terminal_conflict",
     );
   }
-  const governance = validateGovernanceRecord(lookup.record, payment, deps.config);
-  return { payment, governance };
+  return validateGovernanceRecord(lookup.record, payment, deps.config);
 }
 
 export async function runVerify(
   body: unknown,
   deps: PipelineDeps,
 ): Promise<VerifyResponseWire> {
-  const { payment } = await runLocalGates(body, deps);
+  const payment = validateVerifySettleRequest(body, deps.config);
+  await runCurrentTimeGates(payment, deps);
   try {
     await requireActiveV8(deps.chain, deps.config);
   } catch (error) {
@@ -148,215 +402,57 @@ export async function runVerify(
     paymentPayload: payment.paymentPayload,
     paymentRequirements: payment.requirements,
   });
-  return validateVerifyResponse(raw);
-}
-
-function settleSuccessResponse(
-  payment: { payerAccountHash: Buffer },
-  transaction: string,
-  network: string,
-): SettleResponseWire {
-  return {
-    success: true,
-    transaction,
-    network,
-    payer: `00${payment.payerAccountHash.toString("hex")}`,
-  };
-}
-
-function storedResponse(row: FulfillmentRow): SettleResponseWire | undefined {
-  if (row.responseJson === null) return undefined;
-  try {
-    return JSON.parse(row.responseJson) as SettleResponseWire;
-  } catch {
-    return undefined;
-  }
-}
-
-function expectedFromRow(row: FulfillmentRow): ExpectedSettlement {
-  return {
-    payerAccountHashHex: row.payerAccountHash,
-    payeeAccountHashHex: row.payeeAccountHash,
-    valueAtomic: row.valueAtomic,
-    nonceHex: row.authorizationNonce,
-  };
-}
-
-/**
- * Reconcile one in-flight row against the chain by its recorded transaction
- * hash. Never issues a facilitator call. Returns the final row when the row
- * reached a terminal state, undefined when observation is unavailable.
- */
-async function reconcileRow(
-  row: FulfillmentRow,
-  deps: PipelineDeps,
-): Promise<FulfillmentRow | undefined> {
-  if (row.settlementTransactionHash === null) return undefined;
-  let readback;
-  try {
-    readback = await deps.chain.getFinalizedTransaction(row.settlementTransactionHash);
-  } catch {
-    return undefined;
-  }
-  try {
-    validateSettlementReadback(readback, deps.config, expectedFromRow(row));
-  } catch (error) {
-    markDrift(deps, error);
-    const code =
-      error instanceof ServiceRefusal ? error.code : REFUSAL_CODES.POST_SETTLE_READBACK_FAILED;
-    const body: SettleResponseWire = {
-      success: false,
-      errorReason: code,
-      transaction: row.settlementTransactionHash,
-      network: row.network,
-    };
-    return deps.ledger.transition(
-      row.network,
-      row.signedPaymentPayloadHash,
-      ["submission_started", "transaction_observed"],
-      "failed_terminal",
-      {
-        failureReason: code,
-        responseJson: JSON.stringify(body),
-        settlementResponseHash: responseHash(JSON.stringify(body)),
-      },
+  const resp = validateVerifyResponse(raw);
+  if (resp.isValid !== true) {
+    // The remote facilitator reason is untrusted: bound and map it.
+    resp.invalidReason = boundFacilitatorReason(
+      resp.invalidReason,
+      REFUSAL_CODES.FACILITATOR_DECLINED,
     );
   }
-  const body = settleSuccessResponse(
-    { payerAccountHash: Buffer.from(row.payerAccountHash, "hex") },
-    row.settlementTransactionHash,
-    row.network,
-  );
-  const json = JSON.stringify(body);
-  const finalized = deps.ledger.transition(
-    row.network,
-    row.signedPaymentPayloadHash,
-    ["submission_started", "transaction_observed"],
-    "finalized",
-    {
-      responseJson: json,
-      settlementResponseHash: responseHash(json),
-      settledAt: new Date().toISOString(),
-    },
-  );
-  deps.ledger.setSettlementState(SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE);
-  return finalized;
+  return resp;
 }
 
 /**
- * Startup crash-safety: reconcile every journaled in-flight settlement so an
- * authorization nonce can never be reused (or resubmitted) through a crash
- * gap. Rows without a recorded transaction hash stay reserved, fail closed.
+ * Submit a settlement exactly once. `freshVerify` runs the credentialed verify
+ * + claimed→verified transition for a genuinely new claim; a proven-unconsumed
+ * lost-response resubmission skips it (the payload was already verified) and
+ * resubmits from the reserved `submission_started` row without a second
+ * governance lookup.
  */
-export async function reconcileLedgerOnStartup(
+async function submitSettlement(
   deps: PipelineDeps,
-): Promise<{ finalized: number; failed: number; pending: number }> {
-  let finalized = 0;
-  let failed = 0;
-  let pending = 0;
-  for (const row of deps.ledger.pendingRows()) {
-    const result = await reconcileRow(row, deps);
-    if (result === undefined) pending += 1;
-    else if (result.state === "finalized") finalized += 1;
-    else failed += 1;
-  }
-  return { finalized, failed, pending };
-}
-
-export async function runSettle(
-  body: unknown,
-  deps: PipelineDeps,
+  initialRow: FulfillmentRow,
+  payment: ValidatedPayment,
+  freshVerify: boolean,
 ): Promise<SettleResponseWire> {
-  const { config, ledger } = deps;
-  const { payment, governance } = await runLocalGates(body, deps);
+  const { config } = deps;
+  const hash = payment.signedPaymentPayloadHashHex;
+  let row = initialRow;
 
-  const claim = ledger.claim({
-    network: config.network,
-    signedPaymentPayloadHash: payment.signedPaymentPayloadHashHex,
-    resourceId: payment.resource.id,
-    actionId: governance.actionId,
-    envelopeHash: governance.envelopeHash,
-    resourceUrlHash: payment.resource.resourceUrlHashHex,
-    reportHash: payment.resource.reportHashHex,
-    paymentRequirementsHash: payment.paymentRequirementsHashHex,
-    payerAccountHash: payment.payerAccountHash.toString("hex"),
-    payeeAccountHash: payment.payeeAccountHash.toString("hex"),
-    valueAtomic: payment.valueAtomic.toString(10),
-    authorizationNonce: payment.nonce.toString("hex"),
-    wcsprContract: config.wcsprContractHash,
-  });
-
-  let row = claim.row;
-  if (claim.outcome === "existing") {
-    if (row.state === "finalized" || row.state === "failed_terminal") {
-      // Exact same-binding retry: idempotent stored response, no upstream calls.
-      const stored = storedResponse(row);
-      if (stored !== undefined) return stored;
-      return {
-        success: row.state === "finalized",
-        ...(row.state === "finalized"
-          ? {}
-          : { errorReason: row.failureReason ?? "failed_terminal" }),
-        transaction: row.settlementTransactionHash ?? "",
-        network: row.network,
-      };
+  if (freshVerify) {
+    try {
+      await requireActiveV8(deps.chain, config);
+    } catch (error) {
+      markDrift(deps, error);
+      throw error;
     }
-    if (row.state === "submission_started" || row.state === "transaction_observed") {
-      const reconciled = await reconcileRow(row, deps);
-      if (reconciled === undefined) {
-        // In-flight and unobservable: never a blind second settlement.
-        throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
-      }
-      const stored = storedResponse(reconciled);
-      if (stored !== undefined) return stored;
-      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+    const rawVerify = await deps.facilitator.verify({
+      x402Version: 2,
+      paymentPayload: payment.paymentPayload,
+      paymentRequirements: payment.requirements,
+    });
+    const verifyResponse = validateVerifyResponse(rawVerify);
+    if (verifyResponse.isValid !== true) {
+      const code = boundFacilitatorReason(
+        verifyResponse.invalidReason,
+        REFUSAL_CODES.FACILITATOR_DECLINED,
+      );
+      return writeTerminalFailure(deps, hash, ["claimed", "verified"], code, "");
     }
-    // claimed/verified: continue the pipeline from the journaled state.
-  }
-
-  // Fresh pre-verify drift guard (§11: uncached, per attempt).
-  try {
-    await requireActiveV8(deps.chain, config);
-  } catch (error) {
-    markDrift(deps, error);
-    throw error;
-  }
-
-  const rawVerify = await deps.facilitator.verify({
-    x402Version: 2,
-    paymentPayload: payment.paymentPayload,
-    paymentRequirements: payment.requirements,
-  });
-  const verifyResponse = validateVerifyResponse(rawVerify);
-  if (verifyResponse.isValid !== true) {
-    const code = verifyResponse.invalidReason ?? "facilitator_verify_invalid";
-    const bodyOut: SettleResponseWire = {
-      success: false,
-      errorReason: code,
-      transaction: "",
-      network: config.network,
-    };
-    const json = JSON.stringify(bodyOut);
-    ledger.transition(
-      config.network,
-      payment.signedPaymentPayloadHashHex,
-      ["claimed", "verified"],
-      "failed_terminal",
-      {
-        failureReason: code,
-        responseJson: json,
-        settlementResponseHash: responseHash(json),
-      },
-    );
-    return bodyOut;
-  }
-  if (row.state === "claimed") {
-    row = ledger.transition(
-      config.network,
-      payment.signedPaymentPayloadHashHex,
-      ["claimed"],
-      "verified",
-    );
+    if (row.state === "claimed") {
+      row = deps.ledger.transition(config.network, hash, ["claimed"], "verified");
+    }
   }
 
   // Fresh pre-settle drift guard, immediately before submission (§11 TOCTOU).
@@ -367,13 +463,9 @@ export async function runSettle(
     throw error;
   }
 
-  // Durable journal BEFORE the credentialed settle call.
-  row = ledger.transition(
-    config.network,
-    payment.signedPaymentPayloadHashHex,
-    ["verified"],
-    "submission_started",
-  );
+  if (row.state === "verified") {
+    row = deps.ledger.transition(config.network, hash, ["verified"], "submission_started");
+  }
 
   let rawSettle: unknown;
   try {
@@ -384,45 +476,30 @@ export async function runSettle(
     });
   } catch (error) {
     // Response lost or refused after journaling: the nonce stays reserved and
-    // later retries go through reconciliation. Never resubmit blindly.
+    // later retries recover by authorization identity. Never resubmit blindly.
     if (error instanceof ServiceRefusal) throw error;
     throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
   }
   const settleResponse = validateSettleResponse(rawSettle, config.network);
-
   if (settleResponse.success !== true) {
-    const code = settleResponse.errorReason ?? REFUSAL_CODES.FACILITATOR_REPORTED_FAILURE;
-    const bodyOut: SettleResponseWire = {
-      success: false,
-      errorReason: code,
-      transaction: settleResponse.transaction,
-      network: config.network,
-    };
-    const json = JSON.stringify(bodyOut);
-    ledger.transition(
-      config.network,
-      payment.signedPaymentPayloadHashHex,
-      ["submission_started"],
-      "failed_terminal",
-      {
-        failureReason: code,
-        responseJson: json,
-        settlementResponseHash: responseHash(json),
-      },
+    const code = boundFacilitatorReason(
+      settleResponse.errorReason,
+      REFUSAL_CODES.FACILITATOR_SETTLEMENT_DECLINED,
     );
-    return bodyOut;
+    return writeTerminalFailure(
+      deps,
+      hash,
+      ["submission_started"],
+      code,
+      settleResponse.transaction,
+    );
   }
 
-  row = ledger.transition(
-    config.network,
-    payment.signedPaymentPayloadHashHex,
-    ["submission_started"],
-    "transaction_observed",
-    { settlementTransactionHash: settleResponse.transaction },
-  );
+  deps.ledger.transition(config.network, hash, ["submission_started"], "transaction_observed", {
+    settlementTransactionHash: settleResponse.transaction,
+  });
 
-  // Post-settle proof: fresh drift guard + full transaction readback. HTTP
-  // 200 + success:true is still not success until this passes.
+  // Post-settle proof: fresh drift guard + full transaction readback.
   let readback;
   try {
     await requireActiveV8(deps.chain, config);
@@ -430,79 +507,133 @@ export async function runSettle(
   } catch (error) {
     markDrift(deps, error);
     if (error instanceof DriftError) {
-      // TOCTOU drift between submission and readback: terminal, no release.
-      const bodyOut: SettleResponseWire = {
-        success: false,
-        errorReason: error.code,
-        transaction: settleResponse.transaction,
-        network: config.network,
-      };
-      const json = JSON.stringify(bodyOut);
-      ledger.transition(
-        config.network,
-        payment.signedPaymentPayloadHashHex,
+      return writeTerminalFailure(
+        deps,
+        hash,
         ["transaction_observed"],
-        "failed_terminal",
-        {
-          failureReason: error.code,
-          responseJson: json,
-          settlementResponseHash: responseHash(json),
-        },
+        error.code,
+        settleResponse.transaction,
       );
-      return bodyOut;
     }
-    // Observation unavailable: stay in transaction_observed; reconcile later.
+    // Observation unavailable: stay transaction_observed; reconcile later.
     throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
   }
-  try {
-    validateSettlementReadback(readback, config, {
-      payerAccountHashHex: payment.payerAccountHash.toString("hex"),
-      payeeAccountHashHex: payment.payeeAccountHash.toString("hex"),
-      valueAtomic: payment.valueAtomic.toString(10),
-      nonceHex: payment.nonce.toString("hex"),
-    });
-  } catch (error) {
-    markDrift(deps, error);
-    const code =
-      error instanceof ServiceRefusal
-        ? error.code
-        : REFUSAL_CODES.POST_SETTLE_READBACK_FAILED;
-    const bodyOut: SettleResponseWire = {
-      success: false,
-      errorReason: code,
-      transaction: settleResponse.transaction,
-      network: config.network,
-    };
-    const json = JSON.stringify(bodyOut);
-    ledger.transition(
-      config.network,
-      payment.signedPaymentPayloadHashHex,
-      ["transaction_observed"],
-      "failed_terminal",
-      {
-        failureReason: code,
-        responseJson: json,
-        settlementResponseHash: responseHash(json),
-      },
-    );
-    return bodyOut;
+  const recovery = applyReadback(
+    deps,
+    { hash, payerAccountHashHex: payment.payerAccountHash.toString("hex") },
+    expectedFromPayment(payment, settleResponse.transaction),
+    readback,
+  );
+  if (recovery.status === "finalized" || recovery.status === "failed") {
+    return recovery.response;
+  }
+  // Pending finality: resumable, retryable, row stays transaction_observed.
+  throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+}
+
+/** Resolve an already-existing ledger row; returns a response or falls through. */
+async function resolveExistingRow(
+  deps: PipelineDeps,
+  row: FulfillmentRow,
+  payment: ValidatedPayment,
+): Promise<SettleResponseWire | "resume_new" | "resubmit_from_reserved"> {
+  if (row.state === "finalized" || row.state === "failed_terminal") {
+    // Exact terminal idempotent retry — BEFORE any volatile gate (WP5-5).
+    return validatedStoredResponse(row, deps.config);
+  }
+  if (row.state === "submission_started" || row.state === "transaction_observed") {
+    const recovery = await recoverInFlightRow(deps, row);
+    if (recovery.status === "finalized" || recovery.status === "failed") {
+      return recovery.response;
+    }
+    if (recovery.status === "pending") {
+      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+    }
+    return "resubmit_from_reserved";
+  }
+  // claimed / verified: resume the pipeline using the STORED binding.
+  return "resume_new";
+}
+
+export async function runSettle(
+  body: unknown,
+  deps: PipelineDeps,
+): Promise<SettleResponseWire> {
+  const { config, ledger } = deps;
+  // 1. Strict parse + hash FIRST — no current-time, no network (WP5-5).
+  const payment = validateVerifySettleRequest(body, config);
+  const hash = payment.signedPaymentPayloadHashHex;
+
+  // 2. Consult the ledger BEFORE any volatile gate (WP5-5).
+  const existing = ledger.get(config.network, hash);
+  if (existing !== undefined) {
+    const resolved = await resolveExistingRow(deps, existing, payment);
+    if (resolved === "resubmit_from_reserved") {
+      return submitSettlement(deps, existing, payment, false);
+    }
+    if (resolved === "resume_new") {
+      return submitSettlement(deps, existing, payment, true);
+    }
+    return resolved;
   }
 
-  const bodyOut = settleSuccessResponse(payment, settleResponse.transaction, config.network);
-  const json = JSON.stringify(bodyOut);
-  ledger.transition(
-    config.network,
-    payment.signedPaymentPayloadHashHex,
-    ["transaction_observed"],
-    "finalized",
-    {
-      responseJson: json,
-      settlementResponseHash: responseHash(json),
-      settledAt: new Date().toISOString(),
-    },
-  );
-  ledger.setSettlementState(SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE);
-  return bodyOut;
+  // 3. NEW claim: all current-time governance/signature gates run only here.
+  const governance = await runCurrentTimeGates(payment, deps);
+  const claim = ledger.claim(bindingFrom(payment, governance, config));
+  if (claim.outcome === "existing") {
+    // Concurrent claim raced us: resolve the now-existing row.
+    const resolved = await resolveExistingRow(deps, claim.row, payment);
+    if (resolved === "resubmit_from_reserved") {
+      return submitSettlement(deps, claim.row, payment, false);
+    }
+    if (resolved === "resume_new") {
+      return submitSettlement(deps, claim.row, payment, true);
+    }
+    return resolved;
+  }
+  return submitSettlement(deps, claim.row, payment, true);
+}
+
+/**
+ * Startup crash-safety: reconcile every journaled in-flight settlement so an
+ * authorization nonce can never be reused (or resubmitted) through a crash gap.
+ * A lost-response row with no recorded hash is recovered by authorization
+ * identity when the observer can prove it; otherwise it stays reserved and a
+ * later retry (with request context) submits exactly once.
+ */
+export async function reconcileLedgerOnStartup(
+  deps: PipelineDeps,
+): Promise<{ finalized: number; failed: number; pending: number }> {
+  let finalized = 0;
+  let failed = 0;
+  let pending = 0;
+  for (const row of deps.ledger.pendingRows()) {
+    const recovery = await recoverInFlightRow(deps, row);
+    if (recovery.status === "finalized") finalized += 1;
+    else if (recovery.status === "failed") failed += 1;
+    else pending += 1; // pending or provably-unconsumed both await a retry
+  }
+  return { finalized, failed, pending };
+}
+
+/**
+ * Startup readiness probe (WP5-6): current package drift or unavailability must
+ * never leave the operational settlement state green. Drift is persisted as
+ * blocked_upgrade_drift; an unavailable observer leaves the default
+ * blocked_fail_closed state.
+ */
+export async function probePackageHealthOnStartup(
+  deps: PipelineDeps,
+): Promise<boolean> {
+  try {
+    await requireActiveV8(deps.chain, deps.config);
+    return true;
+  } catch (error) {
+    if (error instanceof DriftError) {
+      deps.ledger.setSettlementState(SETTLEMENT_STATES.BLOCKED_UPGRADE_DRIFT);
+    }
+    return false;
+  }
 }
 
 /**

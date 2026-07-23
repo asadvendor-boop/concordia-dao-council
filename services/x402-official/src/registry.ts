@@ -18,6 +18,8 @@ import {
   upstreamUnavailable,
   REFUSAL_CODES,
 } from "./errors.js";
+import { readBoundedJson } from "./http.js";
+import { parseRfc3339Utc } from "./time.js";
 import type { ServiceConfig } from "./config.js";
 import type {
   GovernanceBinding,
@@ -25,6 +27,12 @@ import type {
   RegistryTransport,
   ValidatedPayment,
 } from "./types.js";
+
+/** Frozen internal Gateway origin — no environment-proxy override (WP5-4). */
+export const FROZEN_GATEWAY_ORIGIN = "http://gateway:8000";
+
+const CREDENTIALED_FETCH_TIMEOUT_MS = 15_000;
+const MAX_REGISTRY_RESPONSE_BYTES = 65_536;
 
 /** Frozen exact_envelope_v3 required check names (G1 schemas §13). */
 export const EXACT_ENVELOPE_V3_REQUIRED_CHECKS: readonly string[] = [
@@ -74,11 +82,32 @@ const CHECK_OPTIONAL_FIELDS = ["detail_code"] as const;
 
 const HEX64_RE = /^[0-9a-f]{64}$/;
 
+export interface RegistryTransportTestOptions {
+  allowUnfrozenOriginForTest?: boolean;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+}
+
 export class HttpRegistryTransport implements RegistryTransport {
+  private readonly timeoutMs: number;
+  private readonly maxResponseBytes: number;
+
   constructor(
     private readonly gatewayInternalUrl: string,
     private readonly tokenProvider: () => string,
-  ) {}
+    options: RegistryTransportTestOptions = {},
+  ) {
+    // Freeze the credentialed internal origin: a redirected env must never be
+    // able to send the service token to an attacker-chosen host (WP5-4).
+    if (
+      options.allowUnfrozenOriginForTest !== true &&
+      gatewayInternalUrl !== FROZEN_GATEWAY_ORIGIN
+    ) {
+      throw new ServiceRefusal(500, "gateway_origin_not_frozen", "internal");
+    }
+    this.timeoutMs = options.timeoutMs ?? CREDENTIALED_FETCH_TIMEOUT_MS;
+    this.maxResponseBytes = options.maxResponseBytes ?? MAX_REGISTRY_RESPONSE_BYTES;
+  }
 
   async getBySignedPaymentPayloadHash(hashHex: string): Promise<RegistryLookupResult> {
     if (!HEX64_RE.test(hashHex)) {
@@ -90,7 +119,12 @@ export class HttpRegistryTransport implements RegistryTransport {
     try {
       response = await fetch(
         `${this.gatewayInternalUrl}/internal/proof-registry/v1/x402/${hashHex}`,
-        { headers: { "x-concordia-service-token": token } },
+        {
+          headers: { "x-concordia-service-token": token },
+          // Credentialed request: never follow a redirect, always bounded.
+          redirect: "error",
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
       );
     } catch {
       throw upstreamUnavailable(REFUSAL_CODES.REGISTRY_UNAVAILABLE);
@@ -122,7 +156,7 @@ export class HttpRegistryTransport implements RegistryTransport {
     }
     let record: unknown;
     try {
-      record = await response.json();
+      record = await readBoundedJson(response, this.maxResponseBytes);
     } catch {
       throw new ServiceRefusal(
         502,
@@ -156,20 +190,75 @@ function requireNonEmptyString(value: unknown): string {
   return value;
 }
 
+/** Strict RFC3339 UTC timestamp → epoch ms; anything else fails closed (WP5-6). */
+function requireRfc3339Utc(value: unknown): number {
+  const epoch = parseRfc3339Utc(value);
+  if (epoch === null) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  return epoch;
+}
+
+/**
+ * A proof `source` must be either a repository-relative safe path or an HTTPS
+ * URL — never an absolute filesystem path, a parent-traversal, a backslash/NUL,
+ * or an opaque unbounded string (WP5-6).
+ */
+export function validateProofSource(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  }
+  if (value.startsWith("https://")) {
+    // Reject control/backslash/whitespace; require a plausible HTTPS URL.
+    for (let i = 0; i < value.length; i++) {
+      const c = value.charCodeAt(i);
+      if (c <= 0x20 || c >= 0x7f || c === 0x5c) {
+        fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+      }
+    }
+    const rest = value.slice("https://".length);
+    const slash = rest.indexOf("/");
+    const host = slash === -1 ? rest : rest.slice(0, slash);
+    if (host.length === 0 || host.includes("@") || host.includes(":")) {
+      fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+    }
+    return value;
+  }
+  // Repository-relative safe path.
+  if (value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
+    fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  }
+  for (const segment of value.split("/")) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
+      fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(segment)) {
+      fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+    }
+  }
+  return value;
+}
+
 interface ValidatedChecks {
   names: Set<string>;
+  maxObservedAtEpoch: number;
 }
+
+const CHECK_NAME_GRAMMAR = /^[a-z][a-z0-9_]{0,63}$/;
 
 function validateChecks(value: unknown): ValidatedChecks {
   if (!Array.isArray(value)) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   const names = new Set<string>();
   const allowed = new Set<string>([...CHECK_FIELDS, ...CHECK_OPTIONAL_FIELDS]);
+  let maxObservedAtEpoch = Number.NEGATIVE_INFINITY;
   for (const check of value) {
     if (!isPlainObject(check)) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
     for (const key of Object.keys(check)) {
       if (!allowed.has(key)) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
     }
     const name = requireNonEmptyString(check["name"]);
+    if (!CHECK_NAME_GRAMMAR.test(name)) {
+      // Frozen check-name grammar: lowercase snake_case only (§13).
+      fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+    }
     if (names.has(name)) {
       // Duplicate check names make the record invalid (§13).
       fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
@@ -178,8 +267,9 @@ function validateChecks(value: unknown): ValidatedChecks {
     if (typeof check["required"] !== "boolean" || typeof check["passed"] !== "boolean") {
       fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
     }
-    requireNonEmptyString(check["source"]);
-    requireNonEmptyString(check["observed_at"]);
+    validateProofSource(check["source"]);
+    const checkEpoch = requireRfc3339Utc(check["observed_at"]);
+    if (checkEpoch > maxObservedAtEpoch) maxObservedAtEpoch = checkEpoch;
     if (
       "detail_code" in check &&
       check["detail_code"] !== undefined &&
@@ -202,7 +292,7 @@ function validateChecks(value: unknown): ValidatedChecks {
       fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
     }
   }
-  return { names };
+  return { names, maxObservedAtEpoch };
 }
 
 /**
@@ -254,8 +344,13 @@ export function validateGovernanceRecord(
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
   const finalizationTransaction = requireHex64(record["finalization_transaction"]);
-  const finalizedAt = requireNonEmptyString(record["finalized_at"]);
-  requireNonEmptyString(record["observed_at"]);
+  const finalizedAtEpoch = requireRfc3339Utc(record["finalized_at"]);
+  const finalizedAt = record["finalized_at"] as string;
+  const observedAtEpoch = requireRfc3339Utc(record["observed_at"]);
+  // Chronology: finalization is observed at or before the record observation.
+  if (finalizedAtEpoch > observedAtEpoch) {
+    fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  }
 
   // Exact equality of every x402 binding hash with values computed locally
   // from the validated request and frozen resource configuration.
@@ -277,7 +372,15 @@ export function validateGovernanceRecord(
   ) {
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
-  validateChecks(record["checks"]);
+  const { maxObservedAtEpoch } = validateChecks(record["checks"]);
+  // Chronology: no check may claim an observation after the record itself was
+  // observed (forged future-dated checks fail closed, WP5-6).
+  if (
+    maxObservedAtEpoch !== Number.NEGATIVE_INFINITY &&
+    maxObservedAtEpoch > observedAtEpoch
+  ) {
+    fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
+  }
   return {
     proposalId,
     actionId,

@@ -56,6 +56,24 @@ export function upstreamMalformed(code: string): ServiceRefusal {
   return new ServiceRefusal(502, code, "upstream_malformed");
 }
 
+/** 429 throttle refusal for the public /verify and /settle endpoints. */
+export function rateLimited(): ServiceRefusal {
+  return new ServiceRefusal(429, "rate_limited", "invalid_request", true);
+}
+
+/**
+ * Pending-finality signal (§11, WP5-2). A `finalized:false` readback means the
+ * settlement transaction is not yet final on chain — it is NOT a terminal
+ * failure. It is retryable, leaves the row resumable in `transaction_observed`,
+ * and must never transition the row to `failed_terminal`.
+ */
+export class PendingFinalityError extends ServiceRefusal {
+  constructor() {
+    super(503, "reconciliation_pending", "upstream_unavailable", true);
+    this.name = "PendingFinalityError";
+  }
+}
+
 /** Refusals that surface as {isValid:false}/{success:false} bodies. */
 export const REFUSAL_CODES = {
   UNGOVERNED_PAYLOAD: "ungoverned_payload",
@@ -71,6 +89,10 @@ export const REFUSAL_CODES = {
   CHAIN_OBSERVATION_UNAVAILABLE: "chain_observation_unavailable",
   SECRET_UNAVAILABLE: "secret_unavailable",
   SETTLEMENT_NOT_FINALIZED: "settlement_not_finalized",
+  SETTLEMENT_EXECUTION_FAILED: "settlement_execution_failed",
   POST_SETTLE_READBACK_FAILED: "post_settle_readback_failed",
   FACILITATOR_REPORTED_FAILURE: "facilitator_reported_failure",
+  /** Bounded stable codes for untrusted upstream facilitator reasons. */
+  FACILITATOR_DECLINED: "facilitator_declined",
+  FACILITATOR_SETTLEMENT_DECLINED: "facilitator_settlement_declined",
 } as const;

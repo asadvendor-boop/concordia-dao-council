@@ -208,16 +208,30 @@ describe("runVerify", () => {
     expect(error.httpStatus).toBe(502);
   });
 
-  it("passes facilitator isValid:false through unchanged", async () => {
+  it("maps an unrecognized upstream invalidReason to a bounded local code (never echoed)", async () => {
     const h = makeDeps();
     const { request, payment } = await makeSignedRequest(h.config);
     h.registry.result = {
       outcome: "found",
       record: buildRegistryRecord(payment, h.config),
     };
-    h.facilitator.verifyResponse = { isValid: false, invalidReason: "nope" };
+    // Arbitrary/untrusted upstream text must never be surfaced verbatim.
+    h.facilitator.verifyResponse = { isValid: false, invalidReason: "nope-🙈-<script>" };
     const response = await runVerify(request, h.deps);
     expect(response.isValid).toBe(false);
-    expect(response.invalidReason).toBe("nope");
+    expect(response.invalidReason).toBe("facilitator_declined");
+  });
+
+  it("passes a recognized upstream invalidReason through as a stable code", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.facilitator.verifyResponse = { isValid: false, invalidReason: "insufficient_funds" };
+    const response = await runVerify(request, h.deps);
+    expect(response.isValid).toBe(false);
+    expect(response.invalidReason).toBe("insufficient_funds");
   });
 });

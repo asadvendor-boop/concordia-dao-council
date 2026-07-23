@@ -12,7 +12,7 @@ import { reconcileLedgerOnStartup, runSettle } from "../src/pipeline.js";
 import { SETTLEMENT_STATES } from "../src/config.js";
 import {
   buildRegistryRecord,
-  goodReadback,
+  readbackFor,
   makeDeps,
   makeSignedRequest,
   tempDir,
@@ -33,7 +33,11 @@ function makeBinding(overrides: Partial<FulfillmentBinding> = {}): FulfillmentBi
     payerAccountHash: "88".repeat(32),
     payeeAccountHash: "ab".repeat(32),
     valueAtomic: "1000000000",
+    validAfter: "1753142400",
+    validBefore: "1753146000",
     authorizationNonce: "99".repeat(32),
+    publicKey: `01${"22".repeat(32)}`,
+    signature: `01${"33".repeat(64)}`,
     wcsprContract: "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a",
     ...overrides,
   };
@@ -151,7 +155,7 @@ describe("crash-safe reconciliation (kill mid-journal)", () => {
     // Session 2: fresh process, same volume. Startup reconciliation must
     // resolve the in-flight row from the chain, never resubmit.
     const h2 = makeDeps({}, path);
-    h2.chain.transactions.set(TX, goodReadback());
+    h2.chain.transactions.set(TX, readbackFor(payment, TX));
     const summary = await reconcileLedgerOnStartup(h2.deps);
     expect(summary).toEqual({ finalized: 1, failed: 0, pending: 0 });
     const row = h2.ledger.get(h2.config.network, payment.signedPaymentPayloadHashHex);
@@ -247,7 +251,7 @@ describe("crash-safe reconciliation (kill mid-journal)", () => {
     h1.ledger.close();
 
     const h2 = makeDeps({}, path);
-    h2.chain.transactions.set(TX, goodReadback({ targetContractHash: "ee".repeat(32) }));
+    h2.chain.transactions.set(TX, readbackFor(payment, TX, { targetContractHash: "ee".repeat(32) }));
     const summary = await reconcileLedgerOnStartup(h2.deps);
     expect(summary).toEqual({ finalized: 0, failed: 1, pending: 0 });
     const row = h2.ledger.get(h2.config.network, payment.signedPaymentPayloadHashHex);

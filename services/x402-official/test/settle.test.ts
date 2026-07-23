@@ -12,7 +12,7 @@ import { SETTLEMENT_STATES } from "../src/config.js";
 import { runSettle } from "../src/pipeline.js";
 import {
   buildRegistryRecord,
-  goodReadback,
+  readbackFor,
   makeDeps,
   makeSignedRequest,
   type TestHarness,
@@ -43,7 +43,7 @@ describe("runSettle", () => {
   it("happy path: three fresh drift checks, journal before settle, finalized only after readback", async () => {
     const h = makeDeps();
     const { request, payment } = await governedRequest(h);
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(true);
     expect(response.transaction).toBe(TX);
@@ -100,7 +100,7 @@ describe("runSettle", () => {
       { lockStatus: "Unlocked", enabledVersion: 8, enabledContractHash: h.config.wcsprContractHash },
       { lockStatus: "Unlocked", enabledVersion: 9, enabledContractHash: "ee".repeat(32) },
     ];
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(false);
     expect(response.errorReason).toBe("blocked_upgrade_drift");
@@ -114,7 +114,7 @@ describe("runSettle", () => {
     const { request, payment } = await governedRequest(h);
     h.chain.transactions.set(
       TX,
-      goodReadback({ targetContractHash: "ee".repeat(32), contractVersion: 7 }),
+      readbackFor(payment, TX, { targetContractHash: "ee".repeat(32), contractVersion: 7 }),
     );
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(false);
@@ -129,7 +129,7 @@ describe("runSettle", () => {
     const { request, payment } = await governedRequest(h);
     h.chain.transactions.set(
       TX,
-      goodReadback({
+      readbackFor(payment, TX, {
         argNames: [
           "from",
           "to",
@@ -150,13 +150,40 @@ describe("runSettle", () => {
     ).toBe("failed_terminal");
   });
 
-  it("readback not finalized: settlement_not_finalized, not success", async () => {
+  it("readback finalized:false is PENDING, not terminal: row stays resumable, later finalizes (WP5-2)", async () => {
     const h = makeDeps();
-    const { request } = await governedRequest(h);
-    h.chain.transactions.set(TX, goodReadback({ finalized: false }));
+    const { request, payment } = await governedRequest(h);
+    // Not yet final on chain: this is a retryable pending state, never a
+    // terminal failure. The row must remain resumable in transaction_observed.
+    h.chain.transactions.set(TX, readbackFor(payment, TX, { finalized: false }));
+    const pending = await refusal(() => runSettle(request, h.deps));
+    expect(pending.code).toBe("reconciliation_pending");
+    expect(pending.retryable).toBe(true);
+    const row = h.ledger.get(h.config.network, payment.signedPaymentPayloadHashHex);
+    expect(row?.state).toBe("transaction_observed");
+    expect(row?.settlementTransactionHash).toBe(TX);
+    expect(h.ledger.getSettlementState()).not.toBe(SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE);
+    // Finality arrives; the retry reconciles from chain with NO second settle.
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
+    const done = await runSettle(request, h.deps);
+    expect(done.success).toBe(true);
+    expect(done.transaction).toBe(TX);
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+    expect(h.ledger.get(h.config.network, payment.signedPaymentPayloadHashHex)?.state).toBe(
+      "finalized",
+    );
+  });
+
+  it("readback finalized:true but executionSuccess:false is terminal (defined chain failure)", async () => {
+    const h = makeDeps();
+    const { request, payment } = await governedRequest(h);
+    h.chain.transactions.set(TX, readbackFor(payment, TX, { executionSuccess: false }));
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(false);
-    expect(response.errorReason).toBe("settlement_not_finalized");
+    expect(response.errorReason).toBe("settlement_execution_failed");
+    expect(h.ledger.get(h.config.network, payment.signedPaymentPayloadHashHex)?.state).toBe(
+      "failed_terminal",
+    );
   });
 
   it("HTTP 200 with success:false is NOT success and is terminal", async () => {
@@ -170,7 +197,8 @@ describe("runSettle", () => {
     };
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(false);
-    expect(response.errorReason).toBe("facilitator_says_no");
+    // Untrusted upstream reason is mapped to a bounded local code, never echoed.
+    expect(response.errorReason).toBe("facilitator_settlement_declined");
     // No chain readback for a non-submitted settlement.
     expect(h.chain.txCalls).toHaveLength(0);
     const row = h.ledger.get(h.config.network, payment.signedPaymentPayloadHashHex);
@@ -199,7 +227,8 @@ describe("runSettle", () => {
     h.facilitator.verifyResponse = { isValid: false, invalidReason: "bad_payload" };
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(false);
-    expect(response.errorReason).toBe("bad_payload");
+    // Untrusted upstream reason mapped to a bounded local code.
+    expect(response.errorReason).toBe("facilitator_declined");
     expect(h.facilitator.settleCalls).toHaveLength(0);
     expect(
       h.ledger.get(h.config.network, payment.signedPaymentPayloadHashHex)?.state,
@@ -208,8 +237,8 @@ describe("runSettle", () => {
 
   it("exact same-binding retry is idempotent with exactly one settlement", async () => {
     const h = makeDeps();
-    const { request } = await governedRequest(h);
-    h.chain.transactions.set(TX, goodReadback());
+    const { request, payment } = await governedRequest(h);
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const first = await runSettle(request, h.deps);
     expect(first.success).toBe(true);
     const second = await runSettle(request, h.deps);
@@ -218,25 +247,54 @@ describe("runSettle", () => {
     expect(h.facilitator.verifyCalls).toHaveLength(1);
   });
 
-  it("same payload hash with a changed governance binding: terminal 409 before submission", async () => {
+  it("exact terminal retry is resolved from the ledger BEFORE registry/expiry gates (WP5-5)", async () => {
     const h = makeDeps();
     const { request, payment } = await governedRequest(h);
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const first = await runSettle(request, h.deps);
     expect(first.success).toBe(true);
-    const settleCallsBefore = h.facilitator.settleCalls.length;
-    // The registry now maps the same signed payload hash to a different
-    // finalized envelope: the stored binding no longer matches.
+    const registryCallsAfterFirst = h.registry.calls.length;
+    // Volatile downstreams now all fail: registry outage, chain observer down.
+    h.registry.result = { outcome: "not_found" };
+    h.chain.packageStates = [new Error("chain down")];
+    h.chain.transactions.clear();
+    // The exact same request must still return the stored valid response,
+    // never re-consulting the registry or the chain (idempotency survives).
+    const retry = await runSettle(request, h.deps);
+    expect(retry).toEqual(first);
+    expect(h.registry.calls).toHaveLength(registryCallsAfterFirst);
+    expect(h.chain.resolveCalls).toBe(3); // only the original settlement's three
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+  });
+
+  it("distinct payload hash reusing the same authorization nonce: terminal 409", async () => {
+    // Cross-binding / nonce-reuse rejection is enforced at atomic ledger claim
+    // time. A genuinely new payload that reuses a consumed nonce fails closed
+    // BEFORE any settlement (a same-body retry, by contrast, is idempotent).
+    const h = makeDeps();
+    const nonceHex = "5b".repeat(32);
+    const first = await makeSignedRequest(h.config, { nonceHex });
     h.registry.result = {
       outcome: "found",
-      record: buildRegistryRecord(payment, h.config, {
-        action_id: "77".repeat(32),
-        envelope_hash: "88".repeat(32),
-      }),
+      record: buildRegistryRecord(first.payment, h.config),
     };
-    const error = await refusal(() => runSettle(request, h.deps));
+    h.chain.transactions.set(TX, readbackFor(first.payment, TX));
+    const ok = await runSettle(first.request, h.deps);
+    expect(ok.success).toBe(true);
+    const settleCallsBefore = h.facilitator.settleCalls.length;
+    const now = Math.floor(Date.now() / 1000);
+    const second = await makeSignedRequest(
+      h.config,
+      { nonceHex, validAfter: now - 450, validBefore: now + 650 },
+      first.signer,
+    );
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(second.payment, h.config),
+    };
+    const error = await refusal(() => runSettle(second.request, h.deps));
     expect(error.httpStatus).toBe(409);
-    expect(error.code).toBe("cross_binding_rejected");
+    expect(error.code).toBe("authorization_nonce_reused");
     expect(h.facilitator.settleCalls).toHaveLength(settleCallsBefore);
   });
 
@@ -248,7 +306,7 @@ describe("runSettle", () => {
       outcome: "found",
       record: buildRegistryRecord(first.payment, h.config),
     };
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(first.payment, TX));
     const ok = await runSettle(first.request, h.deps);
     expect(ok.success).toBe(true);
     // Same signer, same nonce, different window → different payload hash.
@@ -297,7 +355,7 @@ describe("runSettle", () => {
     expect(row?.settlementTransactionHash).toBe(TX);
     // Observer recovers; the retry reconciles by recorded transaction hash
     // without a second facilitator settle call.
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const response = await runSettle(request, h.deps);
     expect(response.success).toBe(true);
     expect(response.transaction).toBe(TX);

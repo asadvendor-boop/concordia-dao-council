@@ -97,16 +97,58 @@ export interface PackageState {
   enabledContractHash: string;
 }
 
-/** Readback of a finalized settlement transaction. */
+/**
+ * One typed runtime argument as read back from the finalized deploy. Both the
+ * exact Casper CL type and the canonical value string are verified — a value
+ * match with the wrong CL type (or the wrong Key/account variant) is a hard
+ * readback failure (§11, WP5-1).
+ */
+export interface ReadbackArg {
+  clType: string;
+  value: string;
+}
+
+/**
+ * Readback of a finalized settlement transaction. `args` is MANDATORY and must
+ * carry all eight frozen `transfer_with_authorization` arguments with their
+ * exact CL types; a missing, empty, or partial `args` map is a hard readback
+ * failure (never fail-open). `transactionHash` binds the readback to the exact
+ * submitted deploy identity.
+ */
 export interface TransactionReadback {
+  transactionHash: string;
   finalized: boolean;
   executionSuccess: boolean;
   targetContractHash: string;
   contractVersion: number | null;
   entryPoint: string;
   argNames: string[];
-  args?: Record<string, string>;
+  args: Record<string, ReadbackArg>;
 }
+
+/**
+ * Exact authorization identity used to recover an already-submitted settlement
+ * after a lost `/settle` response, without ever issuing a second settlement
+ * (§11, WP5-3). The WCSPR contract enforces single-use nonces, so this tuple
+ * uniquely identifies at most one on-chain transfer.
+ */
+export interface AuthorizationLocatorQuery {
+  packageHashHex: string;
+  contractHashHex: string;
+  payerAccountHashHex: string;
+  payerPublicKeyHex: string;
+  authorizationNonceHex: string;
+}
+
+/**
+ * Authoritative result of locating a settlement by authorization identity.
+ * `found:false` means the observer PROVED the nonce is unconsumed at the
+ * observed finalized state (safe to submit exactly once). An indeterminate
+ * observer must throw instead of returning `found:false`.
+ */
+export type SettlementLocator =
+  | { found: true; transactionHash: string }
+  | { found: false };
 
 export interface FacilitatorTransport {
   /** GET /supported — parsed 2xx JSON body. */
@@ -129,6 +171,14 @@ export interface RegistryTransport {
 export interface ChainTransport {
   resolveActivePackage(packageHashHex: string): Promise<PackageState>;
   getFinalizedTransaction(txHashHex: string): Promise<TransactionReadback>;
+  /**
+   * Recover an already-submitted settlement by exact authorization identity
+   * (payer + package + contract + nonce). Used only for lost-response recovery;
+   * never issues a settlement itself.
+   */
+  locateSettlementByAuthorization(
+    query: AuthorizationLocatorQuery,
+  ): Promise<SettlementLocator>;
 }
 
 export interface VerifyResponseWire {

@@ -22,14 +22,17 @@ import { createLocalVerifier } from "../src/facilitator.js";
 import { reportHash, resourceUrlHash } from "../src/hashes.js";
 import type { PipelineDeps } from "../src/pipeline.js";
 import type {
+  AuthorizationLocatorQuery,
   ChainTransport,
   ConfiguredResource,
   FacilitatorTransport,
   PackageState,
   PaymentPayloadWire,
   PaymentRequirementsWire,
+  ReadbackArg,
   RegistryLookupResult,
   RegistryTransport,
+  SettlementLocator,
   TransactionReadback,
   ValidatedPayment,
 } from "../src/types.js";
@@ -331,16 +334,43 @@ export function goodPackageState(): PackageState {
   };
 }
 
-export function goodReadback(
+/** The eight exact typed readback args for a validated payment (§11, WP5-1). */
+export function readbackArgsFor(
+  payment: ValidatedPayment,
+): Record<string, ReadbackArg> {
+  return {
+    from: {
+      clType: "Key",
+      value: `account-hash-${payment.payerAccountHash.toString("hex")}`,
+    },
+    to: {
+      clType: "Key",
+      value: `account-hash-${payment.payeeAccountHash.toString("hex")}`,
+    },
+    value: { clType: "U256", value: payment.valueAtomic.toString(10) },
+    valid_after: { clType: "U64", value: payment.validAfter.toString(10) },
+    valid_before: { clType: "U64", value: payment.validBefore.toString(10) },
+    nonce: { clType: "List<U8>", value: payment.nonce.toString("hex") },
+    public_key: { clType: "PublicKey", value: payment.publicKeyBytes.toString("hex") },
+    signature: { clType: "List<U8>", value: payment.signature.toString("hex") },
+  };
+}
+
+/** A fully valid finalized readback bound to `payment` and the deploy hash. */
+export function readbackFor(
+  payment: ValidatedPayment,
+  txHashHex: string,
   overrides: Partial<TransactionReadback> = {},
 ): TransactionReadback {
   return {
+    transactionHash: txHashHex,
     finalized: true,
     executionSuccess: true,
     targetContractHash: FROZEN.contractHash,
     contractVersion: FROZEN.contractVersion,
     entryPoint: "transfer_with_authorization",
     argNames: [...TRANSFER_WITH_AUTHORIZATION_ARGS],
+    args: readbackArgsFor(payment),
     ...overrides,
   };
 }
@@ -348,9 +378,12 @@ export function goodReadback(
 export class MockChain implements ChainTransport {
   resolveCalls = 0;
   txCalls: string[] = [];
+  locateCalls: AuthorizationLocatorQuery[] = [];
   /** Queue of per-call package states; the last entry repeats. */
   packageStates: (PackageState | Error)[] = [goodPackageState()];
   transactions = new Map<string, TransactionReadback | Error>();
+  /** Lost-response recovery: keyed by authorization nonce hex. */
+  locators = new Map<string, SettlementLocator | Error>();
 
   async resolveActivePackage(): Promise<PackageState> {
     this.resolveCalls += 1;
@@ -365,6 +398,17 @@ export class MockChain implements ChainTransport {
     this.txCalls.push(txHashHex);
     const entry = this.transactions.get(txHashHex);
     if (entry === undefined) throw new Error("unknown_transaction");
+    if (entry instanceof Error) throw entry;
+    return entry;
+  }
+
+  async locateSettlementByAuthorization(
+    query: AuthorizationLocatorQuery,
+  ): Promise<SettlementLocator> {
+    this.locateCalls.push(query);
+    const entry = this.locators.get(query.authorizationNonceHex);
+    // Default: the observer cannot determine the outcome (unavailable).
+    if (entry === undefined) throw new Error("locator_unavailable");
     if (entry instanceof Error) throw entry;
     return entry;
   }

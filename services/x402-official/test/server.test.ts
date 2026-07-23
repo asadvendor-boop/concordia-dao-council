@@ -9,13 +9,13 @@ import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadSecrets, ConfigError } from "../src/config.js";
+import { loadSecrets, resolveSecrets, ConfigError } from "../src/config.js";
 import { HttpFacilitatorTransport } from "../src/facilitator.js";
 import { createService } from "../src/server.js";
 import {
   REPORT_BYTES,
   buildRegistryRecord,
-  goodReadback,
+  readbackFor,
   makeDeps,
   makeSignedRequest,
   tempDir,
@@ -51,7 +51,13 @@ describe("service endpoints", () => {
     const response = await fetch(`${base}/health`);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ status: "ok", settlement_state: "blocked_fail_closed" });
+    // Liveness is green while responding; settlement readiness is NOT green in
+    // the default fail-closed state (§11, WP5-6).
+    expect(body).toEqual({
+      status: "ok",
+      settlement_state: "blocked_fail_closed",
+      settlement_ready: false,
+    });
   });
 
   it("GET /supported advertises exactly the frozen kind", async () => {
@@ -108,7 +114,7 @@ describe("service endpoints", () => {
       outcome: "found",
       record: buildRegistryRecord(payment, h.config),
     };
-    h.chain.transactions.set(TX, goodReadback());
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
     const base = await listen(createService(h.deps));
     const paymentSignature = Buffer.from(
       JSON.stringify((request as Record<string, unknown>)["paymentPayload"]),
@@ -161,7 +167,7 @@ describe("service endpoints", () => {
       headers: { "payment-signature": paymentSignature },
     });
     expect(response.status).toBe(402);
-    const body = await response.json();
+    const body = (await response.json()) as { success: boolean };
     expect(body.success).toBe(false);
     expect(Buffer.from(JSON.stringify(body)).equals(REPORT_BYTES)).toBe(false);
   });
@@ -218,9 +224,55 @@ describe("service endpoints", () => {
   });
 });
 
+describe("public endpoint throttling (WP5 hardening)", () => {
+  it("throttles /verify beyond the configured window limit with an endpoint-shaped 429", async () => {
+    const h = makeDeps();
+    const { request } = await makeSignedRequest(h.config);
+    h.registry.result = { outcome: "not_found" };
+    const base = await listen(
+      createService(h.deps, { throttle: { limit: 2, windowMs: 60_000 } }),
+    );
+    const send = () =>
+      fetch(`${base}/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+    const limited = await send();
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ isValid: false, invalidReason: "rate_limited" });
+  });
+
+  it("throttles /settle beyond the limit with a settle-shaped 429", async () => {
+    const h = makeDeps();
+    const { request } = await makeSignedRequest(h.config);
+    h.registry.result = { outcome: "not_found" };
+    const base = await listen(
+      createService(h.deps, { throttle: { limit: 1, windowMs: 60_000 } }),
+    );
+    const send = () =>
+      fetch(`${base}/settle`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    expect((await send()).status).toBe(200);
+    const limited = await send();
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({
+      success: false,
+      errorReason: "rate_limited",
+      transaction: "",
+      network: "casper:casper-test",
+    });
+  });
+});
+
 describe("facilitator transport security", () => {
   it("sends the raw token in Authorization (never Bearer) and never logs bodies of non-2xx", async () => {
-    const seen: { authorization?: string }[] = [];
+    const seen: { authorization: string | undefined }[] = [];
     const stub = createHttpServer((req, res) => {
       seen.push({ authorization: req.headers.authorization });
       if (req.url === "/verify") {
@@ -235,7 +287,10 @@ describe("facilitator transport security", () => {
     });
     const base = await listen(stub);
     const token = "dummy-cspr-cloud-token-do-not-log";
-    const transport = new HttpFacilitatorTransport(base, () => token);
+    // Loopback stub for header-byte discipline: explicit test-only origin.
+    const transport = new HttpFacilitatorTransport(base, () => token, {
+      allowUnfrozenOriginForTest: true,
+    });
 
     const logSpy = vi.spyOn(console, "log");
     const errorSpy = vi.spyOn(console, "error");
@@ -265,12 +320,12 @@ describe("facilitator transport security", () => {
 describe("secret loading (§12 *_FILE discipline)", () => {
   it("loads secrets from files and never from value-bearing variables", () => {
     const dir = tempDir();
-    const env = {
-      X402_CSPR_CLOUD_TOKEN_FILE: writeTempSecret(dir, "cspr", "tok-cloud\n"),
-      X402_GATEWAY_TOKEN_FILE: writeTempSecret(dir, "gw", "tok-gateway"),
-      X402_SIGNER_FILE: writeTempSecret(dir, "signer", "pem-bytes"),
-    };
-    const secrets = loadSecrets(env);
+    // Injected test constructor: arbitrary paths, never production env parsing.
+    const secrets = resolveSecrets({
+      csprCloudTokenFile: writeTempSecret(dir, "cspr", "tok-cloud\n"),
+      gatewayTokenFile: writeTempSecret(dir, "gw", "tok-gateway"),
+      signerFile: writeTempSecret(dir, "signer", "pem-bytes"),
+    });
     expect(secrets.csprCloudToken()).toBe("tok-cloud");
     expect(secrets.gatewayToken()).toBe("tok-gateway");
     expect(secrets.signerAvailable()).toBe(true);
@@ -278,7 +333,18 @@ describe("secret loading (§12 *_FILE discipline)", () => {
 
   it("fails startup when a configured secret file is unreadable", () => {
     expect(() =>
-      loadSecrets({ X402_CSPR_CLOUD_TOKEN_FILE: "/nonexistent/path/token" }),
+      resolveSecrets({ csprCloudTokenFile: "/nonexistent/path/token" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("production loadSecrets REJECTS a redirected secret-file path (WP5-4)", () => {
+    const dir = tempDir();
+    // A non-frozen path — even a readable one — must be rejected outright so a
+    // hostile env can never redirect where a credential is read from.
+    expect(() =>
+      loadSecrets({
+        X402_CSPR_CLOUD_TOKEN_FILE: writeTempSecret(dir, "evil", "tok"),
+      }),
     ).toThrow(ConfigError);
   });
 
@@ -292,10 +358,7 @@ describe("secret loading (§12 *_FILE discipline)", () => {
   it("health output never contains configured secret values", async () => {
     const dir = tempDir();
     const secretValue = "super-secret-token-value-1234";
-    const env = {
-      X402_CSPR_CLOUD_TOKEN_FILE: writeTempSecret(dir, "cspr", secretValue),
-    };
-    loadSecrets(env);
+    resolveSecrets({ csprCloudTokenFile: writeTempSecret(dir, "cspr", secretValue) });
     const h = makeDeps();
     const base = await listen(createService(h.deps));
     const response = await fetch(`${base}/health`);
