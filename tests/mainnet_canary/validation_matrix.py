@@ -2,19 +2,42 @@
 
 Purpose: let a reviewer obtain the evidence WITHOUT authoring adversarial
 prose. Every row states a precondition, runs the real CLI, and records the
-refusal code the tool actually produced. The output is a factual table plus
-machine-readable JSON — there is no narrative to write.
+refusal code AND process exit code the tool actually produced. The output is
+a factual table plus machine-readable JSON — there is no narrative to write.
 
-This is SELF-verification evidence produced by the lane that wrote the code.
-It is deliberately not a validation verdict: a reviewer should run this
-against their own immutable checkout, read the script, and reach their own
-GO / NO-GO. Its value is that the harness is already built and the results
-are reproducible, not that the author vouches for them.
+WHAT THIS COMMAND DOES, STATED EXACTLY
+--------------------------------------
+It builds hermetic fixtures in a temporary directory, and one of those
+fixtures is a **signed human authorization**: `mc_support.sign_authorization`
+performs an ed25519 `private.sign(...)` over canonical bytes using a fixed,
+test-only seed committed in the test support module. That signature
+authorizes nothing outside these fixtures and cannot produce a transaction.
 
-Safety: reads the repository, writes only inside a temporary directory, and
-never signs, submits, or touches live artifacts. Run:
+An earlier version of this docstring claimed the command "never signs".
+That was false and a reviewer was right to reject it. The accurate claim is:
 
-    python3 -m tools.mainnet_canary.validation_matrix [--json]
+  * the PREPARATION PACKAGE (tools/mainnet_canary) has no live-key,
+    deploy-signing, or submission path — a test scans its sources for the
+    banned tokens, and that scan is deliberately scoped to the package;
+  * THIS COMMAND generates exactly one hermetic test-authorization
+    signature, from a fixed seed, inside a temp directory.
+
+This module lives under tests/ precisely because of the above: it is
+verification tooling that depends on test fixtures and signs them. Keeping it
+out of tools/mainnet_canary keeps the shipped package free of both the
+tests/ import inversion and any signing call.
+
+It reads the repository, writes only inside a temporary directory, performs
+no network I/O, and never submits anything.
+
+STATUS OF THIS EVIDENCE
+-----------------------
+Self-verification evidence produced by the lane that wrote the code — NOT a
+verdict. A reviewer should run it against their own immutable checkout, read
+this script, and reach their own GO / NO-GO. Its value is that the harness
+already exists and the results reproduce, not that the author vouches.
+
+    python3 tests/mainnet_canary/validation_matrix.py [--json]
 """
 
 from __future__ import annotations
@@ -179,6 +202,37 @@ def build_matrix() -> list[dict[str, object]]:
         path.write_text(json.dumps(bundle), encoding="utf-8")
         return path
 
+    def satisfied_observations() -> Path:
+        """A bundle that SATISFIES every economic step's expectation."""
+
+        bundle: list[dict] = []
+        for step in plan["steps"]:
+            if not step["economic"]:
+                continue
+            expected = step["expected_outcome"]
+            overrides: dict = {}
+            if expected.get("execution") == "failure":
+                overrides["execution"] = {
+                    "success": False,
+                    "error_message": expected["exact_error_message"],
+                    "cost_motes": "100000000",
+                }
+            if step["kind"] == "native_transfer":
+                overrides["target"] = {
+                    "transfer": {
+                        "source_account": expected["source_account"],
+                        "recipient_account": expected["recipient_account"],
+                        "amount_motes": expected["amount_motes"],
+                        "transfer_id": str(
+                            plan["envelope"]["derived"]["transfer_id"]
+                        ),
+                    }
+                }
+            bundle.extend(mc.make_v2_pair(str(step["step_id"]), **overrides))
+        path = tmp / "observations-satisfied.json"
+        path.write_text(json.dumps(bundle), encoding="utf-8")
+        return path
+
     def legacy_observations() -> Path:
         """v1-shaped bundle: no provider evidence at all."""
 
@@ -240,6 +294,9 @@ def build_matrix() -> list[dict[str, object]]:
          stage_argv("ok")),
         ("bundle fully bound (positive control)", "<accepted>",
          bundle_argv("z", verification_path, tmp / "bundle-ok")),
+        ("verify fully satisfied (positive control)", "<accepted>",
+         ["verify", "--plan", str(plan_path),
+          "--observations", str(satisfied_observations())]),
     ]
 
     results: list[dict[str, object]] = []
