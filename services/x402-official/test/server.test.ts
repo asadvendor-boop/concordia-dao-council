@@ -7,6 +7,8 @@
 
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
+import DatabaseConstructor from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadSecrets, resolveSecrets, ConfigError } from "../src/config.js";
@@ -15,6 +17,7 @@ import { createService } from "../src/server.js";
 import {
   REPORT_BYTES,
   buildRegistryRecord,
+  generateSigner,
   readbackFor,
   makeDeps,
   makeSignedRequest,
@@ -221,6 +224,288 @@ describe("service endpoints", () => {
       isValid: false,
       invalidReason: "invalid_json",
     });
+  });
+});
+
+/**
+ * Reviewer finding (exact-commit audit of f550c93): the protected resource
+ * route could return HTTP 200 with a JSON error body when runSettle() threw a
+ * protocol-shaped ServiceRefusal(200) refusal (ungoverned payload, upgrade
+ * drift, …) — an x402 client observed a successful status without paid bytes
+ * or a PAYMENT-RESPONSE header. These tests pin the transport invariant: a
+ * 2xx from /resource/:resourceId is possible ONLY when the exact protected
+ * report bytes are released from a finalized, integrity-verified fulfillment
+ * row (true success and the exact idempotent retry). Every non-release
+ * outcome is non-2xx with no protected bytes, no PAYMENT-RESPONSE header,
+ * and no report_released audit code.
+ */
+describe("protected resource transport invariant (no 2xx without released bytes)", () => {
+  const TAMPERED_DIGEST = "11".repeat(32);
+
+  function paymentSignatureFor(request: Record<string, unknown>): string {
+    return Buffer.from(
+      JSON.stringify(request["paymentPayload"]),
+      "utf8",
+    ).toString("base64");
+  }
+
+  function fetchResource(base: string, request: Record<string, unknown>): Promise<Response> {
+    return fetch(`${base}/resource/finals-report-001`, {
+      headers: { "payment-signature": paymentSignatureFor(request) },
+    });
+  }
+
+  /** Non-release refusals must carry no bytes, no header, no release audit code. */
+  async function assertNoRelease(
+    response: Response,
+    logSpy: { mock: { calls: unknown[][] } },
+  ): Promise<Record<string, unknown>> {
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.headers.get("payment-response")).toBeNull();
+    const body = Buffer.from(await response.arrayBuffer());
+    expect(body.includes(REPORT_BYTES)).toBe(false);
+    const logged = logSpy.mock.calls.flat().map(String).join("\n");
+    expect(logged).not.toContain("report_released");
+    return JSON.parse(body.toString("utf8")) as Record<string, unknown>;
+  }
+
+  it("ungoverned payload: 402 (never the protocol-shaped 200), no bytes, no PAYMENT-RESPONSE, no release audit code", async () => {
+    const h = makeDeps();
+    const { request } = await makeSignedRequest(h.config);
+    h.registry.result = { outcome: "not_found" };
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(402);
+    const body = await assertNoRelease(response, logSpy);
+    expect(body).toEqual({ error: "ungoverned_payload" });
+    expect(h.facilitator.settleCalls).toHaveLength(0);
+  });
+
+  it("package upgrade drift: 402 blocked_upgrade_drift, no bytes, no PAYMENT-RESPONSE", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    // The package now enables a different version: every settlement gate drifts.
+    h.chain.packageStates = [
+      {
+        lockStatus: "Unlocked",
+        enabledVersion: h.config.wcsprContractVersion + 1,
+        enabledContractHash: h.config.wcsprContractHash,
+      },
+    ];
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(402);
+    const body = await assertNoRelease(response, logSpy);
+    expect(body).toEqual({ error: "blocked_upgrade_drift" });
+    expect(h.facilitator.settleCalls).toHaveLength(0);
+  });
+
+  it("post-settle readback mismatch: 402 settle-shaped failure, no bytes, no PAYMENT-RESPONSE", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    // Settlement succeeds but the finalized deploy reads back a different
+    // entry point: terminal post_settle_readback_failed, never a release.
+    h.chain.transactions.set(TX, readbackFor(payment, TX, { entryPoint: "transfer" }));
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(402);
+    const body = await assertNoRelease(response, logSpy);
+    expect(body["success"]).toBe(false);
+    expect(body["errorReason"]).toBe("post_settle_readback_failed");
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+  });
+
+  it("finalized execution failure: 402 settlement_execution_failed, no bytes, no PAYMENT-RESPONSE", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(payment, TX, { executionSuccess: false }));
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(402);
+    const body = await assertNoRelease(response, logSpy);
+    expect(body["success"]).toBe(false);
+    expect(body["errorReason"]).toBe("settlement_execution_failed");
+  });
+
+  it("pending finality: 503 reconciliation_pending (retryable), no bytes, no PAYMENT-RESPONSE", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(payment, TX, { finalized: false }));
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(503);
+    const body = await assertNoRelease(response, logSpy);
+    expect(body).toEqual({ error: "reconciliation_pending" });
+  });
+
+  it("terminal binding conflict (authorization nonce reuse): 409, no bytes, no PAYMENT-RESPONSE", async () => {
+    const h = makeDeps();
+    const signer = await generateSigner();
+    const nonceHex = "77".repeat(32);
+    const a = await makeSignedRequest(h.config, { nonceHex }, signer);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(a.payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(a.payment, TX));
+    const base = await listen(createService(h.deps));
+    const first = await fetchResource(base, a.request);
+    expect(first.status).toBe(200);
+
+    // A DIFFERENT signed payload reusing the same authorization nonce.
+    const now = Math.floor(Date.now() / 1000);
+    const b = await makeSignedRequest(
+      h.config,
+      { nonceHex, validAfter: now - 1200 },
+      signer,
+    );
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(b.payment, h.config),
+    };
+    const logSpy = vi.spyOn(console, "log");
+    const second = await fetchResource(base, b.request);
+    expect(second.status).toBe(409);
+    const body = await assertNoRelease(second, logSpy);
+    expect(body).toEqual({ error: "authorization_nonce_reused" });
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+  });
+
+  it("ledger-integrity failure on replay: 500, no bytes, no PAYMENT-RESPONSE, no second settlement", async () => {
+    const dir = tempDir();
+    const path = join(dir, "x402-official.db");
+    const h = makeDeps({}, path);
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
+    const base = await listen(createService(h.deps));
+    const first = await fetchResource(base, request);
+    expect(first.status).toBe(200);
+
+    // Tamper the durable row's response digest via an independent connection.
+    const db = new DatabaseConstructor(path);
+    db.prepare(
+      `UPDATE x402_fulfillments SET settlement_response_hash = ?
+       WHERE signed_payment_payload_hash = ?`,
+    ).run(TAMPERED_DIGEST, payment.signedPaymentPayloadHashHex);
+    db.close();
+
+    const logSpy = vi.spyOn(console, "log");
+    const replay = await fetchResource(base, request);
+    expect(replay.status).toBe(500);
+    const body = await assertNoRelease(replay, logSpy);
+    expect(body).toEqual({ error: "ledger_terminal_invariant_violated" });
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+  });
+
+  it("positive control: true success is 200 with the exact bytes, a valid PAYMENT-RESPONSE, and the report_released audit code", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
+    const logSpy = vi.spyOn(console, "log");
+    const base = await listen(createService(h.deps));
+    const response = await fetchResource(base, request);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).equals(REPORT_BYTES)).toBe(true);
+    const paymentResponse = JSON.parse(
+      Buffer.from(
+        response.headers.get("payment-response") as string,
+        "base64",
+      ).toString("utf8"),
+    ) as Record<string, unknown>;
+    expect(paymentResponse["success"]).toBe(true);
+    expect(paymentResponse["transaction"]).toBe(TX);
+    const logged = logSpy.mock.calls.flat().map(String).join("\n");
+    expect(logged).toContain('"code":"report_released"');
+  });
+
+  it("positive control: exact idempotent retry is 200 with the same bytes and PAYMENT-RESPONSE, without a second settlement", async () => {
+    const h = makeDeps();
+    const { request, payment } = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(payment, TX));
+    const base = await listen(createService(h.deps));
+    expect((await fetchResource(base, request)).status).toBe(200);
+
+    const replay = await fetchResource(base, request);
+    expect(replay.status).toBe(200);
+    expect(Buffer.from(await replay.arrayBuffer()).equals(REPORT_BYTES)).toBe(true);
+    const paymentResponse = JSON.parse(
+      Buffer.from(
+        replay.headers.get("payment-response") as string,
+        "base64",
+      ).toString("utf8"),
+    ) as Record<string, unknown>;
+    expect(paymentResponse["success"]).toBe(true);
+    expect(paymentResponse["transaction"]).toBe(TX);
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+  });
+
+  it("paid resource attempts share the settlement throttle: 429 beyond the limit, discovery 402 stays available", async () => {
+    const h = makeDeps();
+    const a = await makeSignedRequest(h.config);
+    h.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(a.payment, h.config),
+    };
+    h.chain.transactions.set(TX, readbackFor(a.payment, TX));
+    const base = await listen(
+      createService(h.deps, { throttle: { limit: 1, windowMs: 60_000 } }),
+    );
+    expect((await fetchResource(base, a.request)).status).toBe(200);
+
+    const b = await makeSignedRequest(h.config);
+    const logSpy = vi.spyOn(console, "log");
+    const limited = await fetchResource(base, b.request);
+    expect(limited.status).toBe(429);
+    const body = await assertNoRelease(limited, logSpy);
+    expect(body).toEqual({ error: "rate_limited" });
+    // The throttle refused BEFORE the settlement pipeline: still one settle.
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+
+    // The same per-client settlement budget also guards POST /settle.
+    const viaSettle = await fetch(`${base}/settle`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(b.request),
+    });
+    expect(viaSettle.status).toBe(429);
+
+    // Unpaid discovery (402 + PAYMENT-REQUIRED) never consumes settlement budget.
+    const discovery = await fetch(`${base}/resource/finals-report-001`);
+    expect(discovery.status).toBe(402);
+    expect(discovery.headers.get("payment-required")).toBeTruthy();
   });
 });
 

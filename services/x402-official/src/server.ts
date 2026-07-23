@@ -4,6 +4,14 @@
  * PAYMENT-SIGNATURE; releases the protected report only from a finalized
  * fulfillment.
  *
+ * Transport invariant (WP5 re-review): /verify and /settle keep the frozen
+ * x402 wire contract (protocol-shaped 200 refusal bodies), but the protected
+ * resource route can emit a 2xx ONLY when the exact report bytes are released
+ * from a finalized, integrity-verified fulfillment row with the
+ * PAYMENT-RESPONSE header; every non-release outcome is mapped to a non-2xx
+ * status (402/409/429/503/500) and paid attempts draw from the same
+ * settlement throttle as POST /settle.
+ *
  * Logging is sanitized by construction: one structured line per request with
  * method, route, status, and machine code only. No headers, bodies, tokens,
  * exception messages, or stack traces are ever logged.
@@ -112,6 +120,52 @@ function refusalCode(error: unknown): { status: number; code: string } {
   return { status: 500, code: "internal_error" };
 }
 
+/**
+ * Transport-boundary mapping for the protected resource route (reviewer
+ * finding, WP5 re-review). The x402 wire contract deliberately uses
+ * protocol-shaped 200 refusal bodies on /verify and /settle
+ * (ServiceRefusal(200, …): ungoverned payload, package drift, execution
+ * failure, failed readback, …). Those statuses must NEVER surface as a 2xx on
+ * /resource/:resourceId — a 2xx there is possible only at the single release
+ * site, with the exact protected report bytes from a finalized,
+ * integrity-verified fulfillment row and the PAYMENT-RESPONSE header.
+ *
+ * Every refusal is remapped by kind:
+ *  - verify_refusal / settle_refusal → 402 (payment/governance/settlement)
+ *  - terminal_conflict → 409
+ *  - upstream_unavailable (pending/retryable) → 503
+ *  - internal (ledger integrity) → 500
+ *  - invalid_request / upstream_malformed keep their already non-2xx status
+ * Hard invariant: any status still below 400 is coerced (503 if retryable,
+ * else 402) — the protected resource never emits a 2xx JSON error body.
+ */
+function resourceRefusal(error: unknown): { status: number; code: string } {
+  if (!(error instanceof ServiceRefusal)) {
+    return { status: 500, code: "internal_error" };
+  }
+  let status: number;
+  switch (error.kind) {
+    case "verify_refusal":
+    case "settle_refusal":
+      status = 402;
+      break;
+    case "terminal_conflict":
+      status = 409;
+      break;
+    case "upstream_unavailable":
+      status = 503;
+      break;
+    case "internal":
+      status = 500;
+      break;
+    default:
+      status = error.httpStatus;
+      break;
+  }
+  if (status < 400) status = error.retryable ? 503 : 402;
+  return { status, code: error.code };
+}
+
 export function createService(
   deps: PipelineDeps,
   options: { throttle?: ThrottleOptions } = {},
@@ -174,57 +228,81 @@ export function createService(
           });
           return;
         }
-        let paymentPayload: unknown;
+        // A paid attempt invokes the settlement pipeline, so it draws from the
+        // SAME per-client settlement budget as POST /settle — the resource
+        // route is never a throttle bypass. Unpaid discovery (the 402 above)
+        // stays available regardless.
+        if (!throttle.allow(`settle:${clientKey}`, Date.now())) {
+          status = 429;
+          code = "rate_limited";
+          send(res, 429, { error: "rate_limited" });
+          return;
+        }
         try {
-          paymentPayload = JSON.parse(
-            Buffer.from(signatureHeader, "base64").toString("utf8"),
+          let paymentPayload: unknown;
+          try {
+            paymentPayload = JSON.parse(
+              Buffer.from(signatureHeader, "base64").toString("utf8"),
+            );
+          } catch {
+            throw new ServiceRefusal(400, "invalid_payment_signature_header", "invalid_request");
+          }
+          const settleRequest = {
+            x402Version: 2,
+            paymentPayload,
+            paymentRequirements: buildPaymentRequirements(resource, config),
+          };
+          // Validate first so the payload provably binds to THIS resource.
+          const validated = validateVerifySettleRequest(settleRequest, config);
+          if (validated.resource.id !== resource.id) {
+            throw new ServiceRefusal(409, "cross_binding_rejected", "terminal_conflict");
+          }
+          const settleResponse = await runSettle(settleRequest, deps);
+          if (settleResponse.success !== true) {
+            status = 402;
+            code = settleResponse.errorReason ?? "settlement_failed";
+            send(res, 402, settleResponse);
+            return;
+          }
+          const row = reportReleasableRow(
+            deps,
+            resource,
+            validated.signedPaymentPayloadHashHex,
           );
-        } catch {
-          throw new ServiceRefusal(400, "invalid_payment_signature_header", "invalid_request");
+          if (row === undefined) {
+            // success:true without a finalized row must never release bytes.
+            status = 500;
+            code = "report_not_releasable";
+            send(res, 500, { error: "report_not_releasable" });
+            return;
+          }
+          // The ONLY 2xx this route can emit: the exact protected report
+          // bytes from a finalized, integrity-verified fulfillment row, with
+          // the PAYMENT-RESPONSE header (true success and exact idempotent
+          // retry both land here — nowhere else).
+          status = 200;
+          code = "report_released";
+          send(
+            res,
+            200,
+            resource.reportBytes,
+            {
+              [PAYMENT_HEADERS.response]: Buffer.from(
+                JSON.stringify(settleResponse),
+                "utf8",
+              ).toString("base64"),
+            },
+            resource.mimeType,
+          );
+        } catch (error) {
+          // Non-release outcomes are ALWAYS non-2xx here: the protocol-shaped
+          // ServiceRefusal(200) refusals of /verify//settle are remapped, and
+          // nothing from this route reaches the status-preserving outer catch.
+          const mapped = resourceRefusal(error);
+          status = mapped.status;
+          code = mapped.code;
+          send(res, mapped.status, { error: mapped.code });
         }
-        const settleRequest = {
-          x402Version: 2,
-          paymentPayload,
-          paymentRequirements: buildPaymentRequirements(resource, config),
-        };
-        // Validate first so the payload provably binds to THIS resource.
-        const validated = validateVerifySettleRequest(settleRequest, config);
-        if (validated.resource.id !== resource.id) {
-          throw new ServiceRefusal(409, "cross_binding_rejected", "terminal_conflict");
-        }
-        const settleResponse = await runSettle(settleRequest, deps);
-        if (settleResponse.success !== true) {
-          status = 402;
-          code = settleResponse.errorReason ?? "settlement_failed";
-          send(res, 402, settleResponse);
-          return;
-        }
-        const row = reportReleasableRow(
-          deps,
-          resource,
-          validated.signedPaymentPayloadHashHex,
-        );
-        if (row === undefined) {
-          // success:true without a finalized row must never release bytes.
-          status = 500;
-          code = "report_not_releasable";
-          send(res, 500, { error: "report_not_releasable" });
-          return;
-        }
-        status = 200;
-        code = "report_released";
-        send(
-          res,
-          200,
-          resource.reportBytes,
-          {
-            [PAYMENT_HEADERS.response]: Buffer.from(
-              JSON.stringify(settleResponse),
-              "utf8",
-            ).toString("base64"),
-          },
-          resource.mimeType,
-        );
         return;
       }
       if (method === "POST" && path === "/verify") {
@@ -290,10 +368,11 @@ export function createService(
       send(res, 404, { error: "not_found" });
     } catch (error) {
       const mapped = refusalCode(error);
-      status = mapped.status;
+      // The generic boundary never emits a success status with an error body.
+      status = mapped.status >= 400 ? mapped.status : 500;
       code = mapped.code;
       if (!res.headersSent) {
-        send(res, mapped.status, { error: mapped.code });
+        send(res, status, { error: mapped.code });
       } else {
         res.destroy();
       }
