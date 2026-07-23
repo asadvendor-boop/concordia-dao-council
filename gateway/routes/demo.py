@@ -134,11 +134,16 @@ _GLOBAL_ISSUE_LIMIT = 120
 _MAX_OUTSTANDING_CAPABILITIES = 2000  # unconsumed AND unexpired
 _MAX_RETAINED_CAPABILITIES = 10000    # all rows, including expired/consumed
 _EXPIRED_CLEANUP_BATCH = 100          # bounded GC per issuance
+_STALE_RUNNING_RECONCILE_BATCH = 25   # bounded RUNNING→FAILED recovery per issuance
 
 # Durable capability lifecycle (WP3-1): a RUNNING claim older than this lease is
 # treated as crashed and recovered to a terminal FAILED WITHOUT re-running the
-# pipeline. The lease exceeds the capability lifetime so an unexpired run always
-# recovers via expiry first.
+# pipeline. The lease intentionally exceeds the 120s capability lifetime, so
+# activation dispatches on the DURABLE ROW before judging token expiry (WP3
+# re-review): a RUNNING claim returns 202 while its lease is active and then
+# transitions ONCE to terminal FAILED — even after the token has expired — and
+# terminal rows always replay their stored result. Only an ISSUED,
+# never-consumed row is rejected as capability_expired.
 _RUNNING_LEASE_SECONDS = 180
 
 # Durable lifecycle state values (ISSUED -> RUNNING -> SUCCEEDED|FAILED).
@@ -362,6 +367,23 @@ def _parse_capability(token: str, secret: bytes) -> dict[str, Any] | None:
     }
 
 
+def _crash_recovery_body(demo_run_id: str | None, scenario_id: str) -> dict[str, Any]:
+    """Standard terminal body recorded for a crashed/abandoned RUNNING claim.
+
+    Used by BOTH recovery paths — retry-driven recovery in activation and the
+    bounded issuance-time reconciliation — so the stored FAILED terminal is
+    byte-identical regardless of which path performed the transition.
+    """
+    return {
+        "schema_version": "demo-run-v1",
+        "status": "failed",
+        "error": "Demo run did not finish (crash/expiry recovery)",
+        "demo_run_id": demo_run_id,
+        "scenario_id": scenario_id,
+        "is_demo": True,
+    }
+
+
 def _stored_response_integrity_error() -> JSONResponse:
     """Terminal fail-closed error for a corrupt stored activation result."""
     return JSONResponse(
@@ -457,6 +479,47 @@ def _bump_counter(db, scope: str, client_key: str, window_start: int) -> None:
     )
 
 
+def _reconcile_stale_running(db, now: int) -> None:
+    """Bounded reconciliation of abandoned RUNNING claims (WP3 re-review).
+
+    MUST be called inside an already-open ``BEGIN IMMEDIATE``. A RUNNING row
+    whose recovery lease has elapsed is a crashed run; if the browser never
+    retries it, no activation ever reaches the retry-driven recovery path and
+    the row would be retained RUNNING forever (it is consumed, so the
+    expired-row GC never touches it). Each stale claim is transitioned ONCE to
+    terminal FAILED with the standard crash-recovery body, guarded by the same
+    ``state=RUNNING`` compare-and-set as the retry path. Active-lease RUNNING
+    rows and terminal rows are never touched, and the batch is bounded so
+    issuance latency stays flat.
+    """
+    stale_rows = db.execute(
+        "SELECT capability_id, scenario_id, demo_run_id FROM demo_capabilities "
+        "WHERE state=? AND COALESCE(consumed_at, 0) + ? <= ? "
+        "ORDER BY consumed_at ASC LIMIT ?",
+        (
+            _STATE_RUNNING,
+            _RUNNING_LEASE_SECONDS,
+            now,
+            _STALE_RUNNING_RECONCILE_BATCH,
+        ),
+    ).fetchall()
+    for stale in stale_rows:
+        crash_body = _crash_recovery_body(
+            stale["demo_run_id"], stale["scenario_id"]
+        )
+        db.execute(
+            "UPDATE demo_capabilities SET state=?, response_status=?, "
+            "response_json=? WHERE capability_id=? AND state=?",
+            (
+                _STATE_FAILED,
+                503,
+                json.dumps(crash_body),
+                stale["capability_id"],
+                _STATE_RUNNING,
+            ),
+        )
+
+
 def _admit_and_persist_capability(db, minted: dict[str, Any]) -> JSONResponse | None:
     """Atomic issuance admission + durable capability insert (WP3-6).
 
@@ -487,6 +550,10 @@ def _admit_and_persist_capability(db, minted: dict[str, Any]) -> JSONResponse | 
             "DELETE FROM demo_capability_issue_counters WHERE window_start < ?",
             (window_start - _ISSUE_WINDOW_SECONDS,),
         )
+        # Bounded reconciliation (WP3 re-review): terminalize abandoned RUNNING
+        # claims whose lease has elapsed so a browser that never retries cannot
+        # leave rows retained RUNNING forever.
+        _reconcile_stale_running(db, now)
 
         retained = db.execute(
             "SELECT COUNT(*) FROM demo_capabilities"
@@ -969,12 +1036,13 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
             status_code=403,
         )
 
+    # WP3 re-review state ordering: token expiry is judged AFTER the durable
+    # row is loaded and dispatched on. The 180s RUNNING lease outlives the 120s
+    # token lifetime, so an expiry-first check made every crashed RUNNING
+    # capability externally unrecoverable (403 forever, row stuck RUNNING).
+    # Terminal rows replay and RUNNING claims recover even after token expiry;
+    # only an ISSUED, never-consumed row is rejected as capability_expired.
     now = int(time.time())
-    if now >= payload["expires_at"]:
-        return JSONResponse(
-            {"error": "Capability expired", "error_code": "capability_expired"},
-            status_code=403,
-        )
 
     db = request.app.state.db
     ensure_demo_tables(db)
@@ -1017,9 +1085,10 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
 
         if state == _STATE_RUNNING:
             lease_deadline = int(row["consumed_at"] or 0) + _RUNNING_LEASE_SECONDS
-            if now < lease_deadline and now < int(row["expires_at"]):
+            if now < lease_deadline:
                 # A concurrent, still-in-flight retry: honest 202 with the SAME
-                # run identity — never an empty 200.
+                # run identity — never an empty 200. An active lease is honored
+                # even after token expiry (the in-flight run still owns it).
                 running_run_id = row["demo_run_id"]
                 db.execute("COMMIT")
                 return JSONResponse(
@@ -1032,16 +1101,12 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
                     },
                     status_code=202,
                 )
-            # Crash/expiry recovery: transition to terminal FAILED WITHOUT
-            # re-running any mutation.
-            crash_body = {
-                "schema_version": "demo-run-v1",
-                "status": "failed",
-                "error": "Demo run did not finish (crash/expiry recovery)",
-                "demo_run_id": row["demo_run_id"],
-                "scenario_id": row["scenario_id"],
-                "is_demo": True,
-            }
+            # Lease elapsed — crash recovery: transition ONCE to terminal
+            # FAILED WITHOUT re-running any mutation, even when the capability
+            # token itself has expired.
+            crash_body = _crash_recovery_body(
+                row["demo_run_id"], row["scenario_id"]
+            )
             db.execute(
                 "UPDATE demo_capabilities SET state=?, response_status=?, "
                 "response_json=? WHERE capability_id=? AND state=?",
@@ -1056,7 +1121,17 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
             db.execute("COMMIT")
             return JSONResponse(crash_body, status_code=503)
 
-        # state == ISSUED — enforce activation limits, then claim RUNNING.
+        # state == ISSUED — the ONLY state where token expiry rejects: a
+        # never-consumed capability past its lifetime is dead. Consumed states
+        # above are governed by the durable ledger, not the token clock.
+        if now >= int(row["expires_at"]):
+            db.execute("COMMIT")
+            return JSONResponse(
+                {"error": "Capability expired", "error_code": "capability_expired"},
+                status_code=403,
+            )
+
+        # Enforce activation limits, then claim RUNNING.
         client_count, global_count = _activation_counts(db, client_hash_hex)
         if (
             client_count >= _PER_CLIENT_ACTIVATION_LIMIT

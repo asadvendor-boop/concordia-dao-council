@@ -1307,6 +1307,363 @@ def test_dm_rev5_expires_at_mismatch_rejected(client, app_db, stub_executor):
     assert stub_executor == []
 
 
+# ---------------------------------------------------------------------------
+# WP3 re-review — expiry-vs-durable-row state ordering (Codex reproduction at
+# 4b60f1c): the RUNNING recovery lease (180s) exceeds the capability lifetime
+# (120s), so checking token expiry BEFORE loading the durable row made every
+# crashed RUNNING capability externally unrecoverable (403 capability_expired
+# forever, row stuck RUNNING). Expiry may reject ONLY an ISSUED, never-consumed
+# row; terminal/RUNNING rows are dispatched from the durable ledger first.
+# ---------------------------------------------------------------------------
+
+
+def _freeze_demo_clock(monkeypatch, frozen: float) -> None:
+    """Freeze the clock the demo routes read (demo.time is the time module)."""
+    monkeypatch.setattr(demo.time, "time", lambda: frozen)
+
+
+def test_dm_wp3_7_expired_crashed_running_recovers_failed_not_403(
+    client, app_db, monkeypatch
+):
+    """Codex reproduction: issue → claim RUNNING → crash (no terminal write) →
+    clock past BOTH the 120s capability expiry AND the 180s lease → retry must
+    return the 503 crash-recovery body and terminalize the row FAILED, never
+    403 capability_expired with the row retained RUNNING forever."""
+    import time as _time
+
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    async def _crashing(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        raise RuntimeError("pipeline crashed mid-run (no terminal write)")
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _crashing)
+    with pytest.raises(RuntimeError):
+        _activate(client, capability, "treasury", nonce_wire)
+
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "RUNNING"
+    assert row["response_status"] is None  # crashed before any terminal write
+    running_run_id = row["demo_run_id"]
+
+    # Advance past BOTH the capability expiry and the recovery lease.
+    frozen = (
+        max(
+            int(row["expires_at"]),
+            int(row["consumed_at"]) + demo._RUNNING_LEASE_SECONDS,
+        )
+        + 60
+    )
+    assert frozen > int(row["expires_at"])
+    assert frozen > int(row["consumed_at"]) + demo._RUNNING_LEASE_SECONDS
+    assert frozen > _time.time()
+    _freeze_demo_clock(monkeypatch, float(frozen))
+
+    recovered = _activate(client, capability, "treasury", nonce_wire)
+    assert recovered.status_code == 503
+    body = recovered.json()
+    assert body["status"] == "failed"
+    assert body["demo_run_id"] == running_run_id
+    assert body["scenario_id"] == "treasury"
+    assert body.get("error_code") != "capability_expired"
+
+    terminal = _capability_row(app_db, capability_id)
+    assert terminal["state"] == "FAILED"
+    assert int(terminal["response_status"]) == 503
+
+    # Subsequent retries replay the stored FAILED terminal (transition ONCE).
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert replay.status_code == 503
+    assert replay.json() == body
+
+
+def test_dm_wp3_7_expired_issued_row_rejected_403_and_stays_issued(
+    client, app_db, stub_executor, monkeypatch
+):
+    """An ISSUED, never-consumed capability past its lifetime is the ONLY
+    expiry rejection (403 capability_expired); the row is left ISSUED and no
+    pipeline runs. Once GC removes the expired row, the token is simply
+    invalid (401) — deliberate migration of the old expiry-before-row-load
+    ordering."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+    row = _capability_row(app_db, capability_id)
+
+    _freeze_demo_clock(monkeypatch, float(int(row["expires_at"]) + 10))
+
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 403
+    assert activated.json()["error_code"] == "capability_expired"
+    assert stub_executor == []
+
+    after = _capability_row(app_db, capability_id)
+    assert after["state"] == "ISSUED"
+    assert after["consumed_at"] is None
+
+    # An unrelated issuance GCs the expired unconsumed row; the signed token
+    # then fails the durable-row match as 401 invalid_capability.
+    gc_issue, _ = _issue(client, nonce_wire=_wire_nonce())
+    assert gc_issue.status_code == 200
+    assert _capability_row(app_db, capability_id) is None
+    retry = _activate(client, capability, "treasury", nonce_wire)
+    assert retry.status_code == 401
+    assert retry.json()["error_code"] == "invalid_capability"
+    assert stub_executor == []
+
+
+def test_dm_wp3_7_expired_running_before_lease_end_returns_202_same_run(
+    client, app_db, stub_executor, monkeypatch
+):
+    """A RUNNING claim whose token has expired but whose 180s lease is still
+    active returns 202 with the SAME run identity (the in-flight run owns the
+    lease); the row stays RUNNING and the pipeline is never re-run."""
+    import time as _time
+
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    claimed_at = int(_time.time())
+    app_db.execute(
+        "UPDATE demo_capabilities SET state='RUNNING', consumed_at=?, "
+        "demo_run_id='demo-run-inflight-expired', response_status=NULL, "
+        "response_json=NULL WHERE capability_id=?",
+        (claimed_at, capability_id),
+    )
+    row = _capability_row(app_db, capability_id)
+
+    # Past the 120s token expiry, but still inside the 180s recovery lease.
+    frozen = int(row["expires_at"]) + 10
+    assert frozen > int(row["expires_at"])
+    assert frozen < claimed_at + demo._RUNNING_LEASE_SECONDS
+    _freeze_demo_clock(monkeypatch, float(frozen))
+
+    retry = _activate(client, capability, "treasury", nonce_wire)
+    assert retry.status_code == 202
+    body = retry.json()
+    assert body["status"] == "running"
+    assert body["demo_run_id"] == "demo-run-inflight-expired"
+    assert stub_executor == []
+
+    after = _capability_row(app_db, capability_id)
+    assert after["state"] == "RUNNING"  # the active lease was honored
+
+
+def test_dm_wp3_7_expired_terminal_row_replays_stored_result(
+    client, app_db, stub_executor, monkeypatch
+):
+    """A terminal row replays its validated stored result even after the token
+    has expired — idempotent replay is governed by the durable ledger, not the
+    token clock."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    first = _activate(client, capability, "treasury", nonce_wire)
+    assert first.status_code == 200
+    assert first.json()["status"] == "started"
+    assert len(stub_executor) == 1
+
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "SUCCEEDED"
+    frozen = (
+        max(
+            int(row["expires_at"]),
+            int(row["consumed_at"]) + demo._RUNNING_LEASE_SECONDS,
+        )
+        + 60
+    )
+    _freeze_demo_clock(monkeypatch, float(frozen))
+
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert replay.status_code == 200
+    body = replay.json()
+    assert body["status"] == "idempotent_replay"
+    assert body["demo_run_id"] == first.json()["demo_run_id"]
+    assert len(stub_executor) == 1  # never re-run
+
+
+def test_dm_wp3_7_reconciliation_terminalizes_abandoned_running_on_issuance(
+    client, app_db, stub_executor, monkeypatch
+):
+    """A crashed RUNNING claim the browser never retries is terminalized by the
+    bounded issuance-time reconciliation (a later UNRELATED issuance call), with
+    the standard crash-recovery body. Active-lease RUNNING rows — even with an
+    expired token — and terminal rows are never touched."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    async def _crashing(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        raise RuntimeError("pipeline crashed mid-run (no terminal write)")
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _crashing)
+    with pytest.raises(RuntimeError):
+        _activate(client, capability, "treasury", nonce_wire)
+
+    abandoned = _capability_row(app_db, capability_id)
+    assert abandoned["state"] == "RUNNING"
+    abandoned_run_id = abandoned["demo_run_id"]
+
+    frozen = (
+        max(
+            int(abandoned["expires_at"]),
+            int(abandoned["consumed_at"]) + demo._RUNNING_LEASE_SECONDS,
+        )
+        + 60
+    )
+
+    # Guard rows: an ACTIVE-lease RUNNING claim whose token already expired,
+    # and a terminal row with a stale consumed_at. Neither may be touched.
+    app_db.execute(
+        "INSERT INTO demo_capabilities (capability_id, scenario_id, "
+        "client_binding_hash, nonce_hash, issued_at, expires_at, state, "
+        "demo_run_id, consumed_at) "
+        "VALUES ('active-lease-expired-token', 'oracle', 'h', 'n', ?, ?, "
+        "'RUNNING', 'demo-run-active', ?)",
+        (frozen - 200, frozen - 80, frozen - 30),
+    )
+    app_db.execute(
+        "INSERT INTO demo_capabilities (capability_id, scenario_id, "
+        "client_binding_hash, nonce_hash, issued_at, expires_at, state, "
+        "demo_run_id, consumed_at, response_status, response_json) "
+        "VALUES ('terminal-stale', 'yield', 'h', 'n', ?, ?, 'SUCCEEDED', "
+        "'demo-run-terminal', ?, 200, '{\"status\": \"started\"}')",
+        (frozen - 10_000, frozen - 9_000, frozen - 9_500),
+    )
+
+    _freeze_demo_clock(monkeypatch, float(frozen))
+
+    # A later, UNRELATED issuance (different client) runs the reconciliation.
+    unrelated, _ = _issue(client, nonce_wire=_wire_nonce())
+    assert unrelated.status_code == 200
+
+    reconciled = _capability_row(app_db, capability_id)
+    assert reconciled["state"] == "FAILED"
+    assert int(reconciled["response_status"]) == 503
+    assert json.loads(reconciled["response_json"]) == {
+        "schema_version": "demo-run-v1",
+        "status": "failed",
+        "error": "Demo run did not finish (crash/expiry recovery)",
+        "demo_run_id": abandoned_run_id,
+        "scenario_id": "treasury",
+        "is_demo": True,
+    }
+
+    active = _capability_row(app_db, "active-lease-expired-token")
+    assert active["state"] == "RUNNING"  # active lease never reconciled
+    assert active["response_status"] is None
+    terminal = _capability_row(app_db, "terminal-stale")
+    assert terminal["state"] == "SUCCEEDED"  # terminal rows never touched
+    assert json.loads(terminal["response_json"]) == {"status": "started"}
+
+    # A very late browser retry replays the reconciled FAILED terminal.
+    late = _activate(client, capability, "treasury", nonce_wire)
+    assert late.status_code == 503
+    assert late.json()["status"] == "failed"
+    assert late.json()["demo_run_id"] == abandoned_run_id
+    assert stub_executor == []
+
+
+def test_dm_wp3_7_reconciliation_batch_is_bounded(client, app_db, monkeypatch):
+    """Reconciliation transitions at most _STALE_RUNNING_RECONCILE_BATCH stale
+    RUNNING rows per issuance (oldest lease first) — bounded housekeeping."""
+    import time as _time
+
+    ensure_demo_tables(app_db)
+    now = int(_time.time())
+    stale = now - (demo._RUNNING_LEASE_SECONDS + 1_000)
+    for index in range(3):
+        app_db.execute(
+            "INSERT INTO demo_capabilities (capability_id, scenario_id, "
+            "client_binding_hash, nonce_hash, issued_at, expires_at, state, "
+            "demo_run_id, consumed_at) VALUES (?, 'treasury', 'h', 'n', ?, ?, "
+            "'RUNNING', ?, ?)",
+            (
+                f"stale-running-{index}",
+                stale - 120,
+                stale - 60,
+                f"demo-run-stale-{index}",
+                stale + index,
+            ),
+        )
+    monkeypatch.setattr(demo, "_STALE_RUNNING_RECONCILE_BATCH", 2)
+
+    resp, _ = _issue(client, nonce_wire=_wire_nonce())
+    assert resp.status_code == 200
+    failed = app_db.execute(
+        "SELECT COUNT(*) FROM demo_capabilities "
+        "WHERE state='FAILED' AND capability_id LIKE 'stale-running-%'"
+    ).fetchone()[0]
+    assert failed == 2  # bounded: oldest two only
+
+    resp, _ = _issue(client, nonce_wire=_wire_nonce())
+    assert resp.status_code == 200
+    failed = app_db.execute(
+        "SELECT COUNT(*) FROM demo_capabilities "
+        "WHERE state='FAILED' AND capability_id LIKE 'stale-running-%'"
+    ).fetchone()[0]
+    assert failed == 3  # the next issuance drains the remainder
+
+
+def test_dm_wp3_7_concurrent_recovery_single_transition_cas_holds(
+    client, app_db, monkeypatch
+):
+    """Concurrent recovery: reconciliation terminalizes a stale-leased RUNNING
+    claim while the original request's pipeline is still in flight. Exactly ONE
+    transition happens — the in-flight request's terminal write loses the
+    rowcount CAS and must return the persisted FAILED state (the durable
+    ledger, never its in-memory success)."""
+    import time as _time
+
+    async def _racing(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        # The lease elapses mid-flight...
+        db.execute(
+            "UPDATE demo_capabilities SET consumed_at=consumed_at-? "
+            "WHERE demo_run_id=?",
+            (demo._RUNNING_LEASE_SECONDS + 60, demo_run_id),
+        )
+        # ...and a concurrent issuance runs its bounded reconciliation.
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            demo._reconcile_stale_running(db, int(_time.time()))
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+        return 200, {
+            "success": True,
+            "scenario_type": scenario_type,
+            "proposal_id": "DAO-DEMO-STUB01",
+            "demo_run_id": demo_run_id,
+            "is_demo": True,
+        }
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _racing)
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 503
+    body = activated.json()
+    assert body["status"] == "failed"
+    assert body.get("status") != "started"
+
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "FAILED"
+    assert int(row["response_status"]) == 503
+    # The reconciliation's crash body won — the lost in-memory success never
+    # overwrote it (single transition).
+    assert json.loads(row["response_json"])["status"] == "failed"
+
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert replay.status_code == 503
+    assert replay.json() == body
+
+
 def test_dm_wp3_4_cleanup_atomic_rollback_on_error(tmp_path, monkeypatch):
     """Cleanup selection+deletion is one BEGIN IMMEDIATE: an error mid-delete
     rolls back with nothing removed."""
