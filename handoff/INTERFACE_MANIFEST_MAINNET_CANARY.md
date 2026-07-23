@@ -153,10 +153,11 @@ chain name.
   `max_total_outlay_motes = transfer_principal_motes + max_fees_motes`.
   Any recompute mismatch → `CEILING_ARITHMETIC_INVALID`. Zero/placeholder
   fees refuse.
-- Every fee maximum requires a **finalized Testnet calibration receipt**
-  (`concordia.mainnet-canary.testnet-calibration.v1`) or an **explicit
-  conservative operator ceiling** naming its declarer —
-  `CALIBRATION_RECEIPT_ABSENT` otherwise. **No costs are guessed anywhere;
+- Every fee maximum requires a **finalized Testnet calibration receipt**.
+  *(Superseded in the §4d correction round: the calibration schema is now
+  `testnet-calibration.v2` — plan-bound, line-set-exact, dually observed —
+  and the operator-ceiling substitute was REMOVED; supplying any refuses
+  with `OPERATOR_CEILING_NOT_PERMITTED`.)* **No costs are guessed anywhere;
   no Testnet calibration receipts exist yet** (blocker §8).
 - Human authorization (`concordia.mainnet-canary.human-authorization.v1`)
   binds plan hash, chain `casper`, treasury/recipient account hashes,
@@ -252,6 +253,103 @@ manufacture.
 Suite 244 → **251**. Each gate is additionally exercised against the real
 CLI, including a forged authorization whose ceiling was raised after signing
 (refused) beside the genuine one (accepted).
+
+## 4d. Correction round — Sol's conditional approval, implemented
+
+Everything in this section is on top of the accepted `2c945b3` (immutable;
+no amend/rebase). Suite **259 → 299**, validation matrix **17 → 21/21**
+controls, all green at this branch head.
+
+### A — F9 redirected-recipient refusal probe (corrected construction)
+
+The prior F9 flipped `authorized_metadata_root`. My first replacement
+changed only `recipient_account` and was **rejected correctly**: the
+contract recomputes `action_id`/`transfer_id` before the commitment check,
+so that construction dies as `InvalidActionField` (16), never reaching
+`EnvelopeHashMismatch` (10). The implemented construction mirrors
+`contracts/odra-governance-receipt-v3/tests/network_profile.rs`:
+copy the approved envelope → set `recipient_account` to the **finalizer**
+→ recompute `action_id` from the redirected core → header carries it →
+recompute `transfer_id` from it → retain the approved commitment. The
+redirected envelope passes the same dual-implementation coherence gate as
+the approved one; distinctness of `action_id`, `transfer_id`, and envelope
+hash from G's is asserted fail-closed at plan time.
+
+- Plan records `expected_refusal: true` + stable `refusal_scenario`
+  (`pre_quorum_finalize` / `post_quorum_recipient_redirect` /
+  `duplicate_finalize_replay`) for E/F9/H. **No `attack_demonstrated`
+  anywhere**; `refusal_observed: true` is emitted only by `verify` from a
+  dual-provider consensus on the exact finalized error.
+- F9's expected outcome pins `approved_recipient`, `redirected_recipient`,
+  `redirected_action_id`, `redirected_transfer_id`,
+  `redirected_envelope_hash` — all independently recomputed under test.
+- Tests: `tests/mainnet_canary/test_mc_refusal_probe.py` (8) proves the
+  properties listed in the approval, including the error-16-class refusal
+  of the naive construction; the on-chain error-10 half remains proven by
+  the existing `network_profile.rs` mainnet test (contracts/ untouched —
+  outside this lane's write set).
+- Because expected outcomes and typed args feed the plan hash, every
+  plan-bound fixture regenerates from the plan itself (no pinned plan-hash
+  golden existed to update; the golden-vector gate pins the ENVELOPE
+  vectors, which are unchanged).
+
+### B — custody_model (schema v2, fail-closed, never inferred)
+
+- `parameters.v2` + `plan.v2`: `custody_model` is a REQUIRED field; a
+  v1-shaped document refuses (`PLAN_INPUT_INVALID`). Enum is exactly
+  `{single_operator, independent_custodians}`; anything else →
+  `CUSTODY_MODEL_INVALID`.
+- Declared twice on purpose: parameters file AND `plan --custody-model`
+  CLI flag must agree (mirrors the human-authorized-amount pattern).
+- `independent_custodians` → `CUSTODY_EVIDENCE_ABSENT` in this release:
+  distinct accounts/key mounts are not independence, and no separate
+  custody-evidence mechanism exists yet.
+- `proof-bundle.v2` REQUIRES `custody_model`; cross-binding refuses if it
+  differs from the plan's. Concordia's canary emits `single_operator`.
+- Tests: `tests/mainnet_canary/test_mc_custody_model.py` (8).
+
+### C — calibration pipeline v2 (receipt-backed only)
+
+New module `tools/mainnet_canary/calibration.py`
+(`testnet-calibration.v2`) + CLI mode `calibration` (convert/validate):
+
+- economic-step set DERIVED from the plan (7 fixed + one vote per
+  threshold signer; threshold 3 ⇒ 10) — never hard-coded;
+- exact line-set equality (`CALIBRATION_LINE_SET_MISMATCH` on missing OR
+  extra);
+- per-line bindings (`CALIBRATION_BINDING_INVALID` otherwise): Mainnet
+  plan hash; step's typed-args digest recomputed from the plan; Testnet
+  deploy-args digest which must DIFFER (byte-identical claims refuse);
+  translated-field list restricted to the reviewed network-profile set;
+  signer identity; `casper-test` chain identity; entry-point/RC Testnet
+  Wasm/source-commit pins; positive payment extracted from the deploy;
+  deploy/block hash + height; execution result matching the step's
+  expected outcome (E/F9/H calibrate their exact refusals); finality depth
+  ≥ 8 (`INSUFFICIENT_CONFIRMATIONS`); two disjoint RPC observations.
+- converter (`--harness`) is the only sanctioned producer: digests and
+  translated fields are computed/derived, never transcribed; shape drift
+  or unreviewed value drift refuses.
+- **Operator ceilings removed as a substitute**: any supplied ceiling →
+  `OPERATOR_CEILING_NOT_PERMITTED` (finals policy). The legacy v1
+  `estimate` mode remains only as the coarse pre-plan view; the
+  authoritative economic path is plan → calibration → funding → stage.
+- Tests: `tests/mainnet_canary/test_mc_calibration.py` (24); matrix rows
+  for ceiling refusal, line-set mismatch, rebound plan hash, custody
+  mismatch.
+- Runbook + harness-observation template for Codex:
+  `handoff/MAINNET_CANARY_OPERATOR_RUNBOOK.md` (prepare → dry-run →
+  explicit `--submit` → reconcile by original deploy hash → two-node
+  finalized observations → convert → validate → funding). **Do not
+  calibrate against `2c945b3`** — the calibration binds the FINAL frozen
+  plan hash only.
+
+New refusal codes: `CALIBRATION_LINE_SET_MISMATCH`,
+`CALIBRATION_BINDING_INVALID`, `OPERATOR_CEILING_NOT_PERMITTED`,
+`CUSTODY_MODEL_INVALID`, `CUSTODY_EVIDENCE_ABSENT`.
+
+No live or release mutation occurred: all work is local code, tests, and
+handoff documents; nothing was signed, submitted, deployed, merged, or
+tagged; no secret was read or printed.
 
 ## 5. Test inventory and fresh results (all at `93724c6`)
 
