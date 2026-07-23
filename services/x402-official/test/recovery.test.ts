@@ -3,7 +3,8 @@
  * a reserved row with no recorded deploy hash. Recovery is by exact
  * payer/package/nonce authorization identity:
  *   - observer finds the deploy  → adopt it, reconcile, finalize, ZERO 2nd settle
- *   - observer proves unconsumed → resubmit exactly once
+ *   - observer PROVES unconsumed at an explicit finalized observation boundary
+ *     → resubmit exactly once (under the durable recovery lease)
  *   - observer unavailable       → stay pending (retryable), never resubmit blind
  * The authorization nonce can never be reused through the crash gap.
  */
@@ -14,6 +15,7 @@ import { ServiceRefusal } from "../src/errors.js";
 import { reconcileLedgerOnStartup, runSettle } from "../src/pipeline.js";
 import {
   buildRegistryRecord,
+  provedUnconsumed,
   readbackFor,
   makeDeps,
   makeSignedRequest,
@@ -70,12 +72,14 @@ describe("lost /settle response recovery", () => {
     expect(row?.settlementTransactionHash).toBe(TX);
   });
 
-  it("observer proves the nonce unconsumed: resubmit EXACTLY once and finalize", async () => {
+  it("observer proves the nonce unconsumed at a finalized boundary: resubmit EXACTLY once and finalize", async () => {
     const h = makeDeps();
     const made = await lostResponse(h);
     const nonceHex = made.payment.nonce.toString("hex");
-    // The lost attempt never reached the chain; the nonce is provably unused.
-    h.chain.locators.set(nonceHex, { found: false });
+    // The lost attempt never reached the chain; the nonce is provably unused
+    // at an explicit finalized observation boundary (a bare miss would NOT be
+    // proof and would stay pending — see concurrency.test.ts).
+    h.chain.locators.set(nonceHex, provedUnconsumed());
     h.facilitator.settleResponse = {
       success: true,
       transaction: TX,

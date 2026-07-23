@@ -13,8 +13,19 @@ import {
   requireArtifactSource,
   OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS,
   SettlementItemError,
+  type SettlementCheckObservationInput,
   type SettlementItemInput,
 } from "../src/settlement-item.js";
+
+function checksObservedAt(observedAt: string): SettlementCheckObservationInput[] {
+  return OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS.map((name) => ({
+    name,
+    passed: true,
+    source: "artifacts/live/official-x402-settlement-v1.json",
+    observed_at: observedAt,
+    evidence: `independently captured artifact record for ${name}`,
+  }));
+}
 
 function validInput(overrides: Partial<SettlementItemInput> = {}): SettlementItemInput {
   return {
@@ -31,7 +42,7 @@ function validInput(overrides: Partial<SettlementItemInput> = {}): SettlementIte
     settlementTransaction: "66".repeat(32),
     observationMode: "live",
     capturedAt: "2026-07-22T20:05:00Z",
-    checkObservedAt: "2026-07-22T20:00:00Z",
+    checks: checksObservedAt("2026-07-22T20:00:00Z"),
     sourceCommit: "abcdef1",
     deploymentCommit: "1234567",
     artifactPath: "artifacts/live/official-x402-settlement-v1.json",
@@ -112,7 +123,10 @@ describe("strict UTC-Z chronology", () => {
     expect(
       codeOf(() =>
         buildSettlementRegistryItem(
-          validInput({ checkObservedAt: "2026-07-22T20:10:00Z", capturedAt: "2026-07-22T20:05:00Z" }),
+          validInput({
+            checks: checksObservedAt("2026-07-22T20:10:00Z"),
+            capturedAt: "2026-07-22T20:05:00Z",
+          }),
         ),
       ),
     ).toBe("check_observed_after_capture");
@@ -120,7 +134,7 @@ describe("strict UTC-Z chronology", () => {
 
   it.each([
     ["captured_at not UTC-Z", { capturedAt: "2026-07-22T20:05:00+00:00" }],
-    ["check observed_at local", { checkObservedAt: "2026-07-22T20:00:00" }],
+    ["check observed_at local", { checks: checksObservedAt("2026-07-22T20:00:00") }],
   ])("rejects non-UTC-Z timestamps (%s)", (_n, overrides) => {
     expect(() => buildSettlementRegistryItem(validInput(overrides))).toThrow(SettlementItemError);
   });

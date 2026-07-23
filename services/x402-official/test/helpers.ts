@@ -26,6 +26,7 @@ import type {
   ChainTransport,
   ConfiguredResource,
   FacilitatorTransport,
+  FinalizedObservationBoundary,
   PackageState,
   PaymentPayloadWire,
   PaymentRequirementsWire,
@@ -324,6 +325,25 @@ export class MockRegistry implements RegistryTransport {
     this.calls.push(hashHex);
     return this.result;
   }
+}
+
+/**
+ * A negative locator result carrying a well-formed finalized observation
+ * boundary — the ONLY negative shape the pipeline may treat as proof that the
+ * authorization nonce is unconsumed (safe to resubmit exactly once).
+ */
+export function provedUnconsumed(
+  overrides: Partial<FinalizedObservationBoundary> = {},
+): SettlementLocator {
+  return {
+    found: false,
+    observed: {
+      finalized: true,
+      blockHeight: 424242,
+      stateRootHash: "ee".repeat(32),
+      ...overrides,
+    },
+  };
 }
 
 export function goodPackageState(): PackageState {

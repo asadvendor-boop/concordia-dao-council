@@ -18,6 +18,15 @@
  * observer uses operator-selected trusted HTTPS RPC endpoints. This builder
  * therefore refuses any RPC/observation endpoint as a source and never emits an
  * observation-URL field.
+ *
+ * Security addendum (item 3): this builder does NOT fabricate evidence. The
+ * caller must supply one independently observed receipt PER required check
+ * (name, passed, source, observed_at, evidence), and the builder validates the
+ * complete set — every required name exactly once, no extras, every receipt
+ * passed, well-sourced, strictly UTC-Z timestamped no later than captured_at,
+ * and carrying non-empty supporting evidence. It REFUSES to build otherwise:
+ * minting `verification_status: "verified"` from identity fields alone is
+ * impossible.
  */
 
 import { parseRfc3339Utc } from "./time.js";
@@ -57,6 +66,20 @@ export const OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS: readonly string[] = [
 
 export type ObservationMode = "live" | "snapshot";
 
+/**
+ * One independently observed receipt for one required check. The caller (the
+ * canary operator) captures these from the actual artifacts — the builder only
+ * validates and carries them; it never asserts a check on its own.
+ */
+export interface SettlementCheckObservationInput {
+  name: string;
+  passed: boolean;
+  source: string;
+  observed_at: string;
+  /** Non-empty supporting evidence reference (printable, bounded). */
+  evidence: string;
+}
+
 export interface SettlementItemInput {
   proposalId: string;
   actionId: string;
@@ -71,7 +94,8 @@ export interface SettlementItemInput {
   settlementTransaction: string;
   observationMode: ObservationMode;
   capturedAt: string;
-  checkObservedAt: string;
+  /** One receipt per required check — validated, never synthesized. */
+  checks: SettlementCheckObservationInput[];
   sourceCommit: string;
   deploymentCommit: string;
   artifactPath: string;
@@ -84,6 +108,7 @@ export interface SettlementItemCheck {
   passed: true;
   source: string;
   observed_at: string;
+  evidence: string;
 }
 
 export interface SettlementRegistryItem {
@@ -172,10 +197,86 @@ export function requireArtifactSource(value: string): string {
   return value;
 }
 
+const EVIDENCE_RE = /^[\x20-\x7e]{1,1024}$/;
+
 /**
- * Build the official settlement registry item with exact dimensions and strict
- * UTC-Z chronology. Throws SettlementItemError on any invalid identity,
- * timestamp, chronology, source, or observation-mode value.
+ * Validate the complete per-check receipt set: every required check name
+ * exactly once, no extras, every receipt passed with a valid source, strict
+ * UTC-Z chronology against captured_at, and non-empty supporting evidence.
+ * Returns the checks in the canonical required order. Refuses (throws) on any
+ * missing, duplicate, unexpected, unpassed, or malformed observation — the
+ * builder never fabricates a check.
+ */
+function validateCheckObservations(
+  checks: unknown,
+  capturedAtEpoch: number,
+): SettlementItemCheck[] {
+  if (!Array.isArray(checks)) {
+    throw new SettlementItemError("invalid_check_observations");
+  }
+  const required = new Set(OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS);
+  const observed = new Map<string, SettlementItemCheck>();
+  for (const entry of checks) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new SettlementItemError("invalid_check_observation");
+    }
+    const check = entry as Record<string, unknown>;
+    const name = check["name"];
+    if (typeof name !== "string" || !CHECK_NAME_GRAMMAR.test(name)) {
+      throw new SettlementItemError("invalid_check_name");
+    }
+    if (!required.has(name)) {
+      throw new SettlementItemError("unexpected_check");
+    }
+    if (observed.has(name)) {
+      throw new SettlementItemError("duplicate_check_observation");
+    }
+    if (check["passed"] !== true) {
+      throw new SettlementItemError("check_not_passed");
+    }
+    const source = check["source"];
+    if (typeof source !== "string") {
+      throw new SettlementItemError("invalid_artifact_source");
+    }
+    requireArtifactSource(source);
+    const observedAt = check["observed_at"];
+    const observedAtEpoch = parseRfc3339Utc(observedAt);
+    if (observedAtEpoch === null) {
+      throw new SettlementItemError("invalid_check_observed_at");
+    }
+    // Strict per-check chronology: max(check.observed_at) <= captured_at.
+    if (observedAtEpoch > capturedAtEpoch) {
+      throw new SettlementItemError("check_observed_after_capture");
+    }
+    const evidence = check["evidence"];
+    if (typeof evidence !== "string" || !EVIDENCE_RE.test(evidence)) {
+      throw new SettlementItemError("invalid_check_evidence");
+    }
+    observed.set(name, {
+      name,
+      required: true,
+      passed: true,
+      source,
+      observed_at: observedAt as string,
+      evidence,
+    });
+  }
+  return OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS.map((name) => {
+    const receipt = observed.get(name);
+    if (receipt === undefined) {
+      throw new SettlementItemError("missing_check_observation");
+    }
+    return receipt;
+  });
+}
+
+/**
+ * Build the official settlement registry item with exact dimensions, strict
+ * UTC-Z chronology, and one validated independently observed receipt per
+ * required check. Throws SettlementItemError on any invalid identity,
+ * timestamp, chronology, source, observation-mode, or check-receipt value —
+ * it is impossible to obtain `verification_status: "verified"` without every
+ * required observation.
  */
 export function buildSettlementRegistryItem(
   input: SettlementItemInput,
@@ -214,29 +315,10 @@ export function buildSettlementRegistryItem(
 
   const capturedAtEpoch = parseRfc3339Utc(input.capturedAt);
   if (capturedAtEpoch === null) throw new SettlementItemError("invalid_captured_at");
-  const checkObservedAtEpoch = parseRfc3339Utc(input.checkObservedAt);
-  if (checkObservedAtEpoch === null) {
-    throw new SettlementItemError("invalid_check_observed_at");
-  }
-  // Strict chronology: max(check.observed_at) <= captured_at.
-  if (checkObservedAtEpoch > capturedAtEpoch) {
-    throw new SettlementItemError("check_observed_after_capture");
-  }
 
-  const checks: SettlementItemCheck[] = OFFICIAL_X402_SETTLEMENT_REQUIRED_CHECKS.map(
-    (name) => {
-      if (!CHECK_NAME_GRAMMAR.test(name)) {
-        throw new SettlementItemError("invalid_check_name");
-      }
-      return {
-        name,
-        required: true,
-        passed: true,
-        source: artifactPath,
-        observed_at: input.checkObservedAt,
-      } satisfies SettlementItemCheck;
-    },
-  );
+  // Item 3: one independently observed, validated receipt per required check.
+  // The builder refuses to construct ANY check itself.
+  const checks = validateCheckObservations(input.checks, capturedAtEpoch);
 
   return {
     proof_id: `official_x402_settlement_v1:${signedPaymentPayloadHash}`,

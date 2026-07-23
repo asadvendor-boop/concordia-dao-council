@@ -16,11 +16,28 @@
  * A lost `/settle` response is recovered by exact payer/package/nonce identity
  * without ever issuing a second settlement (WP5-3). Untrusted upstream reason
  * strings are mapped to bounded local codes and never echoed or logged.
+ *
+ * Security addendum:
+ *  - Exactly-one-submission is enforced under CONCURRENCY: every path to a
+ *    facilitator `/settle` call first takes durable exclusive ownership in the
+ *    ledger (the verified→submission_started CAS for a fresh submission, the
+ *    atomic recovery lease for a lost-response resubmission) BEFORE any
+ *    settlement network I/O. A caller that loses any ownership CAS returns a
+ *    bounded retryable pending refusal and never submits.
+ *  - A negative authorization lookup is proof of non-submission ONLY when it
+ *    asserts an explicit finalized observation boundary; anything weaker is
+ *    indeterminate and stays pending.
+ *  - Every stored-response replay is integrity-verified (canonical digest of
+ *    the stored bytes + terminal-field binding to the row); a mismatch is a
+ *    fail-closed integrity refusal, never a synthesized fallback.
  */
+
+import { randomUUID } from "node:crypto";
 
 import {
   ServiceRefusal,
   PendingFinalityError,
+  integrityRefusal,
   upstreamUnavailable,
   REFUSAL_CODES,
 } from "./errors.js";
@@ -54,9 +71,19 @@ import type {
   PaymentRequirementsWire,
   RegistryTransport,
   SettleResponseWire,
+  SettlementLocator,
   ValidatedPayment,
   VerifyResponseWire,
 } from "./types.js";
+
+/**
+ * Exclusive submission/recovery ownership window (security addendum, item 1).
+ * Long enough to cover the credentialed settle + readback round trips; short
+ * enough that a crashed owner's lease expires and recovery can proceed.
+ */
+const SUBMISSION_LEASE_TTL_MS = 120_000;
+
+const HEX64_RE = /^[0-9a-f]{64}$/;
 
 export interface PipelineDeps {
   config: ServiceConfig;
@@ -186,31 +213,91 @@ function settleSuccessResponse(
   };
 }
 
-/** Exact terminal retry: re-validate and return the stored response (WP5-5). */
-function validatedStoredResponse(
+function storedIntegrityFailure(): never {
+  throw integrityRefusal(REFUSAL_CODES.STORED_RESPONSE_INTEGRITY_FAILURE);
+}
+
+/**
+ * Exact terminal retry (WP5-5; security addendum, item 2). Every stored-
+ * response replay recomputes the canonical SHA-256 digest of the stored
+ * response bytes and requires it to equal the stored digest column, then binds
+ * the response's terminal fields to the row: a finalized replay must carry the
+ * row's exact 64-hex transaction and payer binding with `settled_at` present
+ * and no failure reason; a failed replay must carry the row's bounded failure
+ * code and recorded transaction. Any missing or mismatched value is a
+ * fail-closed integrity refusal — a fallback response is NEVER synthesized.
+ */
+export function validatedStoredResponse(
   row: FulfillmentRow,
   config: ServiceConfig,
 ): SettleResponseWire {
-  if (row.responseJson !== null) {
-    try {
-      return validateSettleResponse(JSON.parse(row.responseJson), config.network);
-    } catch {
-      /* corrupt stored body: fall through to deterministic derivation */
-    }
+  if (row.state !== "finalized" && row.state !== "failed_terminal") {
+    storedIntegrityFailure();
+  }
+  if (row.responseJson === null || row.settlementResponseHash === null) {
+    storedIntegrityFailure();
+  }
+  if (responseHash(row.responseJson) !== row.settlementResponseHash) {
+    storedIntegrityFailure();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.responseJson);
+  } catch {
+    storedIntegrityFailure();
+  }
+  let response: SettleResponseWire;
+  try {
+    response = validateSettleResponse(parsed, config.network);
+  } catch {
+    // Locally stored bytes failing wire validation are corrupt local state.
+    storedIntegrityFailure();
   }
   if (row.state === "finalized") {
-    return settleSuccessResponse(
-      row.payerAccountHash,
-      row.settlementTransactionHash ?? "",
-      row.network,
-    );
+    if (response.success !== true) storedIntegrityFailure();
+    if (
+      row.settlementTransactionHash === null ||
+      !HEX64_RE.test(row.settlementTransactionHash) ||
+      response.transaction !== row.settlementTransactionHash
+    ) {
+      storedIntegrityFailure();
+    }
+    if (response.payer !== `00${row.payerAccountHash}`) storedIntegrityFailure();
+    if (row.settledAt === null || row.failureReason !== null) {
+      storedIntegrityFailure();
+    }
+  } else {
+    if (response.success !== false) storedIntegrityFailure();
+    if (
+      row.failureReason === null ||
+      response.errorReason !== row.failureReason
+    ) {
+      storedIntegrityFailure();
+    }
+    if (response.transaction !== (row.settlementTransactionHash ?? "")) {
+      storedIntegrityFailure();
+    }
+    if (row.settledAt !== null) storedIntegrityFailure();
   }
-  return {
-    success: false,
-    errorReason: row.failureReason ?? "failed_terminal",
-    transaction: row.settlementTransactionHash ?? "",
-    network: row.network,
-  };
+  return response;
+}
+
+/**
+ * Re-read the durable row after losing a terminal write race: if another
+ * caller already recorded a terminal outcome, adopt (and integrity-verify)
+ * THAT response — the ledger, not the in-memory caller, is the source of
+ * truth. Integrity refusals from the read propagate (fail closed).
+ */
+function adoptTerminalOutcome(
+  deps: PipelineDeps,
+  hash: string,
+): SettleResponseWire | undefined {
+  const row = deps.ledger.get(deps.config.network, hash);
+  if (row === undefined) return undefined;
+  if (row.state === "finalized" || row.state === "failed_terminal") {
+    return validatedStoredResponse(row, deps.config);
+  }
+  return undefined;
 }
 
 function writeTerminalFailure(
@@ -220,18 +307,33 @@ function writeTerminalFailure(
   code: string,
   transaction: string,
 ): SettleResponseWire {
+  // Terminal invariant (item 4): the stored body's transaction must match the
+  // row's transaction column exactly. Only a 64-hex deploy hash is recordable;
+  // anything else is stored as the empty placeholder.
+  const boundTransaction = HEX64_RE.test(transaction) ? transaction : "";
   const body: SettleResponseWire = {
     success: false,
     errorReason: code,
-    transaction,
+    transaction: boundTransaction,
     network: deps.config.network,
   };
   const json = JSON.stringify(body);
-  deps.ledger.transition(deps.config.network, hash, from, "failed_terminal", {
-    failureReason: code,
-    responseJson: json,
-    settlementResponseHash: responseHash(json),
-  });
+  try {
+    deps.ledger.transition(deps.config.network, hash, from, "failed_terminal", {
+      failureReason: code,
+      responseJson: json,
+      settlementResponseHash: responseHash(json),
+      ...(boundTransaction === ""
+        ? {}
+        : { settlementTransactionHash: boundTransaction }),
+    });
+  } catch (error) {
+    if (error instanceof ServiceRefusal) throw error;
+    // Lost a terminal write race: adopt the durable outcome, never overwrite.
+    const adopted = adoptTerminalOutcome(deps, hash);
+    if (adopted !== undefined) return adopted;
+    throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+  }
   return body;
 }
 
@@ -243,11 +345,19 @@ function writeFinalized(
 ): SettleResponseWire {
   const body = settleSuccessResponse(payerAccountHashHex, transaction, deps.config.network);
   const json = JSON.stringify(body);
-  deps.ledger.transition(deps.config.network, hash, ["transaction_observed"], "finalized", {
-    responseJson: json,
-    settlementResponseHash: responseHash(json),
-    settledAt: new Date().toISOString(),
-  });
+  try {
+    deps.ledger.transition(deps.config.network, hash, ["transaction_observed"], "finalized", {
+      responseJson: json,
+      settlementResponseHash: responseHash(json),
+      settledAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (error instanceof ServiceRefusal) throw error;
+    // Lost a finalize race: adopt the durable, integrity-verified outcome.
+    const adopted = adoptTerminalOutcome(deps, hash);
+    if (adopted !== undefined) return adopted;
+    throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+  }
   deps.ledger.setSettlementState(SETTLEMENT_STATES.OFFICIAL_HOSTED_VERIFIED_LIVE);
   return body;
 }
@@ -295,12 +405,38 @@ function applyReadback(
 }
 
 /**
+ * A negative chain lookup (`found:false`) is proof of non-submission ONLY when
+ * the observer explicitly asserts the finalized observation boundary it
+ * queried: the literal `finalized:true`, a non-negative integer finalized
+ * block height, and the 64-hex state root actually queried. Ordinary indexer
+ * absence — or any weaker/malformed assertion — is NOT proof and is treated as
+ * indeterminate (pending; never a resubmission).
+ */
+function isProvedUnconsumed(locator: SettlementLocator): boolean {
+  if (locator.found !== false) return false;
+  const observed: unknown = (locator as { observed?: unknown }).observed;
+  if (typeof observed !== "object" || observed === null) return false;
+  const boundary = observed as Record<string, unknown>;
+  const height = boundary["blockHeight"];
+  const stateRoot = boundary["stateRootHash"];
+  return (
+    boundary["finalized"] === true &&
+    typeof height === "number" &&
+    Number.isInteger(height) &&
+    height >= 0 &&
+    typeof stateRoot === "string" &&
+    HEX64_RE.test(stateRoot)
+  );
+}
+
+/**
  * Reconcile one in-flight row against the chain. For a row with a recorded
  * deploy hash, read it back. For a row whose `/settle` response was lost (no
  * recorded hash), recover the deploy by exact authorization identity — adopting
  * an already-submitted transaction WITHOUT a second settlement, or proving the
- * nonce is unconsumed so the caller may submit exactly once (WP5-3). Never
- * issues a facilitator call.
+ * nonce is unconsumed at an explicit finalized observation boundary so that
+ * exactly one lease-holding caller may resubmit (WP5-3, security addendum
+ * item 1). Never issues a facilitator call.
  */
 async function recoverInFlightRow(
   deps: PipelineDeps,
@@ -320,17 +456,45 @@ async function recoverInFlightRow(
     } catch {
       return { status: "pending" };
     }
-    if (!locator.found) {
-      // Authoritatively unconsumed: no settlement happened.
+    if (locator.found !== true) {
+      if (!isProvedUnconsumed(locator)) {
+        // Weaker than a finalized-boundary proof: indeterminate → pending.
+        return { status: "pending" };
+      }
+      // Provably unconsumed at an explicit finalized observation boundary.
       return { status: "unconsumed" };
     }
-    current = deps.ledger.transition(
-      current.network,
-      current.signedPaymentPayloadHash,
-      ["submission_started"],
-      "transaction_observed",
-      { settlementTransactionHash: locator.transactionHash },
-    );
+    try {
+      current = deps.ledger.transition(
+        current.network,
+        current.signedPaymentPayloadHash,
+        ["submission_started"],
+        "transaction_observed",
+        { settlementTransactionHash: locator.transactionHash },
+      );
+    } catch (error) {
+      if (error instanceof ServiceRefusal) throw error;
+      // Lost an adoption race: the durable row is the source of truth.
+      const fresh = deps.ledger.get(
+        current.network,
+        current.signedPaymentPayloadHash,
+      );
+      if (fresh === undefined) return { status: "pending" };
+      if (fresh.state === "finalized") {
+        return {
+          status: "finalized",
+          response: validatedStoredResponse(fresh, deps.config),
+        };
+      }
+      if (fresh.state === "failed_terminal") {
+        return {
+          status: "failed",
+          response: validatedStoredResponse(fresh, deps.config),
+        };
+      }
+      if (fresh.settlementTransactionHash === null) return { status: "pending" };
+      current = fresh;
+    }
   }
   const txHash = current.settlementTransactionHash;
   if (txHash === null) return { status: "pending" };
@@ -414,23 +578,53 @@ export async function runVerify(
 }
 
 /**
- * Submit a settlement exactly once. `freshVerify` runs the credentialed verify
- * + claimed→verified transition for a genuinely new claim; a proven-unconsumed
- * lost-response resubmission skips it (the payload was already verified) and
- * resubmits from the reserved `submission_started` row without a second
- * governance lookup.
+ * CAS a durable transition. Losing the race to another concurrent caller is a
+ * bounded, retryable pending refusal — the loser must never continue toward a
+ * facilitator submission. Integrity refusals propagate unchanged.
+ */
+function transitionOrPending(
+  deps: PipelineDeps,
+  hash: string,
+  from: RowState[],
+  to: RowState,
+  extra?: {
+    recoveryLeaseId?: string;
+    recoveryLeaseExpiresAt?: string;
+  },
+): FulfillmentRow {
+  try {
+    return deps.ledger.transition(deps.config.network, hash, from, to, extra);
+  } catch (error) {
+    if (error instanceof ServiceRefusal) throw error;
+    throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+  }
+}
+
+type SubmissionMode =
+  | { freshVerify: true }
+  | { freshVerify: false; leaseId: string };
+
+/**
+ * Submit a settlement exactly once, under concurrency (security addendum,
+ * item 1). `freshVerify` runs the credentialed verify + claimed→verified CAS
+ * for a genuinely new claim and takes the durable submission lease inside the
+ * verified→submission_started CAS; a proven-unconsumed lost-response
+ * resubmission arrives already holding the recovery lease. Either way, the
+ * caller owns durable exclusive submission rights BEFORE the `/settle` network
+ * I/O — a caller that loses any CAS returns pending and never submits.
  */
 async function submitSettlement(
   deps: PipelineDeps,
   initialRow: FulfillmentRow,
   payment: ValidatedPayment,
-  freshVerify: boolean,
+  mode: SubmissionMode,
 ): Promise<SettleResponseWire> {
   const { config } = deps;
   const hash = payment.signedPaymentPayloadHashHex;
   let row = initialRow;
+  let leaseId: string;
 
-  if (freshVerify) {
+  if (mode.freshVerify) {
     try {
       await requireActiveV8(deps.chain, config);
     } catch (error) {
@@ -451,7 +645,7 @@ async function submitSettlement(
       return writeTerminalFailure(deps, hash, ["claimed", "verified"], code, "");
     }
     if (row.state === "claimed") {
-      row = deps.ledger.transition(config.network, hash, ["claimed"], "verified");
+      row = transitionOrPending(deps, hash, ["claimed"], "verified");
     }
   }
 
@@ -463,24 +657,44 @@ async function submitSettlement(
     throw error;
   }
 
-  if (row.state === "verified") {
-    row = deps.ledger.transition(config.network, hash, ["verified"], "submission_started");
+  if (mode.freshVerify) {
+    // Exclusive-ownership CAS: exactly one caller journals submission_started,
+    // taking the durable submission lease in the same atomic write.
+    leaseId = randomUUID();
+    row = transitionOrPending(deps, hash, ["verified"], "submission_started", {
+      recoveryLeaseId: leaseId,
+      recoveryLeaseExpiresAt: new Date(
+        Date.now() + SUBMISSION_LEASE_TTL_MS,
+      ).toISOString(),
+    });
+  } else {
+    // Lost-response resubmission: the recovery lease was claimed atomically
+    // before this call.
+    leaseId = mode.leaseId;
+  }
+  if (row.state !== "submission_started") {
+    // Never submit without durable exclusive ownership.
+    throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
   }
 
-  let rawSettle: unknown;
+  let settleResponse: SettleResponseWire;
   try {
-    rawSettle = await deps.facilitator.settle({
+    const rawSettle = await deps.facilitator.settle({
       x402Version: 2,
       paymentPayload: payment.paymentPayload,
       paymentRequirements: payment.requirements,
     });
+    settleResponse = validateSettleResponse(rawSettle, config.network);
   } catch (error) {
-    // Response lost or refused after journaling: the nonce stays reserved and
-    // later retries recover by authorization identity. Never resubmit blindly.
+    // Response lost/malformed after journaling: the attempt is over but its
+    // outcome is unrecorded. Release the exclusive lease (owner-checked); the
+    // nonce stays reserved by the durable submission_started row, and any
+    // resubmission must first re-prove the nonce unconsumed at a finalized
+    // observation boundary AND win the recovery lease. Never resubmit blindly.
+    deps.ledger.releaseRecoveryLease(config.network, hash, leaseId);
     if (error instanceof ServiceRefusal) throw error;
     throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
   }
-  const settleResponse = validateSettleResponse(rawSettle, config.network);
   if (settleResponse.success !== true) {
     const code = boundFacilitatorReason(
       settleResponse.errorReason,
@@ -495,9 +709,25 @@ async function submitSettlement(
     );
   }
 
-  deps.ledger.transition(config.network, hash, ["submission_started"], "transaction_observed", {
-    settlementTransactionHash: settleResponse.transaction,
-  });
+  try {
+    deps.ledger.transition(config.network, hash, ["submission_started"], "transaction_observed", {
+      settlementTransactionHash: settleResponse.transaction,
+    });
+  } catch (error) {
+    if (error instanceof ServiceRefusal) throw error;
+    // A concurrent recovery adopted an observation for this row first. The
+    // durable record wins; if it names a different transaction, reconcile from
+    // the recorded identity later — never trust our in-memory copy.
+    const adopted = adoptTerminalOutcome(deps, hash);
+    if (adopted !== undefined) return adopted;
+    const fresh = deps.ledger.get(config.network, hash);
+    if (
+      fresh === undefined ||
+      fresh.settlementTransactionHash !== settleResponse.transaction
+    ) {
+      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+    }
+  }
 
   // Post-settle proof: fresh drift guard + full transaction readback.
   let readback;
@@ -531,28 +761,64 @@ async function submitSettlement(
   throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
 }
 
+type ExistingResolution =
+  | { kind: "response"; response: SettleResponseWire }
+  | { kind: "resume_new" }
+  | { kind: "resubmit_from_reserved"; leaseId: string };
+
 /** Resolve an already-existing ledger row; returns a response or falls through. */
 async function resolveExistingRow(
   deps: PipelineDeps,
   row: FulfillmentRow,
-  payment: ValidatedPayment,
-): Promise<SettleResponseWire | "resume_new" | "resubmit_from_reserved"> {
+): Promise<ExistingResolution> {
   if (row.state === "finalized" || row.state === "failed_terminal") {
-    // Exact terminal idempotent retry — BEFORE any volatile gate (WP5-5).
-    return validatedStoredResponse(row, deps.config);
+    // Exact terminal idempotent retry — BEFORE any volatile gate (WP5-5),
+    // integrity-verified against the stored digest and terminal columns.
+    return { kind: "response", response: validatedStoredResponse(row, deps.config) };
   }
   if (row.state === "submission_started" || row.state === "transaction_observed") {
     const recovery = await recoverInFlightRow(deps, row);
     if (recovery.status === "finalized" || recovery.status === "failed") {
-      return recovery.response;
+      return { kind: "response", response: recovery.response };
     }
     if (recovery.status === "pending") {
       throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
     }
-    return "resubmit_from_reserved";
+    // Provably unconsumed. Exactly ONE caller may own resubmission: take the
+    // durable atomic recovery lease BEFORE any resubmission network I/O
+    // (item 1). Every loser stays pending and never resubmits.
+    const leaseId = randomUUID();
+    const now = Date.now();
+    const claimed = deps.ledger.claimRecoveryLease(
+      deps.config.network,
+      row.signedPaymentPayloadHash,
+      leaseId,
+      new Date(now).toISOString(),
+      new Date(now + SUBMISSION_LEASE_TTL_MS).toISOString(),
+    );
+    if (!claimed) {
+      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
+    }
+    return { kind: "resubmit_from_reserved", leaseId };
   }
   // claimed / verified: resume the pipeline using the STORED binding.
-  return "resume_new";
+  return { kind: "resume_new" };
+}
+
+async function settleExistingRow(
+  deps: PipelineDeps,
+  row: FulfillmentRow,
+  payment: ValidatedPayment,
+): Promise<SettleResponseWire> {
+  const resolved = await resolveExistingRow(deps, row);
+  if (resolved.kind === "response") return resolved.response;
+  if (resolved.kind === "resubmit_from_reserved") {
+    return submitSettlement(deps, row, payment, {
+      freshVerify: false,
+      leaseId: resolved.leaseId,
+    });
+  }
+  return submitSettlement(deps, row, payment, { freshVerify: true });
 }
 
 export async function runSettle(
@@ -567,14 +833,7 @@ export async function runSettle(
   // 2. Consult the ledger BEFORE any volatile gate (WP5-5).
   const existing = ledger.get(config.network, hash);
   if (existing !== undefined) {
-    const resolved = await resolveExistingRow(deps, existing, payment);
-    if (resolved === "resubmit_from_reserved") {
-      return submitSettlement(deps, existing, payment, false);
-    }
-    if (resolved === "resume_new") {
-      return submitSettlement(deps, existing, payment, true);
-    }
-    return resolved;
+    return settleExistingRow(deps, existing, payment);
   }
 
   // 3. NEW claim: all current-time governance/signature gates run only here.
@@ -582,16 +841,9 @@ export async function runSettle(
   const claim = ledger.claim(bindingFrom(payment, governance, config));
   if (claim.outcome === "existing") {
     // Concurrent claim raced us: resolve the now-existing row.
-    const resolved = await resolveExistingRow(deps, claim.row, payment);
-    if (resolved === "resubmit_from_reserved") {
-      return submitSettlement(deps, claim.row, payment, false);
-    }
-    if (resolved === "resume_new") {
-      return submitSettlement(deps, claim.row, payment, true);
-    }
-    return resolved;
+    return settleExistingRow(deps, claim.row, payment);
   }
-  return submitSettlement(deps, claim.row, payment, true);
+  return submitSettlement(deps, claim.row, payment, { freshVerify: true });
 }
 
 /**

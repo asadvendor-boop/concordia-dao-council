@@ -56,6 +56,16 @@ export function upstreamMalformed(code: string): ServiceRefusal {
   return new ServiceRefusal(502, code, "upstream_malformed");
 }
 
+/**
+ * Local durable-state integrity refusal (security addendum, items 2/4). A
+ * corrupt, tampered, or impossible ledger row / stored response fails CLOSED:
+ * it is never replayed as success and never patched over with a synthesized
+ * fallback response. Not retryable — the state itself is wrong.
+ */
+export function integrityRefusal(code: string): ServiceRefusal {
+  return new ServiceRefusal(500, code, "internal");
+}
+
 /** 429 throttle refusal for the public /verify and /settle endpoints. */
 export function rateLimited(): ServiceRefusal {
   return new ServiceRefusal(429, "rate_limited", "invalid_request", true);
@@ -95,4 +105,7 @@ export const REFUSAL_CODES = {
   /** Bounded stable codes for untrusted upstream facilitator reasons. */
   FACILITATOR_DECLINED: "facilitator_declined",
   FACILITATOR_SETTLEMENT_DECLINED: "facilitator_settlement_declined",
+  /** Durable-state integrity refusals (security addendum, items 2/4). */
+  LEDGER_TERMINAL_INVARIANT_VIOLATED: "ledger_terminal_invariant_violated",
+  STORED_RESPONSE_INTEGRITY_FAILURE: "stored_response_integrity_failure",
 } as const;

@@ -141,14 +141,32 @@ export interface AuthorizationLocatorQuery {
 }
 
 /**
+ * Explicit finalized-state observation boundary for a NEGATIVE locator result.
+ * A negative chain lookup is only proof of non-submission when the observer
+ * asserts the exact finalized snapshot it queried: `finalized` must be the
+ * literal `true`, `blockHeight` the finalized block height of that snapshot,
+ * and `stateRootHash` the 64-hex state root actually queried. An ordinary
+ * indexer miss, a mempool/non-finalized head read, or any malformed boundary
+ * is NOT proof — the pipeline treats anything weaker as indeterminate and
+ * stays pending (never resubmits).
+ */
+export interface FinalizedObservationBoundary {
+  finalized: true;
+  blockHeight: number;
+  stateRootHash: string;
+}
+
+/**
  * Authoritative result of locating a settlement by authorization identity.
- * `found:false` means the observer PROVED the nonce is unconsumed at the
- * observed finalized state (safe to submit exactly once). An indeterminate
- * observer must throw instead of returning `found:false`.
+ * `found:false` is only accepted as proof that the nonce is unconsumed when it
+ * carries a well-formed `observed` finalized-state boundary (see
+ * FinalizedObservationBoundary). An indeterminate observer must throw instead
+ * of returning `found:false`; a boundary-less or malformed negative result is
+ * treated as indeterminate by the pipeline (pending, no resubmission).
  */
 export type SettlementLocator =
   | { found: true; transactionHash: string }
-  | { found: false };
+  | { found: false; observed: FinalizedObservationBoundary };
 
 export interface FacilitatorTransport {
   /** GET /supported — parsed 2xx JSON body. */

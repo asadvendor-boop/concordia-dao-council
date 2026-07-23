@@ -13,6 +13,18 @@
  *  - same authorization key + different payload: terminal 409 before submission
  *  - restart reconciliation by (payer, authorization_nonce, recorded
  *    transaction hash); never a blind second settlement.
+ *
+ * Security addendum:
+ *  - Terminal invariants are enforced on WRITE (inside the transition
+ *    transaction, so a violating write rolls back) and on READ: a finalized
+ *    row requires an exact 64-hex transaction hash, stored response bytes, a
+ *    matching response digest, settled_at, and no failure reason; a
+ *    failed_terminal row requires its bounded failure code and a matching
+ *    stored failure response. Corrupt/impossible rows fail closed
+ *    (ledger_terminal_invariant_violated) and are never replayed as success.
+ *  - Submission/recovery ownership is a durable atomic lease (CAS in one
+ *    SQLite statement): no two callers/processes can own resubmission of a
+ *    reserved `submission_started` row at the same time.
  */
 
 import DatabaseConstructor from "better-sqlite3";
@@ -21,7 +33,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { terminalConflict } from "./errors.js";
+import { integrityRefusal, terminalConflict, REFUSAL_CODES } from "./errors.js";
 import { SETTLEMENT_STATES, type SettlementState } from "./config.js";
 
 export const ROW_STATES = [
@@ -72,6 +84,9 @@ export interface FulfillmentRow extends FulfillmentBinding {
   responseJson: string | null;
   settledAt: string | null;
   failureReason: string | null;
+  /** Durable exclusive submission/recovery ownership (security addendum). */
+  recoveryLeaseId: string | null;
+  recoveryLeaseExpiresAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -107,6 +122,8 @@ CREATE TABLE IF NOT EXISTS x402_fulfillments (
   response_json TEXT,
   settled_at TEXT,
   failure_reason TEXT,
+  recovery_lease_id TEXT,
+  recovery_lease_expires_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (network, signed_payment_payload_hash)
@@ -144,6 +161,8 @@ interface DbRow {
   response_json: string | null;
   settled_at: string | null;
   failure_reason: string | null;
+  recovery_lease_id: string | null;
+  recovery_lease_expires_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -173,6 +192,8 @@ function toRow(r: DbRow): FulfillmentRow {
     responseJson: r.response_json,
     settledAt: r.settled_at,
     failureReason: r.failure_reason,
+    recoveryLeaseId: r.recovery_lease_id,
+    recoveryLeaseExpiresAt: r.recovery_lease_expires_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -204,6 +225,74 @@ export function responseHash(json: string): string {
   return createHash("sha256").update(json, "utf8").digest("hex");
 }
 
+const TRANSACTION_HEX64_RE = /^[0-9a-f]{64}$/;
+const BOUNDED_FAILURE_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+function terminalInvariantViolation(): never {
+  throw integrityRefusal(REFUSAL_CODES.LEDGER_TERMINAL_INVARIANT_VIOLATED);
+}
+
+/**
+ * Database terminal invariants (security addendum, item 4). Enforced on WRITE
+ * (inside the transition transaction, so a violating write rolls back) and on
+ * every READ. Corrupt or impossible terminal rows fail closed and are never
+ * replayed as success — no fallback response is ever synthesized here.
+ */
+export function validateTerminalRowInvariants(row: FulfillmentRow): void {
+  if (row.state !== "finalized" && row.state !== "failed_terminal") return;
+  if (row.responseJson === null || row.settlementResponseHash === null) {
+    terminalInvariantViolation();
+  }
+  if (responseHash(row.responseJson) !== row.settlementResponseHash) {
+    terminalInvariantViolation();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.responseJson);
+  } catch {
+    terminalInvariantViolation();
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    terminalInvariantViolation();
+  }
+  const body = parsed as Record<string, unknown>;
+  if (body["network"] !== row.network) terminalInvariantViolation();
+  if (row.state === "finalized") {
+    if (
+      row.settlementTransactionHash === null ||
+      !TRANSACTION_HEX64_RE.test(row.settlementTransactionHash)
+    ) {
+      terminalInvariantViolation();
+    }
+    if (row.settledAt === null) terminalInvariantViolation();
+    if (row.failureReason !== null) terminalInvariantViolation();
+    if (body["success"] !== true) terminalInvariantViolation();
+    if (body["transaction"] !== row.settlementTransactionHash) {
+      terminalInvariantViolation();
+    }
+    return;
+  }
+  // failed_terminal: bounded failure code + matching stored failure response.
+  if (
+    row.failureReason === null ||
+    !BOUNDED_FAILURE_CODE_RE.test(row.failureReason)
+  ) {
+    terminalInvariantViolation();
+  }
+  if (row.settledAt !== null) terminalInvariantViolation();
+  if (
+    row.settlementTransactionHash !== null &&
+    !TRANSACTION_HEX64_RE.test(row.settlementTransactionHash)
+  ) {
+    terminalInvariantViolation();
+  }
+  if (body["success"] !== false) terminalInvariantViolation();
+  if (body["errorReason"] !== row.failureReason) terminalInvariantViolation();
+  if (body["transaction"] !== (row.settlementTransactionHash ?? "")) {
+    terminalInvariantViolation();
+  }
+}
+
 export class FulfillmentLedger {
   private readonly db: Database;
 
@@ -216,6 +305,22 @@ export class FulfillmentLedger {
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(CREATE_SQL);
+    // Additive migration for volumes created before the recovery lease.
+    const columns = (
+      this.db.prepare(`PRAGMA table_info(x402_fulfillments)`).all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    if (!columns.includes("recovery_lease_id")) {
+      this.db.exec(
+        `ALTER TABLE x402_fulfillments ADD COLUMN recovery_lease_id TEXT`,
+      );
+    }
+    if (!columns.includes("recovery_lease_expires_at")) {
+      this.db.exec(
+        `ALTER TABLE x402_fulfillments ADD COLUMN recovery_lease_expires_at TEXT`,
+      );
+    }
   }
 
   close(): void {
@@ -229,7 +334,14 @@ export class FulfillmentLedger {
          WHERE network = ? AND signed_payment_payload_hash = ?`,
       )
       .get(network, payloadHash) as DbRow | undefined;
-    return r === undefined ? undefined : toRow(r);
+    if (r === undefined) return undefined;
+    const row = toRow(r);
+    // Terminal invariants are validated on EVERY read (and, because
+    // transition() re-reads inside its transaction, on every write — a
+    // violating terminal write rolls back). Fail closed, never replay corrupt
+    // state as success.
+    validateTerminalRowInvariants(row);
+    return row;
   }
 
   /**
@@ -306,7 +418,11 @@ export class FulfillmentLedger {
 
   /**
    * Durable monotonic transition. Throws on any attempt to move backwards or
-   * to leave failed_terminal / regress from finalized.
+   * to leave failed_terminal / regress from finalized. A transition to a
+   * terminal state is validated against the terminal invariants INSIDE the
+   * transaction, so a violating write rolls back (enforced on write). The
+   * recovery lease is set only when the new state's owner supplies one
+   * (verified → submission_started); every other transition clears it.
    */
   transition(
     network: string,
@@ -319,6 +435,8 @@ export class FulfillmentLedger {
       responseJson?: string;
       settledAt?: string;
       failureReason?: string;
+      recoveryLeaseId?: string;
+      recoveryLeaseExpiresAt?: string;
     },
   ): FulfillmentRow {
     const tx = this.db.transaction((): FulfillmentRow => {
@@ -347,6 +465,8 @@ export class FulfillmentLedger {
              response_json = COALESCE(?, response_json),
              settled_at = COALESCE(?, settled_at),
              failure_reason = COALESCE(?, failure_reason),
+             recovery_lease_id = ?,
+             recovery_lease_expires_at = ?,
              updated_at = ?
            WHERE network = ? AND signed_payment_payload_hash = ?`,
         )
@@ -357,15 +477,74 @@ export class FulfillmentLedger {
           extra?.responseJson ?? null,
           extra?.settledAt ?? null,
           extra?.failureReason ?? null,
+          extra?.recoveryLeaseId ?? null,
+          extra?.recoveryLeaseExpiresAt ?? null,
           now,
           network,
           payloadHash,
         );
+      // get() re-validates terminal invariants: a violating terminal write
+      // throws here and the surrounding transaction rolls back.
       const updated = this.get(network, payloadHash);
       if (updated === undefined) throw new Error("ledger_row_missing");
       return updated;
     });
     return tx.immediate();
+  }
+
+  /**
+   * Atomically claim exclusive ownership of resubmitting a reserved
+   * lost-response row (security addendum, item 1). One SQLite statement — a
+   * durable compare-and-swap: it succeeds only while the row is still
+   * `submission_started` with no recorded transaction and no live lease.
+   * Exactly one caller/process can win; every loser must stay pending and
+   * must NOT resubmit. A crashed winner's lease expires and can be reclaimed.
+   */
+  claimRecoveryLease(
+    network: string,
+    payloadHash: string,
+    leaseId: string,
+    nowIso: string,
+    expiresAtIso: string,
+  ): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE x402_fulfillments SET
+           recovery_lease_id = ?,
+           recovery_lease_expires_at = ?,
+           updated_at = ?
+         WHERE network = ? AND signed_payment_payload_hash = ?
+           AND state = 'submission_started'
+           AND settlement_transaction_hash IS NULL
+           AND (recovery_lease_id IS NULL
+                OR recovery_lease_expires_at IS NULL
+                OR recovery_lease_expires_at <= ?)`,
+      )
+      .run(leaseId, expiresAtIso, nowIso, network, payloadHash, nowIso);
+    return result.changes === 1;
+  }
+
+  /**
+   * Release an owned lease after a settle attempt whose outcome was NOT
+   * recorded (transport failure / malformed response). Owner-checked: only the
+   * exact lease id releases. Any later resubmission must first re-prove the
+   * nonce unconsumed at a finalized observation boundary.
+   */
+  releaseRecoveryLease(
+    network: string,
+    payloadHash: string,
+    leaseId: string,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE x402_fulfillments SET
+           recovery_lease_id = NULL,
+           recovery_lease_expires_at = NULL,
+           updated_at = ?
+         WHERE network = ? AND signed_payment_payload_hash = ?
+           AND recovery_lease_id = ?`,
+      )
+      .run(new Date().toISOString(), network, payloadHash, leaseId);
   }
 
   /** Rows that were in flight when the process last stopped. */

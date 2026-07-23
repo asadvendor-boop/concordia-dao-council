@@ -7,7 +7,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ServiceRefusal } from "../src/errors.js";
-import { FulfillmentLedger, type FulfillmentBinding } from "../src/ledger.js";
+import {
+  FulfillmentLedger,
+  responseHash,
+  type FulfillmentBinding,
+} from "../src/ledger.js";
 import { reconcileLedgerOnStartup, runSettle } from "../src/pipeline.js";
 import { SETTLEMENT_STATES } from "../src/config.js";
 import {
@@ -95,12 +99,25 @@ describe("FulfillmentLedger", () => {
       "transaction_observed",
       { settlementTransactionHash: TX },
     );
+    // A finalized write must carry the FULL consistent terminal payload
+    // (response bytes + matching digest + settled_at): the terminal
+    // invariants refuse anything less (see integrity.test.ts).
+    const finalizedBody = JSON.stringify({
+      success: true,
+      transaction: TX,
+      network: b.network,
+      payer: `00${b.payerAccountHash}`,
+    });
     ledger.transition(
       b.network,
       b.signedPaymentPayloadHash,
       ["transaction_observed"],
       "finalized",
-      { responseJson: "{}", settledAt: new Date().toISOString() },
+      {
+        responseJson: finalizedBody,
+        settlementResponseHash: responseHash(finalizedBody),
+        settledAt: new Date().toISOString(),
+      },
     );
     expect(() =>
       ledger.transition(
