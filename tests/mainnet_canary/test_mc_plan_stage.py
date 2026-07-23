@@ -243,8 +243,22 @@ def test_stage_refuses_snapshot_drift(
         tmp_path / "moved-snapshot.json",
         make_snapshot(block_hash="4e" * 32, block_height=105),
     )
+    # Corroborate the MOVED snapshot, so the only violated property is
+    # the plan-vs-snapshot drift this test is about.
+    moved_corroboration = write_json(
+        tmp_path / "moved-corroboration.json",
+        mc_support.make_snapshot_corroboration(
+            json.loads(moved.read_text(encoding="utf-8"))
+        ),
+    )
     with pytest.raises(CanaryRefusal) as refusal:
-        _stage(plan_inputs, plan, tmp_path, snapshot_path=moved)
+        _stage(
+            plan_inputs,
+            plan,
+            tmp_path,
+            snapshot_path=moved,
+            snapshot_corroboration_path=moved_corroboration,
+        )
     assert refusal.value.code == RefusalCode.STATE_ROOT_STALE
 
 

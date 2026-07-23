@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import re
 
-from tools.mainnet_canary.constants import MAINNET_CHAIN_NAME
+from tools.mainnet_canary.constants import (
+    FINALITY_CONFIRMATION_DEPTH,
+    MAINNET_CHAIN_NAME,
+)
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.verify import (
     evaluate_expected_prequorum_refusal,
@@ -51,6 +54,9 @@ _REQUIRED_PROVIDER = {
     "retrieved_at_unix",
     "api_version",
     "chainspec_name",
+    # Each provider must state the chain tip it saw, so confirmation depth is
+    # a MEASURED quantity rather than a constant nobody consults.
+    "chain_tip_height",
 }
 
 
@@ -111,6 +117,31 @@ def validate_observation_v2(document: object) -> dict[str, object]:
         raise _refuse(
             RefusalCode.NETWORK_MISMATCH,
             "provider reports a chainspec other than `casper`",
+        )
+    tip = provider["chain_tip_height"]
+    block_height = document["block"].get("block_height") if isinstance(
+        document.get("block"), dict
+    ) else None
+    if (
+        not isinstance(tip, int)
+        or tip < 0
+        or not isinstance(block_height, int)
+        or block_height < 0
+    ):
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "provider.chain_tip_height and block.block_height must both be "
+            "non-negative integers to measure confirmation depth",
+        )
+    # FINALITY_CONFIRMATION_DEPTH existed as a constant that nothing read.
+    # It is now an enforced measurement: belt-and-braces on top of Casper's
+    # per-block finality signatures.
+    if tip - block_height < FINALITY_CONFIRMATION_DEPTH:
+        raise _refuse(
+            RefusalCode.INSUFFICIENT_CONFIRMATIONS,
+            f"block is {tip - block_height} confirmations deep; "
+            f"{FINALITY_CONFIRMATION_DEPTH} are required before an economic "
+            "conclusion may rest on it",
         )
     return document
 

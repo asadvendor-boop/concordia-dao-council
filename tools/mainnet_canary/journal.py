@@ -195,6 +195,12 @@ class CanaryJournal:
                 RefusalCode.JOURNAL_CONFLICT,
                 "journal already exists; refusing to overwrite durable state",
             ) from None
+        except OSError as exc:
+            os.close(lock_fd)
+            raise CanaryRefusal(
+                RefusalCode.JOURNAL_PATH_UNSAFE,
+                "journal could not be created safely at this path",
+            ) from exc
         os.close(fd)
         _fsync_dir(path.parent)
         journal = cls(path, [], lock_fd)
@@ -256,6 +262,29 @@ class CanaryJournal:
 
     # -- append -------------------------------------------------------------
 
+    def _open_for_append(self) -> int:
+        """Open the journal for append with the parent pinned by descriptor.
+
+        Closes the check-then-use window: ``_require_safe_journal_path`` runs
+        against a path, but between that check and this open the directory
+        entry could be replaced. Resolving the parent to a file descriptor
+        ONCE and opening the journal relative to that descriptor (with
+        ``O_NOFOLLOW``) means the write always lands in the directory that
+        was validated, whatever happens to the path afterwards.
+        """
+
+        dir_fd = os.open(
+            self._path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        try:
+            return os.open(
+                self._path.name,
+                os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW,
+                dir_fd=dir_fd,
+            )
+        finally:
+            os.close(dir_fd)
+
     def _append(self, payload: dict[str, object]) -> None:
         prev_hash = (
             self._records[-1]["record_hash"] if self._records else GENESIS_PREV_HASH
@@ -267,8 +296,11 @@ class CanaryJournal:
         }
         record["record_hash"] = _record_hash(record)
         line = _canonical(record) + "\n"
-        # Durability before progress: fsync the appended record.
-        with self._path.open("a", encoding="ascii") as handle:
+        # Durability before progress: fsync the appended record. The open
+        # goes through _open_for_append so the parent directory is pinned by
+        # descriptor and the path cannot be swapped under us mid-run.
+        fd = self._open_for_append()
+        with os.fdopen(fd, "a", encoding="ascii") as handle:
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
@@ -279,6 +311,16 @@ class CanaryJournal:
     @property
     def plan_hash(self) -> str:
         return str(self._records[0]["plan_hash"])
+
+    @property
+    def head_hash(self) -> str:
+        """Hash of the last record — the journal's own tamper-evident head.
+
+        Read from the journal rather than supplied by a caller, so a proof
+        bundle cannot claim a head the journal does not actually have.
+        """
+
+        return str(self._records[-1]["record_hash"])
 
     def step_status(self, step_id: str) -> StepStatus | None:
         state: str | None = None

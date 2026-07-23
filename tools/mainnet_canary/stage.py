@@ -46,6 +46,7 @@ from tools.mainnet_canary.plan import (
     load_snapshot_observation,
     load_status_observation,
     plan_document_hash,
+    require_corroborated_snapshot,
     require_fresh_snapshot,
 )
 from tools.mainnet_canary.rc_gate import validate_rc_gate
@@ -178,6 +179,8 @@ def run_stage(
     calibration_path: Path,
     authorization_path: Path,
     clock_unix: int,
+    snapshot_corroboration_path: Path,
+    pinned_authorizer_keys: frozenset[str] | set[str],
     operator_ceilings_path: Path | None = None,
 ) -> dict[str, object]:
     """Re-validate everything, then persist unsigned intents + journal.
@@ -204,6 +207,16 @@ def run_stage(
     snapshot = load_snapshot_observation(snapshot_path)
     status = load_status_observation(status_path)
     require_fresh_snapshot(snapshot, status)
+    # The transfer amount is derived from this balance, so the balance must
+    # be independently sourced rather than asserted by one file.
+    require_corroborated_snapshot(
+        snapshot,
+        _load_json(
+            snapshot_corroboration_path,
+            context="treasury-snapshot-corroboration",
+            code=RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+        ),
+    )
     envelope_body = plan_document["envelope"]["body"]
     if (
         envelope_body["snapshot_block_hash"] != snapshot["block_hash"]
@@ -253,6 +266,7 @@ def run_stage(
         ),
         manifest=manifest,
         clock_unix=clock_unix,
+        pinned_authorizer_keys=pinned_authorizer_keys,
     )
     require_within_authorization(manifest, authorization)
 

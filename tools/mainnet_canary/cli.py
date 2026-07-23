@@ -39,9 +39,11 @@ from tools.mainnet_canary.secret_guard import refuse_if_secret_material
 from tools.mainnet_canary.stage import run_stage
 from tools.mainnet_canary.finality_v2 import evaluate_dual_provider
 from tools.mainnet_canary.path_policy import CanaryPathPolicy
+from tools.mainnet_canary.journal import CanaryJournal
 from tools.mainnet_canary.proof_bundle import (
     REQUIRED_STATEMENT,
     build_proof_bundle_document,
+    require_cross_binding,
 )
 from tools.mainnet_canary.economic_manifest import (
     build_economic_manifest,
@@ -195,6 +197,8 @@ def _cmd_stage(args: argparse.Namespace) -> dict[str, object]:
         calibration_path=Path(args.calibration),
         authorization_path=Path(args.authorization),
         clock_unix=int(args.clock_unix),
+        snapshot_corroboration_path=Path(args.snapshot_corroboration),
+        pinned_authorizer_keys=frozenset(args.authorizer_key or ()),
         operator_ceilings_path=(
             Path(args.operator_ceilings) if args.operator_ceilings else None
         ),
@@ -344,6 +348,14 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
         Path(args.economic_manifest), context="economic-manifest"
     )
     attestation = _read_json_file(Path(args.attestation), context="build-attestation")
+    # The journal head is READ from the journal, never taken on the
+    # operator's word, and every constituent must bind to the same plan.
+    journal = CanaryJournal.load(Path(args.journal))
+    try:
+        journal_plan_hash = journal.plan_hash
+        journal_head_hash = journal.head_hash
+    finally:
+        journal.close()
     document = build_proof_bundle_document(
         plan_hash=str(plan_hash),
         rc_tag=str(plan_document.get("rc", {}).get("tag")),
@@ -363,8 +375,15 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
             for entry in verification.get("steps", [])
             if isinstance(entry, dict) and "step_id" in entry
         },
-        journal_head_hash=str(args.journal_head_hash),
+        journal_head_hash=journal_head_hash,
         narrative=REQUIRED_STATEMENT,
+    )
+    require_cross_binding(
+        document,
+        journal_plan_hash=journal_plan_hash,
+        manifest_plan_hash=str(manifest.get("plan_hash")),
+        verification_plan_hash=str(verification.get("plan_hash")),
+        journal_head_hash=journal_head_hash,
     )
     policy = CanaryPathPolicy(
         Path(args.repo_root),
@@ -446,6 +465,10 @@ def build_parser() -> argparse.ArgumentParser:
     stage.add_argument("--calibration", required=True)
     stage.add_argument("--authorization", required=True)
     stage.add_argument("--clock-unix", required=True, type=int)
+    stage.add_argument("--snapshot-corroboration", required=True)
+    # Repeatable. Verifying a signature against a key the document itself
+    # nominated proves nothing, so the permitted authorizers are pinned here.
+    stage.add_argument("--authorizer-key", action="append", required=True)
     stage.add_argument("--operator-ceilings", default=None)
     stage.set_defaults(handler=_cmd_stage)
 
@@ -471,7 +494,10 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument("--verification", required=True)
     bundle.add_argument("--economic-manifest", required=True)
     bundle.add_argument("--attestation", required=True)
-    bundle.add_argument("--journal-head-hash", required=True)
+    # The journal is READ (its head is recomputed); there is deliberately no
+    # --journal-head-hash argument, because an operator-typed head binds
+    # nothing.
+    bundle.add_argument("--journal", required=True)
     bundle.add_argument("--out-dir", required=True)
     bundle.set_defaults(handler=_cmd_bundle)
 

@@ -209,6 +209,50 @@ calls or hold a token, so there is nothing for it to gate here. It remains
 unit-tested and is for the future live lane. That is a scope boundary, not a
 wired control — do not read it as one.
 
+## 4c. Depth findings — "wired" did not close these
+
+The reviewer's follow-up was right that putting a module on the path is not
+the same as the control being correct. Five named areas, each verified as a
+real gap before fixing:
+
+1. **Confirmation depth** — `FINALITY_CONFIRMATION_DEPTH = 8` was a constant
+   **nothing read**. Providers must now report `chain_tip_height`, and
+   `tip - block_height >= 8` is enforced per observation
+   (`INSUFFICIENT_CONFIRMATIONS`).
+2. **Authenticated human authorization** — the authorization was only
+   schema-checked, so **any process able to write the file could authorize a
+   real Mainnet spend**. It now requires a detached ed25519 signature over
+   canonical bytes under a domain separator, verified against a **pinned**
+   authorizer key set supplied out-of-band (`--authorizer-key`). Unsigned,
+   tampered, unpinned, and unverifiable-backend cases all refuse
+   (`AUTHORIZATION_UNSIGNED`, `AUTHORIZATION_SIGNATURE_INVALID`,
+   `AUTHORIZER_NOT_PINNED`, `SIGNATURE_BACKEND_UNAVAILABLE` — an
+   unverifiable signature is never treated as authentic).
+3. **Independently sourced snapshot** — the transfer amount is derived from
+   the treasury balance, which was a single operator file: whoever wrote it
+   chose the amount. Staging now requires a corroboration document from two
+   disjoint providers reporting the identical observation
+   (`SNAPSHOT_NOT_CORROBORATED`). The frozen snapshot schema is untouched.
+4. **Proof-bundle cross-binding** — `journal_head_hash` was a CLI argument
+   the operator typed, binding nothing. The `--journal-head-hash` flag is
+   **removed**; `bundle` now reads the journal, recomputes its head, and
+   requires the journal, economic manifest and verification report to bind
+   to the same plan (`BUNDLE_CROSS_BINDING_INVALID`).
+5. **Filesystem race** — the symlink check ran against a path, leaving a
+   check-then-use window before the append. Journal writes now resolve the
+   parent to a descriptor once and open relative to it with `O_NOFOLLOW`, so
+   the write lands in the directory that was validated.
+
+Calibration receipts remain **operator-attested, not corroborated** — each
+must be finalized and is recorded with its deploy hash, but this lane cannot
+independently confirm a Testnet receipt. Stated here rather than implied;
+corroborating them is a live-lane input, not something the prep lane can
+manufacture.
+
+Suite 244 → **251**. Each gate is additionally exercised against the real
+CLI, including a forged authorization whose ceiling was raised after signing
+(refused) beside the genuine one (accepted).
+
 ## 5. Test inventory and fresh results (all at `93724c6`)
 
 | Suite | Result |

@@ -293,10 +293,45 @@ def make_calibration(plan: dict[str, object], **overrides: object) -> dict[str, 
     return document
 
 
+# A deterministic TEST authorizer keypair. Test-only material: it authorizes
+# nothing but hermetic fixtures, and no real key is ever placed in the repo.
+_TEST_AUTHORIZER_SEED = bytes(range(32))
+
+
+def test_authorizer_public_key_hex() -> str:
+    """Casper-form (0x01-prefixed) ed25519 public key of the test authorizer."""
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private = ed25519.Ed25519PrivateKey.from_private_bytes(_TEST_AUTHORIZER_SEED)
+    raw = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return "01" + raw.hex()
+
+
+def sign_authorization(document: dict[str, object]) -> dict[str, object]:
+    """Attach a REAL detached ed25519 signature over the canonical bytes."""
+
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from tools.mainnet_canary.economic_manifest import authorization_signing_bytes
+
+    private = ed25519.Ed25519PrivateKey.from_private_bytes(_TEST_AUTHORIZER_SEED)
+    unsigned = dict(document)
+    unsigned["signature_hex"] = ""
+    signature = private.sign(authorization_signing_bytes(unsigned))
+    signed = dict(unsigned)
+    signed["signature_hex"] = signature.hex()
+    return signed
+
+
 def make_authorization(
     plan: dict[str, object], manifest: dict[str, object], **overrides: object
 ) -> dict[str, object]:
-    """A signed human authorization binding the manifest exactly."""
+    """A genuinely signed human authorization binding the manifest exactly."""
 
     document: dict[str, object] = {
         "schema_id": "concordia.mainnet-canary.human-authorization.v1",
@@ -310,9 +345,34 @@ def make_authorization(
         "expiry_unix": CLOCK_UNIX + 3600,
         "nonce": "9d" * 32,
         "authorized_by": ["asad-public-approval"],
+        "authorizer_public_key_hex": test_authorizer_public_key_hex(),
+        "signature_hex": "",
     }
     document.update(overrides)
-    return document
+    # Sign LAST so any override is covered by the signature — a fixture must
+    # never hand the validator a document whose signature omits a mutation.
+    return sign_authorization(document)
+
+
+def make_snapshot_corroboration(snapshot: dict[str, object]) -> dict[str, object]:
+    """Two disjoint providers reporting the identical treasury observation."""
+
+    return {
+        "schema_id": "concordia.mainnet-canary.treasury-snapshot-corroboration.v1",
+        "providers": [
+            {
+                "provider_id": "provider-a",
+                "endpoint_host": "node-a.example",
+                "response_sha256": "aa" * 32,
+            },
+            {
+                "provider_id": "provider-b",
+                "endpoint_host": "node-b.example",
+                "response_sha256": "bb" * 32,
+            },
+        ],
+        "observation": snapshot,
+    }
 
 
 def build_economic_inputs(
@@ -352,11 +412,17 @@ def stage_gate_kwargs(
 
     pristine = build_valid_plan(plan_inputs)
     economic = build_economic_inputs(pristine, tmp_path)
+    snapshot = json.loads(plan_inputs["snapshot"].read_text(encoding="utf-8"))
     return {
         "attestation_path": economic["attestation"],
         "calibration_path": economic["calibration"],
         "authorization_path": economic["authorization"],
         "clock_unix": CLOCK_UNIX,
+        "snapshot_corroboration_path": write_json(
+            tmp_path / "inputs" / "snapshot-corroboration.json",
+            make_snapshot_corroboration(snapshot),
+        ),
+        "pinned_authorizer_keys": frozenset({test_authorizer_public_key_hex()}),
     }
 
 
@@ -423,6 +489,7 @@ def make_v2_pair(step_id: str, **overrides: object) -> list[dict[str, object]]:
             "retrieved_at_unix": CLOCK_UNIX,
             "api_version": "2.0.0",
             "chainspec_name": "casper",
+            "chain_tip_height": 128,
         }
         document.setdefault("state_readback", None)
         pair.append(document)

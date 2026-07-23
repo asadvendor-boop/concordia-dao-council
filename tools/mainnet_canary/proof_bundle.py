@@ -106,6 +106,46 @@ def build_proof_bundle_document(
     return document
 
 
+def require_cross_binding(
+    document: dict[str, object],
+    *,
+    journal_plan_hash: str,
+    manifest_plan_hash: str,
+    verification_plan_hash: str,
+    journal_head_hash: str,
+) -> None:
+    """Every constituent must be bound to the SAME run.
+
+    A bundle that merely embeds four values proves nothing: the journal, the
+    economic manifest and the verification report must each be shown to
+    belong to this plan, and the journal head must be the one actually read
+    from the journal rather than a value the operator typed. Otherwise a
+    bundle could pair one run's verification with another run's journal.
+    """
+
+    plan_hash = document.get("plan_hash")
+    mismatched = sorted(
+        name
+        for name, value in (
+            ("journal", journal_plan_hash),
+            ("economic_manifest", manifest_plan_hash),
+            ("verification_report", verification_plan_hash),
+        )
+        if value != plan_hash
+    )
+    if mismatched:
+        raise CanaryRefusal(
+            RefusalCode.BUNDLE_CROSS_BINDING_INVALID,
+            f"bundle constituents belong to a different plan: {mismatched}",
+        )
+    if document.get("journal_head_hash") != journal_head_hash:
+        raise CanaryRefusal(
+            RefusalCode.BUNDLE_CROSS_BINDING_INVALID,
+            "bundle journal head does not equal the head recomputed from the "
+            "journal itself",
+        )
+
+
 def validate_bundle_document(document: dict[str, object]) -> None:
     """Exact lineage + verbatim required statement + zero forbidden claims."""
 

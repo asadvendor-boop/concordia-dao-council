@@ -39,6 +39,9 @@ def _provider(provider_id: str, host: str) -> dict[str, object]:
         "retrieved_at_unix": 1_700_000_000,
         "api_version": "2.0.0",
         "chainspec_name": "casper",
+        # Comfortably deeper than FINALITY_CONFIRMATION_DEPTH so these
+        # cases isolate the property they name; depth has its own tests.
+        "chain_tip_height": 200,
     }
 
 
@@ -242,3 +245,32 @@ class TestExplicitReadbacks:
                 },
             )
         assert refusal.value.code == RefusalCode.TRANSFER_MISMATCH
+
+
+class TestConfirmationDepth:
+    """FINALITY_CONFIRMATION_DEPTH was a constant nothing read; it is now
+    a measured, enforced property of every observation."""
+
+    def test_a_shallow_block_refuses(self) -> None:
+        # block_height 120 with tip 127 is 7 confirmations — one short.
+        shallow = _pair()
+        for observation in shallow:
+            observation["provider"]["chain_tip_height"] = 127
+        with pytest.raises(CanaryRefusal) as refusal:
+            evaluate_dual_provider(
+                shallow, step_id=STEP, expectation=EXPECT_SUCCESS
+            )
+        assert refusal.value.code == RefusalCode.INSUFFICIENT_CONFIRMATIONS
+
+    def test_exactly_the_required_depth_is_accepted(self) -> None:
+        exact = _pair()
+        for observation in exact:
+            observation["provider"]["chain_tip_height"] = 128
+        evaluate_dual_provider(exact, step_id=STEP, expectation=EXPECT_SUCCESS)
+
+    def test_a_missing_chain_tip_refuses(self) -> None:
+        observation = _observation()
+        del observation["provider"]["chain_tip_height"]
+        with pytest.raises(CanaryRefusal) as refusal:
+            validate_observation_v2(observation)
+        assert refusal.value.code == RefusalCode.OBSERVATION_MALFORMED

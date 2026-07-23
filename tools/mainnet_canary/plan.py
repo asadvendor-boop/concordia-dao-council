@@ -178,6 +178,72 @@ def load_parameters(path: Path) -> dict[str, object]:
     return document
 
 
+SNAPSHOT_CORROBORATION_SCHEMA_ID = (
+    "concordia.mainnet-canary.treasury-snapshot-corroboration.v1"
+)
+
+
+def require_corroborated_snapshot(
+    snapshot: dict[str, object], corroboration: object
+) -> dict[str, object]:
+    """The treasury balance must be independently sourced, not asserted once.
+
+    The plan's transfer amount is derived from this balance, so a single
+    operator-supplied file was a single point of trust: whoever wrote it
+    chose the amount. This requires the SAME observation to be reported by
+    two disjoint providers, in the spirit of the dual-provider rule already
+    enforced for finality — an economic input deserves the same discipline
+    as an economic outcome.
+
+    The frozen snapshot schema is untouched; corroboration wraps it.
+    """
+
+    if (
+        not isinstance(corroboration, dict)
+        or corroboration.get("schema_id") != SNAPSHOT_CORROBORATION_SCHEMA_ID
+        or not isinstance(corroboration.get("providers"), list)
+        or not isinstance(corroboration.get("observation"), dict)
+    ):
+        raise CanaryRefusal(
+            RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+            "treasury snapshot carries no corroboration document",
+        )
+    providers = corroboration["providers"]
+    if len(providers) != 2:
+        raise CanaryRefusal(
+            RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+            "exactly two corroborating providers are required for the "
+            "treasury snapshot",
+        )
+    ids, hosts = set(), set()
+    for entry in providers:
+        if not isinstance(entry, dict):
+            raise CanaryRefusal(
+                RefusalCode.SNAPSHOT_NOT_CORROBORATED, "provider entry malformed"
+            )
+        for field in ("provider_id", "endpoint_host", "response_sha256"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                raise CanaryRefusal(
+                    RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+                    f"corroborating provider is missing {field}",
+                )
+        ids.add(entry["provider_id"])
+        hosts.add(entry["endpoint_host"])
+    if len(ids) != 2 or len(hosts) != 2:
+        raise CanaryRefusal(
+            RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+            "the two corroborating providers are not disjoint",
+        )
+    if canonical_json(corroboration["observation"]) != canonical_json(snapshot):
+        raise CanaryRefusal(
+            RefusalCode.SNAPSHOT_NOT_CORROBORATED,
+            "corroborated observation differs from the supplied treasury "
+            "snapshot; refusing to derive an amount from a contested balance",
+        )
+    return snapshot
+
+
 def load_snapshot_observation(path: Path) -> dict[str, object]:
     document = _load_strict_json(
         path,

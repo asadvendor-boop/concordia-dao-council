@@ -31,6 +31,7 @@ from tools.mainnet_canary.economic_manifest import (
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 
 CLOCK_NOW = 1_700_000_000
+PINNED_KEYS = frozenset({mc_support.test_authorizer_public_key_hex()})
 
 
 def _calibration_for(plan: dict[str, object]) -> dict[str, object]:
@@ -78,9 +79,12 @@ def _authorization(plan: dict[str, object], manifest: dict[str, object], **overr
         "expiry_unix": CLOCK_NOW + 3600,
         "nonce": "9d" * 32,
         "authorized_by": ["asad-public-approval"],
+        "authorizer_public_key_hex": mc_support.test_authorizer_public_key_hex(),
+        "signature_hex": "",
     }
     document.update(overrides)
-    return document
+    # Sign LAST so overrides are covered by the signature.
+    return mc_support.sign_authorization(document)
 
 
 class TestManifestDerivation:
@@ -183,7 +187,9 @@ class TestHumanAuthorization:
         self, plan: dict[str, object], manifest: dict[str, object]
     ) -> None:
         validate_human_authorization(
-            _authorization(plan, manifest), manifest=manifest, clock_unix=CLOCK_NOW
+            _authorization(plan, manifest), manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=PINNED_KEYS
         )
 
     def test_expired_authorization_refuses(
@@ -195,6 +201,7 @@ class TestHumanAuthorization:
                     _authorization(plan, manifest, expiry_unix=expiry),
                     manifest=manifest,
                     clock_unix=CLOCK_NOW,
+                    pinned_authorizer_keys=PINNED_KEYS,
                 )
             assert refusal.value.code == RefusalCode.AUTHORIZATION_EXPIRED
 
@@ -232,7 +239,9 @@ class TestHumanAuthorization:
     ) -> None:
         authorization = _authorization(plan, manifest)
         validate_human_authorization(
-            authorization, manifest=manifest, clock_unix=CLOCK_NOW
+            authorization, manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=PINNED_KEYS
         )
         require_within_authorization(manifest, authorization)
         inflated = dict(
@@ -245,3 +254,73 @@ class TestHumanAuthorization:
             RefusalCode.CEILING_ARITHMETIC_INVALID,
             RefusalCode.AUTHORIZATION_INVALID,
         )
+
+
+class TestAuthorizationAuthenticity:
+    """Well-formed is not authentic.
+
+    Before this pass the authorization was only schema-checked, so any
+    process able to write the file could authorize a real Mainnet spend.
+    """
+
+    def test_an_unsigned_authorization_refuses(
+        self, plan: dict[str, object], manifest: dict[str, object]
+    ) -> None:
+        document = _authorization(plan, manifest)
+        document["signature_hex"] = ""
+        with pytest.raises(CanaryRefusal) as refusal:
+            validate_human_authorization(
+                document,
+                manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=PINNED_KEYS,
+            )
+        assert refusal.value.code == RefusalCode.AUTHORIZATION_UNSIGNED
+
+    def test_a_tampered_field_invalidates_the_signature(
+        self, plan: dict[str, object], manifest: dict[str, object]
+    ) -> None:
+        # Signed correctly, then the ceiling is raised after the fact.
+        document = _authorization(plan, manifest)
+        document["max_total_outlay_motes"] = str(
+            int(manifest["max_total_outlay_motes"]) + 1
+        )
+        with pytest.raises(CanaryRefusal) as refusal:
+            validate_human_authorization(
+                document,
+                manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=PINNED_KEYS,
+            )
+        # Either the binding check or the signature catches it; both are
+        # fail-closed and neither may let the raised ceiling through.
+        assert refusal.value.code in (
+            RefusalCode.AUTHORIZATION_INVALID,
+            RefusalCode.AUTHORIZATION_SIGNATURE_INVALID,
+        )
+
+    def test_a_signature_from_an_unpinned_key_refuses(
+        self, plan: dict[str, object], manifest: dict[str, object]
+    ) -> None:
+        document = _authorization(plan, manifest)
+        with pytest.raises(CanaryRefusal) as refusal:
+            validate_human_authorization(
+                document,
+                manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=frozenset({"01" + "ff" * 32}),
+            )
+        assert refusal.value.code == RefusalCode.AUTHORIZER_NOT_PINNED
+
+    def test_no_pinned_set_at_all_refuses(
+        self, plan: dict[str, object], manifest: dict[str, object]
+    ) -> None:
+        # Verifying against a key the document itself nominated proves nothing.
+        with pytest.raises(CanaryRefusal) as refusal:
+            validate_human_authorization(
+                _authorization(plan, manifest),
+                manifest=manifest,
+                clock_unix=CLOCK_NOW,
+                pinned_authorizer_keys=frozenset(),
+            )
+        assert refusal.value.code == RefusalCode.AUTHORIZER_NOT_PINNED

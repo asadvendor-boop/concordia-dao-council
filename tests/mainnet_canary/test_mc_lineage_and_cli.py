@@ -247,6 +247,10 @@ def test_cli_plan_and_stage_round_trip(
             str(gates["calibration_path"]),
             "--authorization",
             str(gates["authorization_path"]),
+            "--snapshot-corroboration",
+            str(gates["snapshot_corroboration_path"]),
+            "--authorizer-key",
+            mc_support.test_authorizer_public_key_hex(),
             "--clock-unix",
             str(gates["clock_unix"]),
         ],
@@ -299,6 +303,10 @@ def test_cli_stage_refuses_without_the_build_attestation(
             str(gates["calibration_path"]),
             "--authorization",
             str(gates["authorization_path"]),
+            "--snapshot-corroboration",
+            str(gates["snapshot_corroboration_path"]),
+            "--authorizer-key",
+            mc_support.test_authorizer_public_key_hex(),
             "--clock-unix",
             str(gates["clock_unix"]),
         ],
@@ -343,6 +351,10 @@ def test_cli_stage_refuses_an_expired_human_authorization(
             "--authorization",
             str(gates["authorization_path"]),
             # Clock advanced well past the authorization's expiry.
+            "--snapshot-corroboration",
+            str(gates["snapshot_corroboration_path"]),
+            "--authorizer-key",
+            mc_support.test_authorizer_public_key_hex(),
             "--clock-unix",
             str(int(gates["clock_unix"]) + 999_999),
         ],
@@ -413,6 +425,7 @@ def test_cli_verify_refuses_prequorum_success_end_to_end(
                 "response_sha256": "22" * 32,
                 "retrieved_at_unix": mc_support.CLOCK_UNIX,
                 "api_version": "2.0.0", "chainspec_name": "casper",
+                "chain_tip_height": 128,
             }
             doc.setdefault("state_readback", None)
             bundle.append(doc)
@@ -604,6 +617,19 @@ def test_cli_funding_refuses_without_calibration(
     assert output["refusal"]["code"] == RefusalCode.CALIBRATION_RECEIPT_ABSENT
 
 
+def _journal_bound_to(plan: dict[str, object], path: Path) -> Path:
+    """A real journal whose genesis binds this plan — the bundle reads its
+    head rather than trusting an operator-supplied value."""
+
+    from tools.mainnet_canary.journal import CanaryJournal
+
+    journal = CanaryJournal.create(
+        path, plan_hash=str(plan["canary_plan_sha256"]), rc_tag="rc"
+    )
+    journal.close()
+    return path
+
+
 def test_cli_bundle_emits_lineage_and_required_statement(
     plan_inputs: dict[str, Path], tmp_path: Path, capsys
 ) -> None:
@@ -624,8 +650,13 @@ def test_cli_bundle_emits_lineage_and_required_statement(
     manifest_path = mc_support.write_json(tmp_path / "manifest.json", manifest)
     verification_path = mc_support.write_json(
         tmp_path / "verification.json",
-        {"mode": "verify", "steps": [{"step_id": "G-finalize-exact-envelope"}]},
+        {
+            "mode": "verify",
+            "plan_hash": plan["canary_plan_sha256"],
+            "steps": [{"step_id": "G-finalize-exact-envelope"}],
+        },
     )
+    journal_for_bundle = _journal_bound_to(plan, tmp_path / "bundle-journal.jsonl")
     exit_code, output = _run_cli(
         capsys,
         [
@@ -640,8 +671,8 @@ def test_cli_bundle_emits_lineage_and_required_statement(
             str(manifest_path),
             "--attestation",
             str(gates["attestation_path"]),
-            "--journal-head-hash",
-            "ee" * 32,
+            "--journal",
+            str(journal_for_bundle),
             "--out-dir",
             str(tmp_path / "bundle-out"),
         ],
@@ -670,8 +701,10 @@ def test_cli_bundle_refuses_to_write_into_a_protected_namespace(
         ),
     )
     verification_path = mc_support.write_json(
-        tmp_path / "verification2.json", {"mode": "verify", "steps": []}
+        tmp_path / "verification2.json",
+        {"mode": "verify", "plan_hash": plan["canary_plan_sha256"], "steps": []},
     )
+    journal_for_bundle = _journal_bound_to(plan, tmp_path / "bundle-journal2.jsonl")
     exit_code, output = _run_cli(
         capsys,
         [
@@ -686,8 +719,8 @@ def test_cli_bundle_refuses_to_write_into_a_protected_namespace(
             str(manifest_path),
             "--attestation",
             str(gates["attestation_path"]),
-            "--journal-head-hash",
-            "ee" * 32,
+            "--journal",
+            str(journal_for_bundle),
             "--out-dir",
             str(plan_inputs["repo"] / "artifacts" / "live" / "x"),
         ],

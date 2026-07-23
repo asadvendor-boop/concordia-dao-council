@@ -46,7 +46,67 @@ _AUTHORIZATION_FIELDS = {
     "expiry_unix",
     "nonce",
     "authorized_by",
+    # Authenticity, not just well-formedness: without these anyone able to
+    # write the authorization file could authorize a Mainnet spend.
+    "authorizer_public_key_hex",
+    "signature_hex",
 }
+
+# The signed message is the canonical JSON of every field EXCEPT the
+# signature itself, under a domain separator so an authorization can never
+# be replayed as some other Concordia document.
+AUTHORIZATION_SIGNING_DOMAIN = b"CONCORDIA_MAINNET_CANARY_AUTHORIZATION_V1\x00"
+
+_ED25519_PUBLIC_KEY = re.compile(r"01[0-9a-f]{64}\Z")
+_SIGNATURE_HEX = re.compile(r"[0-9a-f]{128}\Z")
+
+
+def authorization_signing_bytes(document: dict[str, object]) -> bytes:
+    """Exact bytes an authorizer signs — canonical, signature field excluded."""
+
+    body = {
+        key: value for key, value in document.items() if key != "signature_hex"
+    }
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return AUTHORIZATION_SIGNING_DOMAIN + payload.encode("utf-8")
+
+
+def _verify_ed25519(
+    public_key_hex: str, signature_hex: str, message: bytes
+) -> None:
+    """Verify a detached ed25519 signature; fail closed on any problem.
+
+    If the verification backend is unavailable the authorization is REFUSED,
+    never accepted unverified — an unverifiable signature is worth exactly as
+    much as no signature.
+    """
+
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise CanaryRefusal(
+            RefusalCode.SIGNATURE_BACKEND_UNAVAILABLE,
+            "no ed25519 verification backend is available; refusing to treat "
+            "an unverifiable authorization as authentic",
+        ) from exc
+    # Casper prefixes ed25519 public keys with 0x01; the raw key follows.
+    raw_key = bytes.fromhex(public_key_hex[2:])
+    try:
+        ed25519.Ed25519PublicKey.from_public_bytes(raw_key).verify(
+            bytes.fromhex(signature_hex), message
+        )
+    except InvalidSignature as exc:
+        raise CanaryRefusal(
+            RefusalCode.AUTHORIZATION_SIGNATURE_INVALID,
+            "authorization signature does not verify against the pinned "
+            "authorizer key",
+        ) from exc
+    except Exception as exc:
+        raise CanaryRefusal(
+            RefusalCode.AUTHORIZATION_SIGNATURE_INVALID,
+            "authorization signature could not be verified",
+        ) from exc
 
 
 def _motes(value: object, *, field: str) -> int:
@@ -300,9 +360,19 @@ def required_funding_motes(manifest: dict[str, object]) -> str:
 
 
 def validate_human_authorization(
-    document: object, *, manifest: dict[str, object], clock_unix: int
+    document: object,
+    *,
+    manifest: dict[str, object],
+    clock_unix: int,
+    pinned_authorizer_keys: frozenset[str] | set[str] | None = None,
 ) -> dict[str, object]:
-    """The signed human authorization must bind every economic fact."""
+    """The human authorization must be AUTHENTIC, not merely well-formed.
+
+    ``pinned_authorizer_keys`` is the set of public keys permitted to
+    authorize this canary. It is required: without it any key that produced
+    a syntactically valid signature would be accepted, which authenticates
+    nothing.
+    """
 
     validate_economic_manifest(manifest)
     if not isinstance(document, dict) or set(document) != _AUTHORIZATION_FIELDS:
@@ -352,6 +422,39 @@ def validate_human_authorization(
             RefusalCode.AUTHORIZATION_INVALID,
             f"authorization does not bind the manifest on: {mismatched}",
         )
+
+    # --- authenticity ------------------------------------------------------
+    # Everything above proves the document is well-formed and bound. None of
+    # it proves WHO wrote it. Without the checks below, any process able to
+    # write the authorization file could authorize a real Mainnet spend.
+    public_key = document["authorizer_public_key_hex"]
+    signature = document["signature_hex"]
+    if (
+        not isinstance(public_key, str)
+        or _ED25519_PUBLIC_KEY.match(public_key) is None
+        or not isinstance(signature, str)
+        or _SIGNATURE_HEX.match(signature) is None
+    ):
+        raise CanaryRefusal(
+            RefusalCode.AUTHORIZATION_UNSIGNED,
+            "authorization carries no usable ed25519 authorizer key and "
+            "detached signature; a well-formed but unsigned document "
+            "authenticates nobody",
+        )
+    if not pinned_authorizer_keys:
+        raise CanaryRefusal(
+            RefusalCode.AUTHORIZER_NOT_PINNED,
+            "no pinned authorizer key set was supplied; verifying a "
+            "signature against a key the document itself chose proves "
+            "nothing",
+        )
+    if public_key not in set(pinned_authorizer_keys):
+        raise CanaryRefusal(
+            RefusalCode.AUTHORIZER_NOT_PINNED,
+            "authorization is signed by a key outside the pinned authorizer "
+            "set",
+        )
+    _verify_ed25519(public_key, signature, authorization_signing_bytes(document))
     return document
 
 
