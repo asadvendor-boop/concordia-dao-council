@@ -17,3 +17,15 @@ def read_secret(name: str) -> str:
         return Path(file_path).read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def read_secret_file_only(name: str) -> str:
+    """Return a secret only through NAME_FILE, ignoring direct env values."""
+
+    file_path = os.getenv(f"{name}_FILE", "").strip()
+    if not file_path:
+        return ""
+    try:
+        return Path(file_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""

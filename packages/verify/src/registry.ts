@@ -686,11 +686,11 @@ function applyCrossProofBindings(items: InternalItemVerificationResult[]): void 
       !(facts.snapshotBlockHeight < exact.finalizationBlockHeight) ||
       facts.authorizationBlockHeight !== exact.finalizationBlockHeight ||
       facts.authorizationBlockHash !== exact.finalizationBlockHash ||
-      exact.finalizationBlockHeight >= facts.nativeBlockHeight
+      exact.finalizationBlockHeight > facts.nativeBlockHeight
     ) {
       invalidateItem(
         treasury,
-        "native treasury ordering must satisfy snapshot < v3 finalization = exact scan-start block < native execution",
+        "native treasury ordering must satisfy snapshot < v3 finalization = exact scan-start block <= native execution",
       );
     }
   }

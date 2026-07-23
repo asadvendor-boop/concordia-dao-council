@@ -230,17 +230,33 @@ def _collaboration(evidence: dict[str, Any]) -> dict[str, Any]:
     return evidence.get("collaboration") or {}
 
 
-def _quorum_blocking_proof_ok() -> bool:
-    plan = _load_json_artifact("artifacts/live/odra-quorum-exercise-plan.json")
-    criteria = plan.get("acceptance_criteria") or {}
-    pre_quorum = criteria.get("pre_quorum_execution_blocked") or {}
-    final_receipt = criteria.get("final_receipt_after_quorum") or {}
-    return (
-        plan.get("status") == "live_complete"
-        and pre_quorum.get("status") == "verified"
-        and final_receipt.get("status") == "verified"
-        and final_receipt.get("deploy_hash") == CANONICAL_QUORUM_RECEIPT_HASH
+def _quorum_blocking_proof_item(proposal_id: str) -> dict[str, Any] | None:
+    root = os.getenv(
+        "CONCORDIA_PROOF_REGISTRY_DIR",
+        "artifacts/live/proof-registry",
     )
+    try:
+        item = ProofRegistryRepository(root).unique_green_public_item(
+            proposal_id,
+            "exact_envelope_v3",
+            temporal_scope="current",
+        )
+    except (OSError, ValueError):
+        return None
+    if item is None:
+        return None
+    observed = {
+        check.get("name"): check
+        for check in item.get("checks") or []
+        if isinstance(check, dict)
+    }
+    pre_quorum = observed.get("pre_quorum_finalize_reverted_with_code_8", {})
+    if (
+        pre_quorum.get("required") is not True
+        or pre_quorum.get("passed") is not True
+    ):
+        return None
+    return item
 
 
 def _action_hash_guard_rejects_tamper(approved_payload: dict[str, Any], tampered_payload: dict[str, Any]) -> bool:
@@ -387,6 +403,9 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
         "policy_hash": receipt.get("policy_hash"),
         "plan_hash": receipt.get("plan_hash"),
     }
+    quorum_item = _quorum_blocking_proof_item(
+        str(evidence.get("proposal_id") or CANONICAL_PROPOSAL_ID)
+    )
     checks = [
         {
             "id": "allocation_cap",
@@ -397,8 +416,13 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
         {
             "id": "quorum_required",
             "label": "no quorum blocks execution",
-            "passed": _quorum_blocking_proof_ok(),
-            "evidence": f"Supplemental quorum proof {CANONICAL_QUORUM_RECEIPT_HASH}; pre-quorum rejection artifact verified",
+            "passed": quorum_item is not None,
+            "evidence": (
+                f"{quorum_item['proof_id']}: "
+                "pre_quorum_finalize_reverted_with_code_8 independently verified"
+                if quorum_item is not None
+                else "No unique green current exact_envelope_v3 quorum observation"
+            ),
         },
         {
             "id": "tampered_envelope_rejected",
@@ -662,9 +686,11 @@ def build_interactive_adversarial_replay(
         "final_card_hash": receipt.get("final_card_hash"),
     }
     attempted_envelope = {**approved_envelope, "approved_allocation_bps": attempted}
-    approved_action_ok = _action_hash_guard_rejects_tamper(approved_envelope, attempted_envelope)
+    envelope_binding_demonstrated = _action_hash_guard_rejects_tamper(
+        approved_envelope, attempted_envelope
+    )
     invariant_result = "failed_policy_cap" if attempted > approved else "within_cap"
-    unsafe = attempted > approved or approved_action_ok
+    unsafe = attempted > approved
     return {
         "status": "blocked" if unsafe else "within_policy_preview",
         "proof_mode": "interactive_adversarial_replay",
@@ -680,6 +706,7 @@ def build_interactive_adversarial_replay(
         "mandate_result": "capped_to_800_bps" if approved == 800 else "capped_to_policy_limit",
         "approved_envelope_hash": _sha256(approved_envelope),
         "attempted_envelope_hash": _sha256(attempted_envelope),
+        "envelope_binding_demonstrated": envelope_binding_demonstrated,
         "locke_result": "refused_to_sign" if unsafe else "preview_only_no_execution",
         "casper_transaction_triggered": False,
         "network_broadcast_attempted": False,
@@ -717,17 +744,27 @@ def build_rwa_evidence_run() -> dict[str, Any]:
         "note": "Concrete RWA evidence packet; supplemental on-chain receipt only, not the canonical Casper receipt.",
     }
     proof = _load_json_artifact(str(RWA_EXECUTION_PROOF))
-    if proof.get("status") == "processed":
-        deploy_hash = proof.get("deploy_hash") or proof.get("transaction_hash") or SUPPLEMENTAL_RWA_RECEIPT_HASH
+    reported_hash = proof.get("deploy_hash") or proof.get("transaction_hash")
+    packet.update(
+        {
+            "artifact_reported_status": proof.get("status"),
+            "supplemental_receipt_status": "unavailable",
+            "supplemental_receipt_reason": (
+                "The legacy summary has no independently verified raw-observation "
+                "adapter in the proof registry."
+            ),
+            "supplemental_proof_artifact": (
+                str(RWA_EXECUTION_PROOF) if proof else None
+            ),
+        }
+    )
+    if reported_hash == SUPPLEMENTAL_RWA_RECEIPT_HASH:
         packet.update(
             {
-                "supplemental_receipt_status": "processed",
-                "supplemental_receipt_hash": deploy_hash,
-                "supplemental_receipt_url": f"https://testnet.cspr.live/deploy/{deploy_hash}",
-                "supplemental_contract_hash": proof.get("contract_hash") or CANONICAL_CONTRACT_HASH,
-                "supplemental_entry_point": proof.get("entry_point") or "store_governance_receipt",
-                "supplemental_scope": proof.get("scope") or "supplemental_rwa_run",
-                "supplemental_proof_artifact": str(RWA_EXECUTION_PROOF),
+                "supplemental_receipt_hash": reported_hash,
+                "supplemental_receipt_url": (
+                    f"https://testnet.cspr.live/deploy/{reported_hash}"
+                ),
             }
         )
     packet["evidence_hash"] = "sha256:" + _sha256(packet)

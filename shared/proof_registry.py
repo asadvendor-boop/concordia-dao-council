@@ -225,7 +225,7 @@ _HEX32_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _PROPOSAL_RE = re.compile(r"^[A-Z0-9-]{1,64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-_CHECK_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+_CHECK_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
 _RFC3339_UTC_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
 )
@@ -496,17 +496,43 @@ def proof_item_is_green(item: dict[str, Any]) -> bool:
         return False
     if item.get("execution_outcome") not in _GREEN_OUTCOMES:
         return False
-    checks = item["checks"]
-    required_names = REQUIRED_CHECKS_BY_PROOF_TYPE[item["proof_type"]]
-    by_name = {check["name"]: check for check in checks}
-    if any(by_name[name]["required"] is not True or by_name[name]["passed"] is not True for name in required_names):
+    return _required_checks_pass(item)
+
+
+def _required_checks_pass(item: dict[str, Any]) -> bool:
+    proof_type = item.get("proof_type")
+    if proof_type not in REQUIRED_CHECKS_BY_PROOF_TYPE:
         return False
-    return all(check["passed"] is True for check in checks if check["required"] is True)
+    checks = item.get("checks")
+    if not isinstance(checks, list):
+        return False
+    checks = item["checks"]
+    by_name = {
+        check.get("name"): check
+        for check in checks
+        if isinstance(check, dict) and isinstance(check.get("name"), str)
+    }
+    required_names = REQUIRED_CHECKS_BY_PROOF_TYPE[proof_type]
+    if any(
+        by_name.get(name, {}).get("required") is not True
+        or by_name.get(name, {}).get("passed") is not True
+        for name in required_names
+    ):
+        return False
+    return all(
+        check.get("passed") is True
+        for check in checks
+        if isinstance(check, dict) and check.get("required") is True
+    )
 
 
 def normalize_proof_item(item: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(item)
-    if _public_item_errors(normalized):
+    errors = _public_item_errors(normalized)
+    if errors or (
+        normalized.get("verification_status") == "verified"
+        and not _required_checks_pass(normalized)
+    ):
         normalized["verification_status"] = "invalid"
     return normalized
 
@@ -533,6 +559,13 @@ def build_public_registry(
         raise ValueError("reference_time must be RFC3339 UTC")
     if generated_time > reference:
         raise ValueError("generated_at cannot be after reference_time")
+    proof_ids = [
+        item.get("proof_id")
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("proof_id"), str)
+    ]
+    if len(proof_ids) != len(set(proof_ids)):
+        raise ValueError("duplicate proof_id")
     normalized = [normalize_proof_item(item) for item in items]
     for item in normalized:
         if item.get("proposal_id") not in {None, proposal_id}:
@@ -717,6 +750,33 @@ class ProofRegistryRepository:
         if not known and not items:
             raise RegistryNotFound(proposal_id)
         return build_public_registry(proposal_id, items, generated_at=generated_at)
+
+    def unique_green_public_item(
+        self,
+        proposal_id: str,
+        proof_type: str,
+        *,
+        temporal_scope: str | None = None,
+        artifact_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        document = self.public_document(proposal_id, known=True)
+        matches = [
+            item
+            for item in document["items"]
+            if item.get("proof_type") == proof_type
+            and (
+                temporal_scope is None
+                or item.get("temporal_scope") == temporal_scope
+            )
+            and (
+                artifact_path is None
+                or item.get("artifact_path") == artifact_path
+            )
+            and proof_item_is_green(item)
+        ]
+        if len(matches) != 1:
+            return None
+        return copy.deepcopy(matches[0])
 
     def by_action_id(self, value: str) -> dict[str, Any]:
         if not _is_hex32(value):

@@ -174,6 +174,34 @@ def test_reg_02_duplicate_or_missing_required_checks_fail_closed() -> None:
     assert proof_item_is_green(missing) is False
     assert normalize_proof_item(missing)["verification_status"] == "invalid"
     assert proof_item_is_green(failed) is False
+    assert normalize_proof_item(failed)["verification_status"] == "invalid"
+
+
+def test_reg_02_check_name_length_matches_packaged_verifier_ceiling() -> None:
+    accepted = _snapshot_item()
+    accepted["checks"].append(
+        {
+            "name": "a" * 96,
+            "required": False,
+            "passed": True,
+            "source": "artifacts/live/example.json",
+            "observed_at": NOW,
+        }
+    )
+    rejected = copy.deepcopy(accepted)
+    rejected["checks"][-1]["name"] = "a" * 97
+
+    assert normalize_proof_item(accepted)["verification_status"] == "verified"
+    assert normalize_proof_item(rejected)["verification_status"] == "invalid"
+
+
+def test_reg_02_duplicate_proof_ids_make_public_registry_unavailable() -> None:
+    one = _snapshot_item()
+    two = copy.deepcopy(one)
+    two["artifact_sha256"] = OTHER_HEX32
+
+    with pytest.raises(ValueError, match="duplicate proof_id"):
+        build_public_registry("DAO-PROP-TEST", [one, two], generated_at=NOW)
 
 
 def test_reg_03_historical_proof_retains_narrow_non_retroactive_semantics() -> None:
@@ -614,3 +642,23 @@ def test_gateway_registry_unknown_proposal_and_noncanonical_hash_are_not_found(
     assert unknown.json() == {"error": "proposal_not_found"}
     assert bad_hash.status_code == 404
     assert bad_hash.json() == {"error": "action_not_found"}
+
+
+def test_gateway_internal_registry_ignores_direct_value_service_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal = _internal_record()
+    registry_root = tmp_path / "registry"
+    _write_registry(registry_root, [], [internal])
+    monkeypatch.setenv("CONCORDIA_PROOF_REGISTRY_DIR", str(registry_root))
+    monkeypatch.setenv("X402_GATEWAY_TOKEN", "direct-env-secret")
+    monkeypatch.delenv("X402_GATEWAY_TOKEN_FILE", raising=False)
+
+    with TestClient(create_app(db_path=":memory:")) as client:
+        response = client.get(
+            f"/internal/proof-registry/v1/actions/{internal['action_id']}",
+            headers={"X-Concordia-Service-Token": "direct-env-secret"},
+        )
+
+    assert response.status_code == 403

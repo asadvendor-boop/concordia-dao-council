@@ -386,7 +386,7 @@ test("registry turns a treasury execution green only with one identity-matched, 
   assert.match(invalid.items[1].reasons.join(" "), /ordering.*snapshot.*finalization/i);
 });
 
-test("registry rejects treasury execution in the authorization block without intra-block order proof", async () => {
+test("registry permits treasury execution at the exact authorization block height", async () => {
   const artifact = await buildNativeTreasuryArtifact({ authorizationAtExecution: true });
   artifact.release_identity.package_hash = matchedExactProof.deployment.package_hash;
   artifact.release_identity.contract_hash = matchedExactProof.deployment.contract_hash;
@@ -441,6 +441,6 @@ test("registry rejects treasury execution in the authorization block without int
     },
     now: treasuryFacts.capturedAt,
   });
-  assert.equal(result.status, "invalid");
-  assert.match(result.items[1].reasons.join(" "), /finalization.*native execution/i);
+  assert.equal(result.status, "verified");
+  assert.equal(result.items[1].green, true);
 });

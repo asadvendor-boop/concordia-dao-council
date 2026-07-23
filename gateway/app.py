@@ -82,7 +82,7 @@ from shared.proof_registry import (
 )
 from gateway.auth import validate_agent_identity_configuration
 from shared.approval import compute_action_hash
-from shared.runtime_secrets import read_secret
+from shared.runtime_secrets import read_secret, read_secret_file_only
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
 from shared.x402_payments import (
     build_payment_request,
@@ -553,7 +553,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return JSONResponse(artifact, headers=no_store)
 
     def _proof_registry_service_authorized(request: Request) -> bool:
-        expected = read_secret("X402_GATEWAY_TOKEN")
+        expected = read_secret_file_only("X402_GATEWAY_TOKEN")
         supplied = request.headers.get("X-Concordia-Service-Token", "")
         return bool(expected and supplied) and hmac.compare_digest(expected, supplied)
 
