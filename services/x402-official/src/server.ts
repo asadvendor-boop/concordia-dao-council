@@ -10,7 +10,10 @@
  * from a finalized, integrity-verified fulfillment row with the
  * PAYMENT-RESPONSE header; every non-release outcome is mapped to a non-2xx
  * status (402/409/429/503/500) and paid attempts draw from the same
- * settlement throttle as POST /settle.
+ * settlement throttle as POST /settle. Throttle identity is the trusted
+ * Caddy-set X-Concordia-Client-IP header (socket-peer fallback for direct
+ * internal/test access) — see trustedClientIdentity for the WP5 merge-blocker
+ * rationale — and the throttle key map is strictly bounded with eviction.
  *
  * Logging is sanitized by construction: one structured line per request with
  * method, route, status, and machine code only. No headers, bodies, tokens,
@@ -18,6 +21,7 @@
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 
 import { ServiceRefusal } from "./errors.js";
 import { validateVerifySettleRequest } from "./validation.js";
@@ -47,28 +51,123 @@ export interface ThrottleOptions {
 /** Frozen default throttle for the public /verify and /settle endpoints. */
 export const DEFAULT_THROTTLE: ThrottleOptions = { limit: 120, windowMs: 60_000 };
 
-/**
- * Minimal fixed-window per-client throttle for the public settlement surface.
- * Keyed by remote address + route; expired windows are pruned lazily so the map
- * cannot grow without bound.
- */
-class FixedWindowThrottle {
-  private readonly hits = new Map<string, { count: number; resetAt: number }>();
+/** Hard cap on distinct throttle keys tracked in memory (WP5 merge blocker). */
+export const DEFAULT_MAX_TRACKED_KEYS = 10_000;
 
-  constructor(private readonly options: ThrottleOptions) {}
+/**
+ * Trusted client-identity header (G1 §12 — the same convention the SafePay
+ * provider uses): Caddy STRIPS any caller-supplied `X-Concordia-Client-IP` on
+ * the x402 vhost and overwrites it with the real remote peer. Behind Caddy the
+ * socket peer is always the Caddy container, so this header — never the socket
+ * address — is the client identity. The service accepts it ONLY because it is
+ * never host-exposed: it sits behind Caddy on the internal network, and direct
+ * access is internal/test-only.
+ */
+export const CLIENT_IP_HEADER = "x-concordia-client-ip";
+
+/** Longest well-formed textual IP token (IPv4-mapped IPv6 with full IPv4 tail). */
+const MAX_IP_TOKEN_LENGTH = 45;
+
+/** Parse a single plausible textual IP token; undefined for anything else. */
+function normalizeIpToken(value: string): string | undefined {
+  if (value.length === 0 || value.length > MAX_IP_TOKEN_LENGTH) return undefined;
+  if (isIP(value) === 0) return undefined;
+  const lower = value.toLowerCase();
+  // Collapse IPv4-mapped IPv6 so header-supplied and socket-observed forms of
+  // the same peer always share one identity (G1 §12 convention).
+  if (lower.startsWith("::ffff:") && isIP(lower.slice(7)) === 4) {
+    return lower.slice(7);
+  }
+  return lower;
+}
+
+/**
+ * Resolve the throttle identity for a request (reviewer finding, WP5 merge
+ * blocker): keying by `req.socket.remoteAddress` behind Caddy collapsed every
+ * external client into the single Caddy container address, letting one
+ * attacker exhaust the shared quota (client A at the limit made a DISTINCT
+ * client B receive 429).
+ *
+ * Precedence: a present, well-formed `X-Concordia-Client-IP` IS the client
+ * identity — trustworthy only because Caddy strips and overwrites it with the
+ * real remote peer before it can reach this service (a caller-supplied spoof
+ * never survives the proxy). If the header is absent (direct internal/test
+ * access), the socket peer is the identity. Defense in depth: the header must
+ * be a single plausible IP token — exactly one value that parses as one
+ * IPv4/IPv6 address (no lists, no ports, no garbage); anything else falls
+ * back to the socket peer instead of being trusted.
+ */
+export function trustedClientIdentity(req: IncomingMessage): string {
+  const rawSocket = req.socket.remoteAddress ?? "unknown";
+  const socketIdentity = normalizeIpToken(rawSocket) ?? rawSocket;
+  const raw = req.headers[CLIENT_IP_HEADER];
+  // A repeated header arrives joined (or as an array) and fails IP parsing.
+  if (typeof raw !== "string") return socketIdentity;
+  return normalizeIpToken(raw.trim()) ?? socketIdentity;
+}
+
+interface WindowEntry {
+  count: number;
+  resetAt: number;
+}
+
+/**
+ * Minimal fixed-window per-client throttle for the public settlement surface,
+ * keyed by trusted client identity + route class. The key map is STRICTLY
+ * BOUNDED: at most `maxTrackedKeys` windows are ever tracked, so an attacker
+ * cycling identities cannot grow it without bound. When the map is full and a
+ * new identity arrives, expired windows are evicted first; only if every
+ * tracked window is still live is the OLDEST live window evicted.
+ *
+ * Trade-off, stated honestly: evicting a live window forgets that key's spent
+ * budget, so a key that was at its limit could obtain a fresh window early.
+ * That is reachable only when more than `maxTrackedKeys` distinct identities
+ * appear inside one window — where the alternative (an unbounded map) is
+ * memory exhaustion, a strictly worse failure. Expired-first eviction plus
+ * oldest-window-first ordering evicts the window closest to expiring anyway,
+ * so the extra budget granted is minimal and recently-limited keys with
+ * fresher windows are preserved whenever possible.
+ */
+export class FixedWindowThrottle {
+  /** Insertion order == window-start order: entries are (re)inserted only at window start. */
+  private readonly hits = new Map<string, WindowEntry>();
+
+  constructor(
+    private readonly options: ThrottleOptions,
+    private readonly maxTrackedKeys: number = DEFAULT_MAX_TRACKED_KEYS,
+  ) {}
 
   allow(key: string, now: number): boolean {
-    if (this.hits.size > 8192) {
-      for (const [k, v] of this.hits) if (now >= v.resetAt) this.hits.delete(k);
-    }
     const entry = this.hits.get(key);
-    if (entry === undefined || now >= entry.resetAt) {
-      this.hits.set(key, { count: 1, resetAt: now + this.options.windowMs });
+    if (entry !== undefined && now < entry.resetAt) {
+      if (entry.count >= this.options.limit) return false;
+      entry.count += 1;
       return true;
     }
-    if (entry.count >= this.options.limit) return false;
-    entry.count += 1;
+    // Starting (or restarting) a window. Delete-before-insert keeps map
+    // insertion order equal to window-start order, so "first" is oldest.
+    if (entry !== undefined) {
+      this.hits.delete(key);
+    } else if (this.hits.size >= this.maxTrackedKeys) {
+      this.evictForSpace(now);
+    }
+    this.hits.set(key, { count: 1, resetAt: now + this.options.windowMs });
     return true;
+  }
+
+  /** Make room for one new key: expired windows first, then the oldest live window. */
+  private evictForSpace(now: number): void {
+    for (const [key, entry] of this.hits) {
+      if (now >= entry.resetAt) this.hits.delete(key);
+    }
+    if (this.hits.size < this.maxTrackedKeys) return;
+    const oldest = this.hits.keys().next();
+    if (!oldest.done) this.hits.delete(oldest.value);
+  }
+
+  /** Test-only visibility: number of tracked windows (bounded-map proof). */
+  get trackedKeyCount(): number {
+    return this.hits.size;
   }
 }
 
@@ -168,16 +267,19 @@ function resourceRefusal(error: unknown): { status: number; code: string } {
 
 export function createService(
   deps: PipelineDeps,
-  options: { throttle?: ThrottleOptions } = {},
+  options: { throttle?: ThrottleOptions | FixedWindowThrottle } = {},
 ): Server {
   const { config } = deps;
-  const throttle = new FixedWindowThrottle(options.throttle ?? DEFAULT_THROTTLE);
+  const throttle =
+    options.throttle instanceof FixedWindowThrottle
+      ? options.throttle
+      : new FixedWindowThrottle(options.throttle ?? DEFAULT_THROTTLE);
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
-    const clientKey = req.socket.remoteAddress ?? "unknown";
+    const clientKey = trustedClientIdentity(req);
     let route = path;
     let status = 404;
     let code = "";
