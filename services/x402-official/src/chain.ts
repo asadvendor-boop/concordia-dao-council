@@ -16,9 +16,10 @@
  * exact transaction identity. A `finalized:false` readback is PENDING, not a
  * terminal failure.
  *
- * The default production transport is fail-closed: with no chain observer
- * wired, every drift guard fails and no credentialed facilitator call can
- * happen. The live RPC transport is Codex-owned wiring for the canary.
+ * `FailClosedChainTransport` remains the explicit offline/test fallback. The
+ * production entrypoint wires `CasperRpcChainTransport`, whose observations
+ * remain fail-closed on any unavailable, malformed, ambiguous, or drifting
+ * state.
  */
 
 import {

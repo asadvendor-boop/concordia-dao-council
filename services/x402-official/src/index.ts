@@ -2,17 +2,17 @@
  * Production entrypoint.
  *
  * Listens on 0.0.0.0:${X402_OFFICIAL_PORT} (frozen 8787). The chain
- * transport defaults to fail-closed: until Codex wires a live Casper RPC
- * observer for the canary, every drift guard refuses and no credentialed
- * facilitator call can be made. This is the §11 blocked_fail_closed start
- * state, enforced structurally.
+ * transport observes the pinned public Casper Testnet RPC directly. CSPR.cloud
+ * is used only as a bounded candidate index for lost-response recovery; every
+ * candidate is independently verified through Casper RPC before adoption.
+ * Any unavailable, malformed, ambiguous, or drifting observation fails closed.
  */
 
 import { loadConfig, loadSecrets } from "./config.js";
 import { FulfillmentLedger } from "./ledger.js";
 import { HttpFacilitatorTransport, createLocalVerifier } from "./facilitator.js";
 import { HttpRegistryTransport } from "./registry.js";
-import { FailClosedChainTransport } from "./chain.js";
+import { CasperRpcChainTransport } from "./rpc-chain.js";
 import {
   reconcileLedgerOnStartup,
   probePackageHealthOnStartup,
@@ -39,7 +39,9 @@ async function main(): Promise<void> {
       config.gatewayInternalUrl,
       secrets.gatewayToken,
     ),
-    chain: new FailClosedChainTransport(),
+    chain: new CasperRpcChainTransport({
+      csprCloudToken: secrets.csprCloudToken,
+    }),
     localVerifier: createLocalVerifier(config.network, chainName),
   };
   const reconciliation = await reconcileLedgerOnStartup(deps);
