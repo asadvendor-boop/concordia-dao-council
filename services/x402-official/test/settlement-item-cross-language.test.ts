@@ -9,9 +9,10 @@
  *      validator, and `proof_item_is_green`, spawned from the repo root with
  *      the registry package on sys.path. Zero errors, verification_status
  *      stays "verified", and the item is green.
- *  (b) Dashboard — the same item is passed to the dashboard's provenance
- *      module (dashboard/app/_components/provenance.js, imported AS-IS by
- *      relative path): `registryItemErrors(item)` must be empty and
+ *  (b) Dashboard — the same item is passed to the dashboard's pure validation
+ *      module (dashboard/app/_components/provenance-pure.js, imported AS-IS by
+ *      relative path; the renderer provenance.js re-exports it):
+ *      `registryItemErrors(item)` must be empty and
  *      `itemGreenVerified(item)` must accept it.
  *
  * Plus drift pins: the builder's 22-name required-check list and 29-name
@@ -52,15 +53,20 @@ import {
 } from "../src/settlement-item.js";
 import { validChecks, validInput } from "./settlement-item-fixture.js";
 
-// The dashboard provenance module, imported AS-IS (another lane owns it; it is
-// read, never modified). JSX inside is handled by vitest.config.ts.
+// The dashboard's pure validation module, imported AS-IS (another lane owns
+// it; it is read, never modified). provenance-pure.js is JSX-free and
+// dependency-free by contract, so this suite runs in a checkout where ONLY
+// services/x402-official has installed dependencies — no dashboard
+// node_modules, no NODE_PATH, no esbuild transform. The dashboard renderer
+// (provenance.js) re-exports these same symbols, so this pins the exact logic
+// the dashboard executes.
 import {
   itemGreenVerified,
   registryItemErrors,
   PUBLIC_ITEM_REQUIRED_FIELDS as DASHBOARD_PUBLIC_ITEM_REQUIRED_FIELDS,
   REQUIRED_CHECKS_BY_PROOF_TYPE as DASHBOARD_REQUIRED_CHECKS_BY_PROOF_TYPE,
   // eslint-disable-next-line import/no-relative-packages
-} from "../../../dashboard/app/_components/provenance.js";
+} from "../../../dashboard/app/_components/provenance-pure.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");

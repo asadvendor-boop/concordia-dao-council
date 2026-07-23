@@ -12,8 +12,9 @@
  *       (one post-freeze rename is normative in the registry:
  *        facilitator_verify_returned_isValid_true ->
  *        facilitator_verify_returned_is_valid_true, snake-case grammar)
- *   - dashboard/app/_components/provenance.js
- *       REQUIRED_CHECKS_BY_PROOF_TYPE / PUBLIC_ITEM_REQUIRED_FIELDS
+ *   - dashboard/app/_components/provenance-pure.js (re-exported by
+ *       provenance.js) REQUIRED_CHECKS_BY_PROOF_TYPE /
+ *       PUBLIC_ITEM_REQUIRED_FIELDS
  *
  * Cross-language drift between these constants and the two consumers is pinned
  * by test/settlement-item-cross-language.test.ts, which pipes ONE real builder
