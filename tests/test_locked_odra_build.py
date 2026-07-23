@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from scripts import release_gate_runner
 from scripts.run_locked_odra_build import (
     LockedOdraBuildError,
+    _safe_tool_path as locked_odra_safe_tool_path,
     verify_locked_odra_build,
 )
 
@@ -27,6 +29,10 @@ EXPECTED_RUSTC = (
     "release: 1.86.0-nightly\n"
     "LLVM version: 19.1.7"
 )
+
+
+def test_locked_wrapper_uses_the_release_gate_tool_resolution_policy() -> None:
+    assert locked_odra_safe_tool_path() == release_gate_runner._safe_tool_path()
 
 
 def _git(repository: Path, *args: str) -> str:
@@ -105,7 +111,15 @@ def _repository(tmp_path: Path) -> tuple[Path, bytes, bytes, bytes]:
             "homepage": None,
             "repository": None,
             "toolchain": ("rustc 1.86.0-nightly (854f22563 2025-01-31)"),
-            "types": [],
+            "types": [
+                {
+                    "struct": {
+                        "description": None,
+                        "members": [],
+                        "name": "Changed",
+                    }
+                }
+            ],
         }
     )
     _write(
@@ -342,6 +356,8 @@ class _BuildExecutor:
                 stderr = b"progress\rerror: contract generation failed\n"
             elif self.mode == "tool_error":
                 stderr = b"cargo-odra: error: contract generation failed\n"
+            elif self.mode == "tool_error_no_colon":
+                stderr = b"cargo-odra error: contract generation failed\n"
             elif self.mode == "routine_error_crate_names":
                 stderr = (
                     b"   Compiling proc-macro-error-attr v1.0.4\n"
@@ -372,6 +388,9 @@ class _BuildExecutor:
             "schema_title_fatal": b"Fatal: schema generation failed\n",
             "schema_cr_error": b"progress\rerror: schema generation failed\n",
             "schema_tool_error": b"cargo-odra: error: schema generation failed\n",
+            "schema_tool_error_no_colon": (
+                b"cargo-odra error: schema generation failed\n"
+            ),
         }
         stdout = schema_diagnostics.get(self.mode, b"schema generated\n")
         return subprocess.CompletedProcess(argv, 0, stdout, b"")
@@ -469,11 +488,13 @@ def test_locked_odra_git_ignores_repository_fsmonitor_configuration(
         ("title_fatal", "Fatal"),
         ("cr_error", "error"),
         ("tool_error", "error"),
+        ("tool_error_no_colon", "error"),
         ("schema_error", "ERROR"),
         ("schema_title_error", "Error"),
         ("schema_title_fatal", "Fatal"),
         ("schema_cr_error", "error"),
         ("schema_tool_error", "error"),
+        ("schema_tool_error_no_colon", "error"),
         ("wrong_hash", "Wasm|digest|hash"),
         ("lock_mutation", "Cargo.lock"),
         ("schema_lock_mutation", "Cargo.lock"),
@@ -598,7 +619,19 @@ def test_locked_odra_build_rejects_manifest_claim_drift(
 
 @pytest.mark.parametrize(
     "mutation",
-    ["unknown_key", "wrong_contract", "invalid_mutability"],
+    [
+        "unknown_key",
+        "wrong_contract",
+        "invalid_mutability",
+        "float_schema_version",
+        "call_arguments_not_list",
+        "entry_arguments_not_list",
+        "entry_missing_return_type",
+        "entry_access_not_text",
+        "event_missing_type",
+        "error_discriminant_not_integer",
+        "invalid_type_descriptor",
+    ],
 )
 def test_locked_odra_build_rejects_semantically_invalid_generated_schema(
     tmp_path: Path,
@@ -611,8 +644,24 @@ def test_locked_odra_build_rejects_semantically_invalid_generated_schema(
         document["unreviewed_schema_claim"] = True
     elif mutation == "wrong_contract":
         document["contract_name"] = "OtherContract"
-    else:
+    elif mutation == "invalid_mutability":
         document["entry_points"][0]["is_mutable"] = "true"
+    elif mutation == "float_schema_version":
+        document["casper_contract_schema_version"] = 1.0
+    elif mutation == "call_arguments_not_list":
+        document["call"]["arguments"] = "not-a-list"
+    elif mutation == "entry_arguments_not_list":
+        document["entry_points"][0]["arguments"] = "not-a-list"
+    elif mutation == "entry_missing_return_type":
+        del document["entry_points"][0]["return_ty"]
+    elif mutation == "entry_access_not_text":
+        document["entry_points"][0]["access"] = {"public": True}
+    elif mutation == "event_missing_type":
+        del document["events"][0]["ty"]
+    elif mutation == "error_discriminant_not_integer":
+        document["errors"][0]["discriminant"] = "1"
+    else:
+        document["entry_points"][0]["return_ty"] = {"Unknown": "Unit"}
     mutated_schema = _canonical(document)
     schema_path.write_bytes(mutated_schema)
     manifest_path = repository / f"{CRATE_PATH}/deployment.manifest.json"

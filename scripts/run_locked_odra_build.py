@@ -66,7 +66,7 @@ _CARGO_FATAL = re.compile(
     rb"("
     rb"\b(?:ERROR|FATAL)\b"
     rb"|(?im:(?:^|[\r\n])[ \t]*"
-    rb"(?:(?:cargo(?:-odra)?|rustc)[ \t]*:[ \t]*)?"
+    rb"(?:(?:cargo(?:-odra)?|rustc)(?:[ \t]*:[ \t]*|[ \t]+))?"
     rb"(?:error|fatal)(?:\[[^\]\r\n]{1,32}\])?[ \t]*:)"
     rb"|(?i:\bthread [^\r\n]* panicked)\b"
     rb")"
@@ -149,6 +149,27 @@ _CASPER_SCHEMA_FIELDS = frozenset(
         "types",
     }
 )
+_SCHEMA_CALL_FIELDS = frozenset({"arguments", "description", "wasm_file_name"})
+_SCHEMA_ARGUMENT_FIELDS = frozenset({"description", "name", "optional", "ty"})
+_SCHEMA_ENTRY_POINT_FIELDS = frozenset(
+    {
+        "access",
+        "arguments",
+        "description",
+        "is_contract_context",
+        "is_mutable",
+        "name",
+        "return_ty",
+    }
+)
+_SCHEMA_EVENT_FIELDS = frozenset({"name", "ty"})
+_SCHEMA_ERROR_FIELDS = frozenset({"description", "discriminant", "name"})
+_SCHEMA_STRUCT_WRAPPER_FIELDS = frozenset({"struct"})
+_SCHEMA_STRUCT_FIELDS = frozenset({"description", "members", "name"})
+_SCHEMA_STRUCT_MEMBER_FIELDS = frozenset({"description", "name", "ty"})
+_SCHEMA_PRIMITIVE_TYPES = frozenset(
+    {"Bool", "String", "U8", "U32", "U64", "U256", "U512", "Unit"}
+)
 _EXPECTED_MANIFEST_TOOLCHAIN = {
     "cargo_odra": "0.1.7",
     "odra": "2.8.2",
@@ -170,24 +191,38 @@ _EXPECTED_OBSERVED_TOOLCHAIN = {
 
 
 class LockedOdraBuildError(RuntimeError):
-    """The locked, isolated Odra build could not be proven."""
+    """The locked tracked-copy Odra build could not be proven."""
 
 
 Executor = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
 def _safe_tool_path() -> str:
-    locations = [
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-    ]
-    cargo_bin = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cargo/bin"
-    if cargo_bin.is_dir():
-        locations.append(str(cargo_bin))
+    locations: list[str] = []
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    for relative in (".cargo/bin", ".local/bin"):
+        user_bin = account_home / relative
+        try:
+            metadata = user_bin.lstat()
+        except OSError:
+            continue
+        if (
+            stat.S_ISDIR(metadata.st_mode)
+            and not stat.S_ISLNK(metadata.st_mode)
+            and metadata.st_uid == os.getuid()
+            and metadata.st_mode & 0o022 == 0
+        ):
+            locations.append(str(user_bin))
+    locations.extend(
+        [
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+        ]
+    )
     return os.pathsep.join(locations)
 
 
@@ -466,6 +501,90 @@ def _named_schema_rows(value: object, label: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _schema_description(value: object, label: str) -> None:
+    if value is not None and type(value) is not str:
+        raise LockedOdraBuildError(f"{label} must be text or null")
+
+
+def _schema_type(value: object, label: str) -> None:
+    if type(value) is str:
+        if value not in _SCHEMA_PRIMITIVE_TYPES:
+            raise LockedOdraBuildError(f"{label} has an unknown primitive type")
+        return
+    if type(value) is not dict or len(value) != 1:
+        raise LockedOdraBuildError(f"{label} has an invalid type descriptor")
+    if set(value) == {"ByteArray"}:
+        if type(value["ByteArray"]) is not int or value["ByteArray"] != 32:
+            raise LockedOdraBuildError(f"{label} ByteArray width must be 32")
+        return
+    if set(value) == {"Option"}:
+        _schema_type(value["Option"], f"{label}.Option")
+        return
+    raise LockedOdraBuildError(f"{label} has an unknown composite type")
+
+
+def _schema_arguments(value: object, label: str) -> list[dict[str, Any]]:
+    rows = _named_schema_rows(value, label)
+    for index, row in enumerate(rows):
+        row_label = f"generated v3 schema {label}[{index}]"
+        _exact_fields(row, _SCHEMA_ARGUMENT_FIELDS, row_label)
+        _schema_description(row.get("description"), f"{row_label}.description")
+        if type(row.get("optional")) is not bool:
+            raise LockedOdraBuildError(f"{row_label}.optional must be boolean")
+        _schema_type(row.get("ty"), f"{row_label}.ty")
+    return rows
+
+
+def _schema_struct_names(value: object) -> set[str]:
+    if type(value) is not list:
+        raise LockedOdraBuildError("generated v3 schema types must be a list")
+    names: set[str] = set()
+    for index, item in enumerate(value):
+        wrapper = _mapping(item, f"generated v3 schema types[{index}]")
+        _exact_fields(
+            wrapper,
+            _SCHEMA_STRUCT_WRAPPER_FIELDS,
+            f"generated v3 schema types[{index}]",
+        )
+        struct_row = _mapping(
+            wrapper.get("struct"),
+            f"generated v3 schema types[{index}].struct",
+        )
+        _exact_fields(
+            struct_row,
+            _SCHEMA_STRUCT_FIELDS,
+            f"generated v3 schema types[{index}].struct",
+        )
+        name = _text(
+            struct_row.get("name"),
+            f"generated v3 schema types[{index}].struct.name",
+        )
+        if name in names:
+            raise LockedOdraBuildError(
+                "generated v3 schema struct names must be unique"
+            )
+        names.add(name)
+        _schema_description(
+            struct_row.get("description"),
+            f"generated v3 schema types[{index}].struct.description",
+        )
+        members = _named_schema_rows(
+            struct_row.get("members"),
+            f"types[{index}].struct.members",
+        )
+        for member_index, member in enumerate(members):
+            member_label = (
+                f"generated v3 schema types[{index}].struct.members[{member_index}]"
+            )
+            _exact_fields(member, _SCHEMA_STRUCT_MEMBER_FIELDS, member_label)
+            _schema_description(
+                member.get("description"),
+                f"{member_label}.description",
+            )
+            _schema_type(member.get("ty"), f"{member_label}.ty")
+    return names
+
+
 def _verify_generated_schema(
     raw: bytes,
     *,
@@ -475,7 +594,8 @@ def _verify_generated_schema(
     schema = _strict_json(raw, "generated v3 Casper schema")
     _exact_fields(schema, _CASPER_SCHEMA_FIELDS, "generated v3 Casper schema")
     if (
-        schema.get("casper_contract_schema_version") != 1
+        type(schema.get("casper_contract_schema_version")) is not int
+        or schema.get("casper_contract_schema_version") != 1
         or schema.get("contract_name") != "GovernanceReceiptV3"
         or schema.get("toolchain") != f"rustc {manifest_toolchain.get('rustc')}"
     ):
@@ -483,7 +603,8 @@ def _verify_generated_schema(
             "generated v3 Casper schema contract or toolchain differs"
         )
     _text(schema.get("contract_version"), "generated v3 contract version")
-    if type(schema.get("authors")) is not list or type(schema.get("types")) is not list:
+    authors = schema.get("authors")
+    if type(authors) is not list or any(type(author) is not str for author in authors):
         raise LockedOdraBuildError("generated v3 Casper schema lists are malformed")
     if (
         schema.get("repository") is not None
@@ -493,19 +614,63 @@ def _verify_generated_schema(
     if schema.get("homepage") is not None and type(schema.get("homepage")) is not str:
         raise LockedOdraBuildError("generated v3 schema homepage is malformed")
     call = _mapping(schema.get("call"), "generated v3 call schema")
+    _exact_fields(call, _SCHEMA_CALL_FIELDS, "generated v3 call schema")
     if call.get("wasm_file_name") != Path(WASM_PATH).name:
         raise LockedOdraBuildError("generated v3 schema Wasm filename differs")
+    _schema_description(
+        call.get("description"),
+        "generated v3 call schema description",
+    )
+    _schema_arguments(call.get("arguments"), "call arguments")
     entry_points = _named_schema_rows(schema.get("entry_points"), "entry points")
     events = _named_schema_rows(schema.get("events"), "events")
     errors = _named_schema_rows(schema.get("errors"), "errors")
+    struct_names = _schema_struct_names(schema.get("types"))
     mutable = 0
     for index, row in enumerate(entry_points):
+        row_label = f"generated v3 schema entry points[{index}]"
+        _exact_fields(row, _SCHEMA_ENTRY_POINT_FIELDS, row_label)
         is_mutable = row.get("is_mutable")
         if type(is_mutable) is not bool:
             raise LockedOdraBuildError(
                 f"generated v3 schema entry point {index} mutable flag is invalid"
             )
+        if type(row.get("is_contract_context")) is not bool:
+            raise LockedOdraBuildError(
+                f"generated v3 schema entry point {index} context flag is invalid"
+            )
+        if row.get("access") != "public":
+            raise LockedOdraBuildError(
+                f"generated v3 schema entry point {index} access is invalid"
+            )
+        _schema_description(row.get("description"), f"{row_label}.description")
+        _schema_arguments(row.get("arguments"), f"entry points[{index}].arguments")
+        _schema_type(row.get("return_ty"), f"{row_label}.return_ty")
         mutable += int(is_mutable)
+    event_types: set[str] = set()
+    for index, row in enumerate(events):
+        row_label = f"generated v3 schema events[{index}]"
+        _exact_fields(row, _SCHEMA_EVENT_FIELDS, row_label)
+        event_types.add(_text(row.get("ty"), f"{row_label}.ty"))
+    if not event_types <= struct_names:
+        raise LockedOdraBuildError(
+            "generated v3 schema event type has no matching struct"
+        )
+    discriminants: set[int] = set()
+    for index, row in enumerate(errors):
+        row_label = f"generated v3 schema errors[{index}]"
+        _exact_fields(row, _SCHEMA_ERROR_FIELDS, row_label)
+        _schema_description(row.get("description"), f"{row_label}.description")
+        discriminant = row.get("discriminant")
+        if (
+            type(discriminant) is not int
+            or not 0 <= discriminant <= 65_535
+            or discriminant in discriminants
+        ):
+            raise LockedOdraBuildError(
+                "generated v3 schema error discriminant is invalid"
+            )
+        discriminants.add(discriminant)
     observed = {
         "entry_point_count": len(entry_points),
         "mutable_entry_point_count": mutable,
@@ -745,6 +910,8 @@ def _run_cargo(
 ) -> subprocess.CompletedProcess[bytes]:
     env = dict(environment)
     if offline:
+        # This constrains Cargo dependency resolution after the one locked
+        # fetch. It is not an operating-system network sandbox.
         env["CARGO_NET_OFFLINE"] = "true"
     try:
         result = executor(argv, cwd=cwd, env=env, timeout=timeout)
