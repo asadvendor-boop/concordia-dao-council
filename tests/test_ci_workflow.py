@@ -33,15 +33,13 @@ def test_ci_pins_release_runtimes_and_builds_verifier_before_pytest() -> None:
     assert source.index("npm run build") < source.index("python -m pytest -q")
 
 
-def test_ci_stages_runner_tools_into_the_gate_owned_safe_path() -> None:
+def test_ci_does_not_shadow_pinned_runtime_entrypoints_with_detached_copies() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'install -d -m 0755 "$HOME/.local/bin"' in source
-    assert '"${{ steps.setup-uv.outputs.uv-path }}"' in source
-    assert '"$HOME/.local/bin/uv"' in source
-    assert '"$HOME/.local/bin/node"' in source
-    assert '"$HOME/.local/bin/npm"' in source
-    assert "readlink -f" in source
+    assert '"$HOME/.local/bin/uv"' not in source
+    assert '"$HOME/.local/bin/node"' not in source
+    assert '"$HOME/.local/bin/npm"' not in source
+    assert "readlink -f" not in source
     assert re.search(
         r"uv run --frozen --isolated --python python3\.12\s+"
         r"python -m pytest -q",

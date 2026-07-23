@@ -48,18 +48,6 @@ jobs:
           npm ci
           npm run build
 
-      - name: Stage fixed gate executables in the owned safe path
-        shell: bash
-        run: |
-          set -euo pipefail
-          install -d -m 0755 "$HOME/.local/bin"
-          install -m 0755 \
-            "${{ steps.setup-uv.outputs.uv-path }}" \
-            "$HOME/.local/bin/uv"
-          install -m 0755 "$(command -v node)" "$HOME/.local/bin/node"
-          npm_entrypoint="$(readlink -f "$(command -v npm)")"
-          install -m 0755 "$npm_entrypoint" "$HOME/.local/bin/npm"
-
       - name: Run tests
         run: >-
           uv run --frozen --isolated --python python3.12
