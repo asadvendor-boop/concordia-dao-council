@@ -134,8 +134,14 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
     await expect(collapseButton).toBeVisible();
     await expect(collapseButton).toBeEnabled();
-    await collapseButton.click();
-    await expect(page.locator(".app-shell.sidebar-collapsed")).toBeVisible();
+    // Hydration race (same class as the tablet navigation fix): the server
+    // renders the button before React attaches its click handler, so a click
+    // straight after first paint can be silently lost. Bounded retry of the
+    // click until the collapsed state appears — no sleeps, assertions intact.
+    await expect(async () => {
+      await collapseButton.click();
+      await expect(page.locator(".app-shell.sidebar-collapsed")).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
     const sidebarWidth = await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width));
     expect(sidebarWidth).toBe(88);

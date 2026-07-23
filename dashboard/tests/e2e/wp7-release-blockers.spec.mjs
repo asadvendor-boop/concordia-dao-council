@@ -235,7 +235,12 @@ test.describe("agents page truth labels use the same strict predicates", () => {
   test("a rejected approval renders Authorization rejected, never Plan authorized", async ({ page }) => {
     await openAgents(page, [proposalCard(), planCard(), approvalCard({ decision: "REJECT", proposal_id: CANONICAL, plan_hash: "plan-hash-abc", action_hash: "action-hash-def" })]);
     const directory = page.locator(".agent-directory-grid");
-    await expect(directory.getByText("Authorization rejected")).toBeVisible();
+    // First evidence-derived render: the proposals -> selection -> evidence
+    // chain is entirely client-side after hydration, and under cold-start or
+    // parallel-worker load its final render can exceed the 6s expect default
+    // (reproduced 1-in-~200 under --repeat-each; the text was present in the
+    // teardown snapshot). Bounded longer wait, assertion unchanged.
+    await expect(directory.getByText("Authorization rejected")).toBeVisible({ timeout: 15_000 });
     await expect(directory.getByText("Plan authorized")).toHaveCount(0);
   });
 
