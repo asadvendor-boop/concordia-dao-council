@@ -56,6 +56,24 @@ def test_provider_sslip_vhost_remains_available_for_tls_repair() -> None:
     assert "reverse_proxy concordia-x402-provider:8000" in config
 
 
+def test_safepay_provider_overwrites_client_identity_and_proxy_attestation() -> None:
+    config = _config()
+
+    start = config.index("{$X402_PROVIDER_HOSTNAME}")
+    end = config.index(
+        "{$CONCORDIA_X402_HOSTNAME:x402.concordiadao.xyz}",
+        start,
+    )
+    block = config[start:end]
+    route = block[block.index("handle /x402/*") :]
+    assert "header_up X-Concordia-Client-IP {remote_host}" in route
+    assert (
+        "header_up X-Concordia-SafePay-Proxy "
+        "{file./run/secrets/safepay_proxy_secret}"
+    ) in route
+    assert "{$SAFEPAY_PROXY_SECRET}" not in route
+
+
 def test_official_x402_host_exposes_only_frozen_method_path_pairs() -> None:
     config = _config()
 

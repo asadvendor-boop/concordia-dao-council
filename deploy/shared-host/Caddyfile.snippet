@@ -114,7 +114,12 @@
 	}
 
 	handle /x402/* {
-		reverse_proxy concordia-x402-provider:8000
+		reverse_proxy concordia-x402-provider:8000 {
+			# The provider trusts these values only from this ingress peer.
+			# Setting them here overwrites every caller-supplied instance.
+			header_up X-Concordia-Client-IP {remote_host}
+			header_up X-Concordia-SafePay-Proxy {file./run/secrets/safepay_proxy_secret}
+		}
 	}
 
 	handle {
