@@ -26,13 +26,16 @@ Node.js 20 or newer is required.
 
 ### Release authentication
 
-The first `0.1.0` release is intentionally a manual, local, interactive public
-publish performed by the package owner with npm 2FA/security-key approval. It
-does not claim npm build provenance, and package metadata does not force the
-`--provenance` flag. After the package exists, configure npm trusted publishing
-for a pinned GitHub Actions workflow; future releases may then publish from
-that reviewed workflow with npm provenance. This repository does not create or
-run an automatic publishing workflow for the first release.
+The first `0.1.0` release is manually authorized but built and published by the
+pinned `.github/workflows/publish-verifier.yml` GitHub-hosted workflow. The
+operator supplies the exact commit and version, the workflow requires that
+commit to be merged to `main`, rebuilds and tests the exact public tarball, then
+uses `npm publish --provenance --access public`. The initial run uses an
+Asad-authorized npm token stored only as the `npm-production` environment
+secret; after the package exists, bind npm trusted publishing to this exact
+workflow and remove the long-lived token. Package metadata intentionally has no
+automatic `publish` script: no checkout, push, pull request, or release event
+can publish by itself.
 
 ## CLI
 

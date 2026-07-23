@@ -1,0 +1,135 @@
+name: Publish verifier to npm
+
+# The first release needs npm provenance, so publication must happen on a
+# GitHub-hosted runner. It is never triggered by a push, pull request, or
+# release event: Asad must authorize the exact commit and version manually.
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character release commit already merged to main
+        required: true
+        type: string
+      version:
+        description: Exact package version expected in packages/verify/package.json
+        required: true
+        default: 0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-verifier-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, publish, and verify exact tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the authorized commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node runtime and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.12.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Bind release inputs to main and package metadata
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          expected_commit="$COMMIT_SHA"
+          expected_version="$PACKAGE_VERSION"
+          [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+          git merge-base --is-ancestor "$expected_commit" origin/main
+          actual_version="$(node -p "require('./packages/verify/package.json').version")"
+          test "$actual_version" = "$expected_version"
+          test "$(node -p "require('./packages/verify/package.json').name")" = '@concordia-dao/verify'
+          test "$(node -p "require('./packages/verify/package.json').repository.url")" = 'git+https://github.com/asadvendor-boop/concordia-dao-council.git'
+          git diff --exit-code
+
+      - name: Install, test, lint, audit, and inspect package
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run lint
+          npm audit --audit-level=high
+          node scripts/check-package-files.mjs
+
+      - name: Build the exact publication tarball
+        id: pack
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run clean
+          npm run build
+          npm pack --json > npm-pack.json
+          tarball="$(node -e "const fs=require('node:fs'); const x=JSON.parse(fs.readFileSync('npm-pack.json','utf8')); if(x.length!==1) process.exit(1); process.stdout.write(x[0].filename)")"
+          test -f "$tarball"
+          tar --list --file "$tarball" | LC_ALL=C sort > npm-tarball-files.txt
+          sha256sum "$tarball" > npm-tarball-sha256.txt
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact tarball with registry provenance
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm publish "$TARBALL" --provenance --access public
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          # Required for the provenance-bearing first publish. After npm trusted
+          # publishing is bound to this exact workflow, this secret can be
+          # removed and OIDC remains the publication authority.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify registry copy, clean install, CLI, and signatures
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          package="@concordia-dao/verify@$PACKAGE_VERSION"
+          registry_json="$(mktemp)"
+          for attempt in $(seq 1 12); do
+            if npm view "$package" name version dist.integrity dist.shasum repository gitHead --json > "$registry_json"; then
+              break
+            fi
+            test "$attempt" -lt 12
+            sleep 5
+          done
+          test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.name)" "$registry_json")" = '@concordia-dao/verify'
+          test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.version)" "$registry_json")" = "$PACKAGE_VERSION"
+          test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.gitHead)" "$registry_json")" = "$COMMIT_SHA"
+
+          consumer="$(mktemp -d)"
+          cd "$consumer"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts "$package"
+          node --input-type=module -e "const m=await import('@concordia-dao/verify'); if(typeof m.verifyRegistry!=='function') process.exit(1)"
+          ./node_modules/.bin/concordia-verify --help >/dev/null
+          npm audit signatures
