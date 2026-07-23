@@ -13,19 +13,54 @@ jobs:
   test:
     name: Python test suite
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Check out complete repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v4
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+
+      - name: Install pinned uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: 0.10.12
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install 3.12.11
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --python 3.12.11
+
+      - name: Build verifier consumed by Python integration tests
+        working-directory: packages/verify
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Stage fixed gate executables in the owned safe path
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "$HOME/.local/bin"
+          install -m 0755 \
+            "${{ steps.setup-uv.outputs.uv-path }}" \
+            "$HOME/.local/bin/uv"
+          install -m 0755 "$(command -v node)" "$HOME/.local/bin/node"
+          npm_entrypoint="$(readlink -f "$(command -v npm)")"
+          install -m 0755 "$npm_entrypoint" "$HOME/.local/bin/npm"
 
       - name: Run tests
-        run: uv run pytest -q
+        run: >-
+          uv run --frozen --isolated --python python3.12
+          python -m pytest -q

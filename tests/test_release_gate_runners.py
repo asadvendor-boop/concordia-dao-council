@@ -54,6 +54,59 @@ EXPECTED_RUNTIME_VERSIONS = {
     "playwright": "Version 1.58.2",
 }
 
+_REAL_EXECUTABLE_POLICY_TESTS = {
+    "test_safe_tool_path_includes_owned_user_local_bin",
+    "test_executable_identity_rejects_same_version_replacement_and_symlink_retarget",
+    "test_executable_chain_binds_uv_python_and_rejects_nested_replacement",
+    "test_executable_chain_redacts_every_account_home_path",
+    "test_normalized_command_log_redacts_account_home_path",
+    "test_executable_chain_recursively_binds_env_node_shebang",
+    "test_executable_chain_binds_cargo_subcommand_compiler_and_locked_wrapper",
+    "test_bound_entrypoint_prevents_swap_execute_restore_attack",
+    "test_uv_architecture_policy_rejects_x86_and_accepts_arm64",
+    "test_native_architecture_detects_rosetta_and_preserves_true_intel",
+    "test_real_executor_spools_and_rejects_oversized_output",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fake_executor_tests_from_host_tool_installation(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Give fake-executor tests a deterministic, non-executed tool identity."""
+
+    original_name = getattr(request.node, "originalname", request.node.name)
+    if original_name in _REAL_EXECUTABLE_POLICY_TESTS:
+        return
+    tool_bin = tmp_path / "fixed-gate-test-tools"
+    tool_bin.mkdir(mode=0o700)
+    for executable in (
+        "cargo",
+        "cargo-odra",
+        "node",
+        "npm",
+        "python3.12",
+        "rustc",
+        "uv",
+    ):
+        target = tool_bin / executable
+        target.write_bytes(b"#!/bin/sh\nexit 0\n")
+        target.chmod(0o700)
+    monkeypatch.setattr(
+        release_gate_runner,
+        "_safe_tool_path",
+        lambda: os.pathsep.join((str(tool_bin), "/usr/bin", "/bin")),
+    )
+    # Architecture enforcement has dedicated tests in this module. These identities
+    # are never executed and intentionally are not native binaries.
+    monkeypatch.setattr(
+        release_gate_runner,
+        "_validate_uv_binary",
+        lambda _raw, *, expected_architecture=None: None,
+    )
+
 
 def _git(repository: Path, *args: str) -> str:
     result = subprocess.run(
