@@ -44,7 +44,6 @@ from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_
 from shared.x402_payments import (
     SAFEPAY_V2_BINDING_CHECK_FIELDS,
     SAFEPAY_V2_MAX_REPORT_DECODED_BYTES,
-    SAFEPAY_V2_NETWORK,
     SAFEPAY_V2_QUOTE_FIELDS,
     SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
     SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
@@ -540,11 +539,14 @@ def create_app(
         except Exception as exc:
             _log_sanitized_failure("redemptions.observer", exc)
             return _v2_error(503, "payment_observer_unavailable", True, "verification_pending")
-        native_transfer_count = observation.pop("native_transfer_count", 1)
-        try:
-            native_transfer_count = int(native_transfer_count)
-        except (TypeError, ValueError):
-            native_transfer_count = 0
+        # The v2 observation contract REQUIRES the raw pre-filter transfer count
+        # as a strict integer. An observer that omits or mistypes it (including
+        # bool True / numeric strings, which int() would silently coerce to a
+        # passing 1) produced no usable observation: fail closed as an observer
+        # outage — retryable, nothing consumed — never assume exactly one.
+        native_transfer_count = observation.pop("native_transfer_count", None)
+        if isinstance(native_transfer_count, bool) or not isinstance(native_transfer_count, int):
+            return _v2_error(503, "payment_observer_unavailable", True, "verification_pending")
 
         execution_status = observation.get("execution_status")
         finality_status = observation.get("finality_status")

@@ -630,13 +630,32 @@ class SafePayLedger:
         Any booleans carried by ``claimed_artifact`` (for example a forged
         ``duplicate_proof_rejected`` or ``proof.valid``) are ignored entirely;
         nothing from the claimed artifact is copied into the summary.
+
+        ``duplicate_proof_rejected`` is TRUE only when ALL of the following hold,
+        computed from rows — never from a bare observation ``kind``:
+
+        1. exactly one canonical consumption exists for this ``quote_id``;
+        2. an append-only observation exists whose ``kind`` is
+           ``cross_binding_rejected`` AND whose actually observed
+           ``http_status`` is exactly ``409`` (the terminal conflict result);
+        3. that observation is on the SAME ``(network, payment_hash)`` as the
+           canonical consumption;
+        4. it evidences a genuinely DIFFERENT binding — a different quote and/or
+           resource than the consumed one (never a same-binding "replay"); and
+        5. it was observed at or after the canonical consumption (chronology):
+           a 409 predating the consumption cannot evidence a duplicate of it.
+
+        HTTP 200, same-binding, unrelated-payment, and pre-consumption
+        observations therefore never contribute.
         """
         del claimed_artifact  # never trusted, never read
         conn = self._connect()
         try:
-            consumption = conn.execute(
-                "SELECT COUNT(*) FROM payment_consumptions WHERE quote_id = ?", (quote_id,)
-            ).fetchone()[0]
+            consumptions = conn.execute(
+                "SELECT network, payment_hash, resource_id, consumed_at "
+                "FROM payment_consumptions WHERE quote_id = ?",
+                (quote_id,),
+            ).fetchall()
             kinds = {
                 row["kind"]
                 for row in conn.execute(
@@ -644,20 +663,32 @@ class SafePayLedger:
                     (quote_id,),
                 )
             }
-            cross_kinds = {
-                row["kind"]
-                for row in conn.execute(
-                    "SELECT DISTINCT o.kind FROM safepay_redemption_observations o "
-                    "JOIN payment_consumptions c ON c.network = o.network AND c.payment_hash = o.payment_hash "
-                    "WHERE c.quote_id = ?",
-                    (quote_id,),
+            cross_binding_rejected_observed = False
+            if len(consumptions) == 1:
+                consumption = consumptions[0]
+                cross_binding_rejected_observed = (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM safepay_redemption_observations o "
+                        "WHERE o.kind = 'cross_binding_rejected' "
+                        "AND o.http_status = 409 "
+                        "AND o.network = ? "
+                        "AND o.payment_hash = ? "
+                        "AND (o.quote_id != ? OR o.resource_id != ?) "
+                        "AND o.observed_at >= ?",
+                        (
+                            consumption["network"],
+                            consumption["payment_hash"],
+                            quote_id,
+                            consumption["resource_id"],
+                            int(consumption["consumed_at"]),
+                        ),
+                    ).fetchone()[0]
+                    >= 1
                 )
-            }
         finally:
             conn.close()
-        consumption_recorded = int(consumption) == 1
+        consumption_recorded = len(consumptions) == 1
         idempotent_replay_observed = "idempotent_replay" in kinds
-        cross_binding_rejected_observed = "cross_binding_rejected" in cross_kinds
         return {
             "schema_version": "safepay-evidence-summary-v2",
             "quote_id": quote_id,

@@ -18,10 +18,13 @@ from fastapi.testclient import TestClient
 from shared.x402_payments import (
     SAFEPAY_V2_FULFILLMENT_SEPARATOR,
     SAFEPAY_V2_NETWORK,
+    SAFEPAY_V2_OBSERVATION_FIELDS,
     SAFEPAY_V2_QUOTE_HASH_SEPARATOR,
     SAFEPAY_V2_QUOTE_SEPARATOR,
+    SafePayObserverUnavailable,
     _extract_transfer_proof_status,
     evaluate_safepay_v2_observation,
+    observe_safepay_v2_payment,
     redeem_provider_x402_with_retry,
     safepay_v2_correlation_id,
     safepay_v2_quote_hash,
@@ -29,16 +32,19 @@ from shared.x402_payments import (
     settle_x402_payment_with_retry,
     verify_casper_transfer_payment_with_retry,
 )
+from x402_provider.app import create_app
 from x402_provider.ledger import SafePayCaps, SafePayLedger
 
 from test_safepay_ledger import (
     AMOUNT,
     PAYEE,
+    START,
     FakeClock,
     FakeObserver,
     assert_error_body,
     build_app,
     db_count,
+    install_secret_files,
     issue_quote,
     make_observation,
     redeem,
@@ -371,6 +377,28 @@ def test_multiple_native_transfers_refused(tmp_path, monkeypatch):
     assert db_count(db, "payment_consumptions") == 0
 
 
+@pytest.mark.parametrize("forged_count", [None, True, "1", 1.0])
+def test_missing_or_mistyped_transfer_count_fails_closed(tmp_path, monkeypatch, forged_count):
+    """The raw transfer count is a mandatory strict int in the observation contract.
+
+    An observer omitting it, or supplying bool True / "1" / 1.0 (all of which
+    int() would coerce to a passing 1), has produced no usable observation:
+    the provider must fail closed as a retryable observer outage — it must
+    never assume exactly one transfer, and must consume nothing.
+    """
+    client, quote, observer, db = _issued(tmp_path, monkeypatch)
+    payment_hash = "bc" * 32
+    observation = make_observation(quote, payment_hash)
+    if forged_count is None:
+        observation.pop("native_transfer_count")
+    else:
+        observation["native_transfer_count"] = forged_count
+    observer.by_hash[payment_hash] = observation
+    response = redeem(client, quote, payment_hash)
+    assert_error_body(response, 503, "payment_observer_unavailable", True, "verification_pending")
+    assert db_count(db, "payment_consumptions") == 0
+
+
 # ------------------------------------- SP-11/SP-14: gateway-side helper truth
 
 
@@ -627,3 +655,529 @@ def test_legacy_risk_report_flow_still_serves_402_challenge(tmp_path, monkeypatc
     assert response.status_code == 402
     assert response.headers["X-Payment-Resource"] == "concordia-governance-report:DAO-PROP-6CB25C"
     assert response.json()["provider"] == "concordia-risk-oracle-provider"
+
+
+# =====================================================================
+# WP2-1 / WP2-2 regressions: observe_safepay_v2_payment must parse the REAL
+# CSPR.live response shape (including initiator_account_hash), bind exact deploy
+# identity, network and exactly one RAW transfer, and NEVER convert a bare
+# CSPR.live status=processed into finality. Finality is a defined, separate
+# block observation. Every call is offline via httpx.MockTransport.
+# =====================================================================
+
+CSPR_BASE = "http://cspr.test"
+BLOCK_HASH = "2b" * 32
+BLOCK_HEIGHT = 8590556
+SOURCE_HASH = "1a" * 32
+
+
+def _cspr_transfer(quote: dict, **over) -> dict:
+    """A native-transfer record shaped like a real CSPR.live transfer."""
+    transfer = {
+        "deploy_hash": over.get("deploy_hash", "dc" * 32),
+        "block_hash": BLOCK_HASH,
+        "initiator_account_hash": SOURCE_HASH,
+        "from_purse": "uref-0000000000000000000000000000000000000000000000000000000000000000-007",
+        "to_account_hash": quote["payee_account_hash"],
+        "to_purse": "uref-1111111111111111111111111111111111111111111111111111111111111111-004",
+        "amount": quote["amount_motes"],
+        "transfer_id": int(quote["correlation_id"]),
+        "timestamp": "2026-06-29T22:49:29Z",
+    }
+    for key in over.pop("_drop", ()):  # remove named fields (e.g. missing initiator)
+        transfer.pop(key, None)
+    transfer.update({k: v for k, v in over.items() if not k.startswith("_") and k != "deploy_hash"})
+    return transfer
+
+
+def _cspr_deploy_body(payment_hash: str, quote: dict, **over) -> dict:
+    """A deploy-detail body shaped like a real CSPR.live /deploys/{hash} record."""
+    transfers = over.get("transfers")
+    if transfers is None:
+        transfers = [_cspr_transfer(quote)]
+    body = {
+        "account_info": None,
+        "deploy_hash": over.get("deploy_hash", payment_hash),
+        "block_hash": over.get("block_hash", BLOCK_HASH),
+        "block_height": over.get("block_height", BLOCK_HEIGHT),
+        "caller_public_key": "01" + "aa" * 32,
+        "caller_hash": SOURCE_HASH,
+        "status": over.get("status", "processed"),
+        "error_message": over.get("error_message", None),
+        "execution_type_id": 2,
+        "cost": "100000000",
+        "payment_amount": "100000000",
+        "refund_amount": "0",
+        "consumed_gas": "100000000",
+        "ft_token_actions": [],
+        "nft_token_actions": [],
+        "timestamp": "2026-06-29T22:49:29Z",
+        "transfers": transfers,
+    }
+    return body
+
+
+def _cspr_transport(
+    payment_hash: str,
+    quote: dict,
+    *,
+    finalized: bool = True,
+    deploy_status: int = 200,
+    deploy_body=None,
+    deploy_payload=None,
+    block_status: int = 200,
+    block_body=None,
+    deploy_raises: bool = False,
+    block_raises: bool = False,
+    deploy_text=None,
+) -> httpx.MockTransport:
+    body = deploy_body if deploy_body is not None else _cspr_deploy_body(payment_hash, quote)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"/deploys/{payment_hash}":
+            if deploy_raises:
+                raise httpx.ConnectError("cspr.live unreachable")
+            if deploy_text is not None:
+                return httpx.Response(deploy_status, text=deploy_text)
+            if deploy_status != 200:
+                return httpx.Response(deploy_status, json={"error": "unavailable"})
+            if deploy_payload is not None:  # full top-level JSON, no {"data": ...} wrapper
+                return httpx.Response(200, json=deploy_payload)
+            return httpx.Response(200, json={"data": body})
+        if path.startswith("/blocks/"):
+            if block_raises:
+                raise httpx.ConnectError("cspr.live block endpoint unreachable")
+            if not finalized:
+                return httpx.Response(404, json={"error": "block_not_found"})
+            if block_status != 200:
+                return httpx.Response(block_status, json={"error": "unavailable"})
+            confirmed = block_body if block_body is not None else {
+                "block_hash": BLOCK_HASH,
+                "block_height": BLOCK_HEIGHT,
+                "era_id": 12345,
+                "finality_signatures": 100,
+            }
+            return httpx.Response(200, json={"data": confirmed})
+        return httpx.Response(404, json={"error": "unexpected_path"})
+
+    return httpx.MockTransport(handler)
+
+
+async def _observe(payment_hash: str, quote: dict, **transport_kwargs) -> dict:
+    transport = _cspr_transport(payment_hash, quote, **transport_kwargs)
+    return await observe_safepay_v2_payment(
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        transport=transport,
+        base_url=CSPR_BASE,
+    )
+
+
+def _quote_terms() -> dict:
+    """A minimal issued-quote stand-in for direct observer parsing tests."""
+    quote_id = "2f9c5f4e-3d1a-4b2c-8e5f-6a7b8c9d0e1f"
+    nonce = bytes(range(32))
+    correlation = safepay_v2_correlation_id(quote_id, "DAO-PROP-6CB25C", "risk-report:test", nonce)
+    return {
+        "network": SAFEPAY_V2_NETWORK,
+        "payee_account_hash": PAYEE,
+        "amount_motes": AMOUNT,
+        "correlation_id": str(correlation),
+        "payment_hash": "dc" * 32,
+    }
+
+
+async def test_observer_parses_real_cspr_live_shape_and_finalizes():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    obs = await _observe(payment_hash, quote)
+    # Exact deploy identity, network, block identity, and single-transfer binding.
+    assert set(obs) == set(SAFEPAY_V2_OBSERVATION_FIELDS) | {"native_transfer_count"}
+    assert obs["network"] == SAFEPAY_V2_NETWORK
+    assert obs["payment_hash"] == payment_hash
+    assert obs["block_hash"] == BLOCK_HASH
+    assert obs["block_height"] == BLOCK_HEIGHT
+    assert obs["execution_status"] == "processed"
+    assert obs["finality_status"] == "finalized"
+    assert obs["execution_error"] is None
+    # initiator_account_hash is the bound source; to_account_hash the payee.
+    assert obs["from_account_hash"] == SOURCE_HASH
+    assert obs["to_account_hash"] == PAYEE
+    assert obs["amount_motes"] == AMOUNT
+    assert obs["transfer_id"] == quote["correlation_id"]
+    assert obs["native_transfer_count"] == 1
+    # RFC3339 UTC-Z observed_at.
+    assert obs["observed_at"].endswith("Z")
+
+
+async def test_observer_processed_without_finalized_block_is_not_final():
+    # THE core WP2-2 regression: status=processed is NOT finality on its own.
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    obs = await _observe(payment_hash, quote, finalized=False)
+    assert obs["execution_status"] == "processed"
+    assert obs["finality_status"] == "not_finalized"
+    assert obs["finality_status"] != "finalized"
+
+
+async def test_observer_binds_exact_deploy_identity_wrong_deploy_fails_closed():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    body = _cspr_deploy_body(payment_hash, quote, deploy_hash="ee" * 32)  # record claims a DIFFERENT deploy
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    # Never attribute a foreign deploy record to this payment hash.
+    assert obs["finality_status"] != "finalized"
+    assert obs["execution_status"] in {"pending", "unknown"}
+    assert obs["native_transfer_count"] == 0
+
+
+async def test_observer_pending_deploy_is_not_final():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    body = _cspr_deploy_body(payment_hash, quote, status="pending", transfers=[])
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["execution_status"] in {"pending", "unknown"}
+    assert obs["finality_status"] != "finalized"
+
+
+async def test_observer_counts_raw_transfers_before_filtering():
+    # One valid transfer PLUS an extra/malformed transfer must fail the exactly
+    # one raw-transfer predicate. Raw count is taken before any filtering.
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    valid = _cspr_transfer(quote)
+    body = _cspr_deploy_body(payment_hash, quote, transfers=[valid, {"malformed": "extra"}])
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["native_transfer_count"] == 2  # RAW length, not the filtered structured length
+
+    body_two = _cspr_deploy_body(payment_hash, quote, transfers=[valid, _cspr_transfer(quote)])
+    obs_two = await _observe(payment_hash, quote, deploy_body=body_two)
+    assert obs_two["native_transfer_count"] == 2
+
+
+async def test_observer_zero_transfers_is_not_attributable():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    body = _cspr_deploy_body(payment_hash, quote, transfers=[])
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["native_transfer_count"] == 0
+    assert obs["to_account_hash"] == ""
+
+
+async def test_observer_missing_initiator_is_not_fabricated():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    transfer = _cspr_transfer(quote, _drop=("initiator_account_hash",))
+    body = _cspr_deploy_body(payment_hash, quote, transfers=[transfer])
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    # No source field present anywhere -> empty, never invented.
+    assert obs["from_account_hash"] == ""
+    # The provider then rejects this observation on shape (see app-level test).
+
+
+async def test_observer_initiator_account_hash_is_the_bound_source():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    other_source = "9c" * 32
+    transfer = _cspr_transfer(quote, initiator_account_hash=other_source)
+    body = _cspr_deploy_body(payment_hash, quote, transfers=[transfer])
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["from_account_hash"] == other_source
+
+
+async def test_observer_execution_error_reported_and_not_final():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    body = _cspr_deploy_body(payment_hash, quote, error_message="User error: 1")
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["execution_error"] == "User error: 1"
+    assert obs["finality_status"] != "finalized"
+
+
+async def test_observer_malformed_and_missing_data_are_observer_unavailable():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    # Malformed (non-JSON) deploy body is an observer outage, never a verdict.
+    with pytest.raises(SafePayObserverUnavailable):
+        await _observe(payment_hash, quote, deploy_text="<html>not json</html>")
+    # A response missing the "data" wrapper entirely cannot be observed.
+    with pytest.raises(SafePayObserverUnavailable):
+        await _observe(payment_hash, quote, deploy_payload={"errors": ["no data"]})
+    # A non-200/non-404 deploy response is an observer outage, never a verdict.
+    with pytest.raises(SafePayObserverUnavailable):
+        await _observe(payment_hash, quote, deploy_status=500)
+    # Transport failure is an outage.
+    with pytest.raises(SafePayObserverUnavailable):
+        await _observe(payment_hash, quote, deploy_raises=True)
+
+
+async def test_observer_data_present_but_shapeless_fails_closed_not_settled():
+    # A "data" object that lacks the requested deploy identity is not attributed
+    # to this payment: honest non-final, never a fabricated settlement.
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    obs = await _observe(payment_hash, quote, deploy_body={"unexpected": "shape"})
+    assert obs["finality_status"] != "finalized"
+    assert obs["execution_status"] in {"pending", "unknown"}
+
+
+async def test_observer_404_deploy_is_pending_not_error():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    obs = await _observe(payment_hash, quote, deploy_status=404)
+    assert obs["execution_status"] in {"pending", "unknown"}
+    assert obs["finality_status"] != "finalized"
+
+
+async def test_observer_extra_unknown_fields_are_ignored():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    body = _cspr_deploy_body(payment_hash, quote)
+    body["totally_unexpected_top_level"] = {"nested": [1, 2, 3]}
+    body["transfers"][0]["unexpected_transfer_field"] = "ignore-me"
+    obs = await _observe(payment_hash, quote, deploy_body=body)
+    assert obs["finality_status"] == "finalized"
+    assert obs["to_account_hash"] == PAYEE
+
+
+async def test_observer_block_lookup_outage_fails_closed():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    with pytest.raises(SafePayObserverUnavailable):
+        await _observe(payment_hash, quote, block_raises=True)
+
+
+async def test_observer_block_identity_mismatch_is_not_final():
+    quote = _quote_terms()
+    payment_hash = quote["payment_hash"]
+    obs = await _observe(
+        payment_hash, quote, block_body={"block_hash": "77" * 32, "block_height": 1}
+    )
+    assert obs["finality_status"] != "finalized"
+
+
+async def test_observer_non_canonical_network_raises():
+    quote = _quote_terms()
+    with pytest.raises(SafePayObserverUnavailable):
+        await observe_safepay_v2_payment(
+            network="casper-testnet", payment_hash=quote["payment_hash"]
+        )
+
+
+# ---- App-level end-to-end proof that processed!=settled through the REAL observer ----
+
+
+def _wired_app(tmp_path, monkeypatch, transport, clock):
+    install_secret_files(monkeypatch, tmp_path)
+
+    async def real_observer(network: str, payment_hash: str) -> dict:
+        return await observe_safepay_v2_payment(
+            network=network, payment_hash=payment_hash, transport=transport, base_url=CSPR_BASE
+        )
+
+    return create_app(
+        ledger_path=str(tmp_path / "safepay.db"),
+        caps=SafePayCaps(),
+        clock=clock,
+        chain_observer=real_observer,
+        payee_account_hash=PAYEE,
+        amount_motes=AMOUNT,
+    )
+
+
+def test_app_real_observer_processed_but_unfinalized_returns_425_not_settled(tmp_path, monkeypatch):
+    clock = FakeClock()
+    install_secret_files(monkeypatch, tmp_path)
+    seed = build_app(tmp_path, monkeypatch, clock=clock)
+    quote = issue_quote(TestClient(seed))["quote"]
+    payment_hash = "dc" * 32
+    transport = _cspr_transport(payment_hash, quote, finalized=False)
+    app = _wired_app(tmp_path, monkeypatch, transport, clock)
+    response = redeem(TestClient(app), quote, payment_hash)
+    # The OLD injected observer settled this; now it must not.
+    assert_error_body(response, 425, "payment_not_finalized", True, "verification_pending")
+    assert db_count(tmp_path / "safepay.db", "payment_consumptions") == 0
+
+
+def test_app_real_observer_finalized_happy_path_settles(tmp_path, monkeypatch):
+    clock = FakeClock()
+    install_secret_files(monkeypatch, tmp_path)
+    seed = build_app(tmp_path, monkeypatch, clock=clock)
+    quote = issue_quote(TestClient(seed))["quote"]
+    payment_hash = "dc" * 32
+    transport = _cspr_transport(payment_hash, quote, finalized=True)
+    app = _wired_app(tmp_path, monkeypatch, transport, clock)
+    response = redeem(TestClient(app), quote, payment_hash)
+    assert response.status_code == 200, response.text
+    assert response.json()["delivery"]["replay_disposition"] == "first_consumption"
+    assert db_count(tmp_path / "safepay.db", "payment_consumptions") == 1
+
+
+def test_app_real_observer_missing_initiator_fails_closed(tmp_path, monkeypatch):
+    clock = FakeClock()
+    install_secret_files(monkeypatch, tmp_path)
+    seed = build_app(tmp_path, monkeypatch, clock=clock)
+    quote = issue_quote(TestClient(seed))["quote"]
+    payment_hash = "dc" * 32
+    body = _cspr_deploy_body(
+        payment_hash, quote, transfers=[_cspr_transfer(quote, _drop=("initiator_account_hash",))]
+    )
+    transport = _cspr_transport(payment_hash, quote, deploy_body=body)
+    app = _wired_app(tmp_path, monkeypatch, transport, clock)
+    response = redeem(TestClient(app), quote, payment_hash)
+    # An observation with no source account is shape-invalid -> fail closed, never settled.
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "payment_observer_unavailable"
+    assert db_count(tmp_path / "safepay.db", "payment_consumptions") == 0
+
+
+# =====================================================================
+# WP2-3 regressions: summarize_quote_evidence must derive duplicate rejection
+# from the ACTUAL observed 409 terminal result against a genuinely different
+# quote/resource binding on the same (network, payment_hash), in chronological
+# order after the canonical consumption -- never from a bare observation kind.
+# =====================================================================
+
+
+def _consumed_quote(tmp_path, monkeypatch):
+    clock = FakeClock()
+    observer = FakeObserver()
+    app = build_app(tmp_path, monkeypatch, clock=clock, observer=observer)
+    client = TestClient(app)
+    quote = issue_quote(client, resource_id="resource-a")["quote"]
+    payment_hash = "e1" * 32
+    observer.by_hash[payment_hash] = make_observation(quote, payment_hash)
+    assert redeem(client, quote, payment_hash).status_code == 200
+    ledger = SafePayLedger(str(tmp_path / "safepay.db"), SafePayCaps())
+    return ledger, quote, payment_hash
+
+
+def test_summary_true_only_for_genuine_different_binding_409(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=409,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id="7f000000-0000-4000-8000-000000000002",
+        resource_id="resource-b",
+        now=START + 50,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["consumption_recorded"] is True
+    assert summary["cross_binding_rejected_observed"] is True
+    assert summary["duplicate_proof_rejected"] is True
+
+
+def test_summary_false_for_non_409_http_status(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    # A "cross_binding_rejected" row whose ACTUAL observed HTTP result was 200.
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=200,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id="7f000000-0000-4000-8000-000000000002",
+        resource_id="resource-b",
+        now=START + 50,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+
+
+def test_summary_false_for_same_binding_observation(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    # Same quote AND same resource as the canonical consumption: not a genuinely
+    # different binding, even at http 409.
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=409,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id=quote["quote_id"],
+        resource_id="resource-a",
+        now=START + 50,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+
+
+def test_summary_false_for_unrelated_payment_observation(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    # 409 against a DIFFERENT (network, payment_hash) than the canonical consumption.
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=409,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash="ff" * 32,
+        quote_id="7f000000-0000-4000-8000-000000000002",
+        resource_id="resource-b",
+        now=START + 50,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+
+
+def test_summary_false_when_409_precedes_consumption(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    # Chronology: a 409 observed BEFORE the canonical consumption cannot evidence
+    # rejection of a duplicate of that consumption.
+    ledger.record_redemption_observation(
+        kind="cross_binding_rejected",
+        http_status=409,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id="7f000000-0000-4000-8000-000000000002",
+        resource_id="resource-b",
+        now=START - 100,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+
+
+def test_summary_idempotent_replay_does_not_imply_duplicate_rejected(tmp_path, monkeypatch):
+    ledger, quote, payment_hash = _consumed_quote(tmp_path, monkeypatch)
+    ledger.record_redemption_observation(
+        kind="idempotent_replay",
+        http_status=200,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id=quote["quote_id"],
+        resource_id="resource-a",
+        now=START + 50,
+    )
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["idempotent_replay_observed"] is True
+    assert summary["cross_binding_rejected_observed"] is False
+    assert summary["duplicate_proof_rejected"] is False
+
+
+def test_summary_distinguishes_exact_replay_from_cross_binding(tmp_path, monkeypatch):
+    # End-to-end through the app: an exact retry is idempotent (no second
+    # consumption), and reuse under a different quote is a terminal 409. The
+    # evidence must reflect both facts distinctly.
+    clock = FakeClock()
+    observer = FakeObserver()
+    app = build_app(tmp_path, monkeypatch, clock=clock, observer=observer)
+    client = TestClient(app)
+    quote_a = issue_quote(client, resource_id="resource-a")["quote"]
+    quote_b = issue_quote(client, resource_id="resource-b")["quote"]
+    payment_hash = "e2" * 32
+    observer.by_hash[payment_hash] = make_observation(quote_a, payment_hash)
+
+    assert redeem(client, quote_a, payment_hash).status_code == 200
+    assert redeem(client, quote_a, payment_hash).json()["delivery"]["replay_disposition"] == "idempotent_replay"
+    assert db_count(tmp_path / "safepay.db", "payment_consumptions") == 1
+    assert redeem(client, quote_b, payment_hash).status_code == 409
+
+    ledger = SafePayLedger(str(tmp_path / "safepay.db"), SafePayCaps())
+    summary = ledger.summarize_quote_evidence(quote_a["quote_id"])
+    assert summary["consumption_recorded"] is True
+    assert summary["idempotent_replay_observed"] is True
+    assert summary["cross_binding_rejected_observed"] is True
+    assert summary["duplicate_proof_rejected"] is True

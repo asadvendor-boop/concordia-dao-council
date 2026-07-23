@@ -372,6 +372,25 @@ async def observe_safepay_v2_payment(
 ) -> dict[str, Any]:
     """Default Casper observation source for SafePay v2 redemptions.
 
+    Parses the real CSPR.live ``/deploys/{hash}`` record and binds:
+
+    - the exact requested deploy identity (``data.deploy_hash == payment_hash``);
+      a record claiming a different deploy is never attributed to this payment;
+    - the canonical network (``casper:casper-test``);
+    - the block identity (``block_hash`` + ``block_height``);
+    - exactly one RAW native transfer (the raw collection length is taken before
+      any parsing/filtering, so one valid transfer accompanied by malformed or
+      extra transfers fails the single-transfer predicate); and
+    - that transfer's source (``initiator_account_hash``), payee
+      (``to_account_hash``), amount and transfer id.
+
+    Critically, a CSPR.live ``status == "processed"`` is NOT treated as finality.
+    Finality is a *defined, separate* observation of the containing block (see
+    :func:`_observe_block_finality`); ``finality_status`` is ``finalized`` only
+    when that block observation confirms it, and ``not_finalized`` otherwise.
+    Pending, wrong-chain and wrong-deploy responses fail closed as an honest
+    non-final status and are never reported as settled/consumed.
+
     Returns a structured observation dict (plus internal
     ``native_transfer_count``). Transport injection keeps tests fully offline.
     Raises SafePayObserverUnavailable when no observation can be produced.
@@ -381,46 +400,136 @@ async def observe_safepay_v2_payment(
     if not _HEX64_RE.match(payment_hash):
         raise SafePayObserverUnavailable("payment hash must be 64 lowercase hex characters")
     base = (base_url or os.getenv("X402_CSPR_LIVE_API", "https://api.testnet.cspr.live")).rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+        try:
             response = await client.get(f"{base}/deploys/{payment_hash}")
-    except Exception as exc:  # network failure is an observer outage, never a verdict
+        except Exception as exc:  # network failure is an observer outage, never a verdict
+            raise SafePayObserverUnavailable(type(exc).__name__) from exc
+        if response.status_code == 404:
+            return _safepay_pending_observation(network, payment_hash)
+        if response.status_code != 200:
+            raise SafePayObserverUnavailable(f"http_{response.status_code}")
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise SafePayObserverUnavailable("invalid_json") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise SafePayObserverUnavailable("missing_deploy_data")
+
+        # Exact deploy identity: never attribute a CSPR.live record to a payment
+        # hash the record does not itself claim. A mismatch fails closed.
+        returned_deploy_hash = str(data.get("deploy_hash") or "").strip().lower()
+        if returned_deploy_hash != payment_hash:
+            return _safepay_pending_observation(network, payment_hash)
+
+        status = data.get("status")
+        error_message = data.get("error_message")
+
+        # RAW transfer count is taken BEFORE any parsing/filtering. Exactly one
+        # raw native transfer may exist; extra or malformed entries push the
+        # count past one and fail the frozen single-transfer predicate upstream.
+        raw_transfers = data.get("transfers")
+        raw_list = raw_transfers if isinstance(raw_transfers, list) else []
+        raw_transfer_count = len(raw_list)
+        structured_first: dict[str, Any] | None = None
+        if raw_transfer_count == 1 and isinstance(raw_list[0], dict):
+            structured_first = _structured_transfer_record(raw_list[0])
+
+        # A non-processed deploy is not a verdict: honest pending observation.
+        if status != "processed":
+            return _safepay_pending_observation(network, payment_hash)
+
+        block_hash = str(data.get("block_hash") or "").strip().lower()
+        block_height = _canonical_int(data.get("block_height"))
+
+        def _transfer_fields() -> dict[str, Any]:
+            return {
+                "from_account_hash": structured_first["source"] if structured_first else "",
+                "to_account_hash": structured_first["recipient"] if structured_first else "",
+                "amount_motes": (
+                    str(structured_first["amount"])
+                    if structured_first and structured_first["amount"] is not None
+                    else "0"
+                ),
+                "transfer_id": (
+                    str(structured_first["transfer_id"])
+                    if structured_first and structured_first["transfer_id"] is not None
+                    else None
+                ),
+            }
+
+        # Executed-but-failed deploy: report the error honestly (the provider
+        # maps it to a terminal binding rejection), never a finalized transfer.
+        if error_message:
+            return {
+                "network": network,
+                "payment_hash": payment_hash,
+                "block_hash": block_hash,
+                "block_height": block_height if block_height is not None else 0,
+                "execution_status": "processed",
+                "finality_status": "not_finalized",
+                **_transfer_fields(),
+                "execution_error": str(error_message),
+                "observed_at": _utc_now_rfc3339(),
+                "native_transfer_count": raw_transfer_count,
+            }
+
+        # Block identity must be present before any finality claim.
+        if not _HEX64_RE.match(block_hash) or block_height is None:
+            return _safepay_pending_observation(network, payment_hash)
+
+        # Defined finality observation: "processed" alone is not final.
+        finalized = await _observe_block_finality(client, base, block_hash, block_height)
+
+        return {
+            "network": network,
+            "payment_hash": payment_hash,
+            "block_hash": block_hash,
+            "block_height": block_height,
+            "execution_status": "processed",
+            "finality_status": "finalized" if finalized else "not_finalized",
+            **_transfer_fields(),
+            "execution_error": None,
+            "observed_at": _utc_now_rfc3339(),
+            "native_transfer_count": raw_transfer_count,
+        }
+
+
+async def _observe_block_finality(
+    client: httpx.AsyncClient, base: str, block_hash: str, block_height: int
+) -> bool:
+    """Defined finality observation for the deploy's containing block.
+
+    A Casper deploy is final iff the block that includes it is finalized. This
+    performs a separate, injectable CSPR.live block observation and confirms
+    that the returned block's identity exactly matches the deploy's
+    ``(block_hash, block_height)``. Any lookup failure, absence, or mismatch
+    yields a NON-final result (the provider then reports payment_not_finalized
+    and retries), never a fabricated finalization. A transport error or an
+    unexpected non-404 HTTP status is surfaced as an observer outage.
+    """
+    try:
+        response = await client.get(f"{base}/blocks/{block_hash}")
+    except Exception as exc:  # cannot observe finality -> outage, never "final"
         raise SafePayObserverUnavailable(type(exc).__name__) from exc
     if response.status_code == 404:
-        return _safepay_pending_observation(network, payment_hash)
+        return False
     if response.status_code != 200:
-        raise SafePayObserverUnavailable(f"http_{response.status_code}")
+        raise SafePayObserverUnavailable(f"block_http_{response.status_code}")
     try:
         payload = response.json()
     except Exception as exc:
-        raise SafePayObserverUnavailable("invalid_json") from exc
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
-        raise SafePayObserverUnavailable("missing_deploy_data")
-    status = data.get("status")
-    if status != "processed":
-        return _safepay_pending_observation(network, payment_hash)
-    transfers = data.get("transfers")
-    records = [record for record in transfers if isinstance(record, dict)] if isinstance(transfers, list) else []
-    structured = [_structured_transfer_record(record) for record in records]
-    structured = [record for record in structured if record is not None]
-    first = structured[0] if structured else {"recipient": "", "amount": None, "transfer_id": None, "source": ""}
-    error_message = data.get("error_message")
-    return {
-        "network": network,
-        "payment_hash": payment_hash,
-        "block_hash": _normalize_token(data.get("block_hash")),
-        "block_height": int(data.get("block_height") or 0),
-        "execution_status": "processed",
-        "finality_status": "finalized",
-        "from_account_hash": first["source"],
-        "to_account_hash": first["recipient"],
-        "amount_motes": str(first["amount"]) if first["amount"] is not None else "0",
-        "transfer_id": str(first["transfer_id"]) if first["transfer_id"] is not None else None,
-        "execution_error": str(error_message) if error_message else None,
-        "observed_at": _utc_now_rfc3339(),
-        "native_transfer_count": len(structured),
-    }
+        raise SafePayObserverUnavailable("block_invalid_json") from exc
+    block = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(block, dict):
+        return False
+    observed_hash = str(block.get("block_hash") or block.get("hash") or "").strip().lower()
+    height_value = block.get("block_height")
+    if height_value is None:
+        height_value = block.get("height")
+    observed_height = _canonical_int(height_value)
+    return observed_hash == block_hash and observed_height == block_height
 
 
 def _safepay_pending_observation(network: str, payment_hash: str) -> dict[str, Any]:
@@ -812,7 +921,10 @@ def _normalize_token(value: Any) -> str:
 
 
 _TRANSFER_RECIPIENT_KEYS = ("target_account_hash", "to_account_hash", "to_account", "to", "target")
-_TRANSFER_SOURCE_KEYS = ("from_account_hash", "from_account", "from", "source")
+# CSPR.live native-transfer records carry the payer as ``initiator_account_hash``
+# (the account that signed the transfer deploy); it is the authoritative source
+# and is consulted before any purse-derived alias.
+_TRANSFER_SOURCE_KEYS = ("initiator_account_hash", "from_account_hash", "from_account", "from", "source")
 _TRANSFER_ID_KEYS = ("transfer_id", "id", "memo")
 
 
