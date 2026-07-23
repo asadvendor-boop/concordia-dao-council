@@ -6,9 +6,19 @@ agents and the deterministic Gateway ledger. They store rooms, participants, and
 Room identity v1 (G1 freeze, §12):
     - ``sender_id`` / ``sender_role`` / ``sender_type`` are derived ONLY from
       the authenticated key mapping (role from the agent key, agent id from
-      the ``{ROLE}_AGENT_ID`` environment pattern). Caller-supplied identity
-      fields that conflict with the derived identity are rejected with 400
-      ``identity_fields_are_server_derived``.
+      the ``{ROLE}_AGENT_ID`` environment pattern).
+    - PRODUCTION BOUNDARY (WP3-7 / Codex addendum item 7): EVERY caller-supplied
+      sender/participant identity field is rejected with 400
+      ``identity_fields_are_server_derived`` — even one that exactly equals the
+      authenticated principal.
+    - !! FLAGGED DEV/TEST COMPAT GATE !! Outside production an EXACT match is
+      tolerated (conflicts still rejected) because the frozen Codex-owned
+      ``shared/proposal_room.py`` ALWAYS transmits ``sender_id`` /
+      ``sender_role`` / ``sender_type`` (and ``role`` on add_participant). Those
+      exact call sites MUST be migrated to stop sending identity fields before
+      production strictness holds end-to-end; recorded in
+      ``handoff/INTERFACE_MANIFEST_WP3.md`` as remaining_for_codex. Stored
+      identity is ALWAYS server-derived regardless of mode.
     - Agent keys can never emit ``User`` or ``System`` sender types. Human
       approval enters only through the approval boundary (approve_ui calls
       the internal ``store_room_message`` / ``store_room_participant``
@@ -74,14 +84,40 @@ def _derived_agent_id(role: str) -> str:
     return os.getenv(f"{role.upper()}_AGENT_ID", role) or role
 
 
-def _registered_role_for_agent_id(agent_id: str) -> str | None:
-    """Reverse lookup: registered agent id → matrix role (identity source)."""
-    for role in _MATRIX_ROLES:
+def _agent_id_index() -> tuple[dict[str, str], frozenset[str]]:
+    """Deterministic reverse map ``agent_id -> role`` plus collided agent ids.
+
+    Roles are iterated in a stable **sorted** order — never set-iteration
+    order (WP3-8). An agent id derived for more than one role is a duplicate /
+    ambiguous principal; it is recorded as collided and removed from the index
+    so every lookup and every principal resolution for it fails closed instead
+    of silently resolving to whichever role set iteration happened to reach
+    first. (Rejecting duplicate role *keys* at startup is Codex-owned in
+    gateway/auth.py.)
+    """
+    index: dict[str, str] = {}
+    collided: set[str] = set()
+    for role in sorted(_MATRIX_ROLES):
         if role == "gateway":
             continue
-        if _derived_agent_id(role) == agent_id:
-            return role
-    return None
+        agent_id = _derived_agent_id(role)
+        existing = index.get(agent_id)
+        if existing is not None and existing != role:
+            collided.add(agent_id)
+        else:
+            index[agent_id] = role
+    for agent_id in collided:
+        index.pop(agent_id, None)
+    return index, frozenset(collided)
+
+
+def _registered_role_for_agent_id(agent_id: str) -> str | None:
+    """Unique reverse lookup: registered agent id → matrix role.
+
+    Returns ``None`` for an unknown OR ambiguous (collided) agent id.
+    """
+    index, _ = _agent_id_index()
+    return index.get(agent_id)
 
 
 def _role_or_401(agent_key: str) -> str:
@@ -95,12 +131,19 @@ def _principal_or_error(agent_key: str) -> tuple[str, str]:
     """Authenticated principal: (role, derived agent id).
 
     Roles outside the frozen matrix (e.g. ``scribe``) have no room
-    operations under room identity v1.
+    operations under room identity v1. A caller whose role derives a duplicated
+    (collided) agent id has no unique principal and is refused (WP3-8): identity
+    binds the stable authenticated principal, not a set-iteration lookup.
     """
     role = _role_or_401(agent_key)
     if role not in _MATRIX_ROLES:
         raise HTTPException(status_code=403, detail="role_not_permitted")
-    return role, _derived_agent_id(role)
+    agent_id = _derived_agent_id(role)
+    if role != "gateway":
+        _, collided = _agent_id_index()
+        if agent_id in collided:
+            raise HTTPException(status_code=403, detail="ambiguous_principal")
+    return role, agent_id
 
 
 def _require_room(db, room_id: str) -> sqlite3.Row:
@@ -127,6 +170,37 @@ def _require_membership(db, room_id: str, role: str, agent_id: str) -> None:
         return
     if not _is_member(db, room_id, agent_id):
         raise HTTPException(status_code=403, detail="not_a_room_member")
+
+
+_SENDER_IDENTITY_FIELDS = ("sender_id", "sender_role", "sender_type")
+
+
+def _reject_supplied_sender_identity(body, *, role: str, agent_id: str) -> None:
+    """Enforce that message sender identity is exclusively server-derived.
+
+    **Production boundary (WP3-7 / addendum 7):** EVERY caller-supplied identity
+    field is rejected — even one that exactly equals the authenticated principal.
+
+    **Dev/test compat gate (flagged, non-production only):** the frozen
+    Codex-owned ``shared/proposal_room.py`` ALWAYS transmits
+    ``sender_id``/``sender_role``/``sender_type`` (see the module docstring and
+    ``handoff/INTERFACE_MANIFEST_WP3.md`` — those exact call sites must be
+    migrated to stop sending identity fields before production strictness can
+    hold end-to-end). Until then, outside production an EXACT match is tolerated
+    while any conflict is still rejected. Stored identity is ALWAYS derived.
+    """
+    supplied = {f for f in _SENDER_IDENTITY_FIELDS if f in body.model_fields_set}
+    if _production_mode():
+        if supplied:
+            raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+        return
+    # Non-production compat gate: tolerate exact match, reject any conflict.
+    if body.sender_type != "Agent":
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+    if body.sender_id is not None and body.sender_id != agent_id:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+    if body.sender_role is not None and body.sender_role != role:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
 
 
 class CreateRoomRequest(BaseModel):
@@ -361,6 +435,14 @@ async def add_participant(
     # Requester must be a room member unless gateway (frozen join contract).
     _require_membership(db, room_id, role, agent_id)
 
+    # The participant role is a server-derived identity field. On the production
+    # boundary a caller-supplied ``role`` is rejected (WP3-7). Outside production
+    # it is ignored (documented compat gate — the recorder sends role=agent_id
+    # junk on every add_participant; see the module docstring / interface
+    # manifest for the exact Codex-owned call site to migrate).
+    if _production_mode() and "role" in body.model_fields_set:
+        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+
     # Idempotent re-join: adding an existing member grants nothing new.
     existing = db.execute(
         "SELECT participant_id, role, display_name FROM proposal_room_participants "
@@ -378,8 +460,12 @@ async def add_participant(
             },
         }
 
-    # participant_role is derived from the registered agent id; the
-    # caller-supplied ``role`` field is ignored (identity is server-derived).
+    # participant_role is derived from the registered agent id (unique reverse
+    # lookup). A collided/ambiguous id fails closed rather than resolving to an
+    # arbitrary role (WP3-8).
+    _index, _collided = _agent_id_index()
+    if body.participant_id in _collided:
+        raise HTTPException(status_code=400, detail="ambiguous_participant")
     target_role = _registered_role_for_agent_id(body.participant_id)
     if target_role is None:
         raise HTTPException(status_code=400, detail="unknown_participant")
@@ -420,14 +506,8 @@ async def post_message(
             detail="gateway_fallback_forbidden_for_agent_traffic",
         )
 
-    # Identity is server-derived. Agent keys can never emit User/System, and
-    # conflicting caller-supplied identity fields are rejected.
-    if body.sender_type and body.sender_type != "Agent":
-        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
-    if body.sender_id is not None and body.sender_id != agent_id:
-        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
-    if body.sender_role is not None and body.sender_role != role:
-        raise HTTPException(status_code=400, **_IDENTITY_REJECTION)
+    # Identity is server-derived; agent keys can never emit User/System.
+    _reject_supplied_sender_identity(body, role=role, agent_id=agent_id)
 
     db = request.app.state.db
     _require_room(db, room_id)

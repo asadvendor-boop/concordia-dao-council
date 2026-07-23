@@ -205,14 +205,27 @@ def test_rm05_forged_approval_message_cannot_claim_user_identity(client):
     assert stored["sender_type"] == "Agent"
 
 
-def test_rm06_matching_identity_accepted_and_metadata_cannot_spoof(client, db):
+def test_rm06_production_rejects_identity_fields_even_when_matching(client, db, monkeypatch):
+    """WP3-7 / addendum 7: on the production boundary EVERY caller-supplied
+    identity field is rejected — even one that exactly equals the authenticated
+    principal. Ignoring / accept-on-match is not enough."""
+    monkeypatch.setenv("APP_ENV", "production")
     room_id = _create_room(client)
-    body = {
-        "sender_id": AGENT_IDS["recorder"],  # exactly the derived identity
-        "sender_role": "recorder",
-        "sender_type": "Agent",
-        "metadata": {"sender_id": "spoofed", "sender_type": "User"},
-    }
+    for field, value in (
+        ("sender_id", AGENT_IDS["recorder"]),  # exactly the derived identity
+        ("sender_role", "recorder"),
+        ("sender_type", "Agent"),  # exactly the derived default type
+    ):
+        response = _post(client, room_id, "recorder", {field: value})
+        assert response.status_code == 400, (field, response.text)
+        assert response.json()["detail"] == "identity_fields_are_server_derived"
+
+
+def test_rm06_metadata_cannot_spoof_identity(client, db):
+    """A clean post (no identity fields) with spoofing metadata still stores the
+    server-derived identity; metadata never influences sender identity."""
+    room_id = _create_room(client)
+    body = {"metadata": {"sender_id": "spoofed", "sender_type": "User"}}
     response = _post(client, room_id, "recorder", body)
     assert response.status_code == 200
     stored = response.json()
@@ -228,6 +241,26 @@ def test_rm06_matching_identity_accepted_and_metadata_cannot_spoof(client, db):
     assert row["sender_id"] == AGENT_IDS["recorder"]
     assert row["sender_role"] == "recorder"
     assert row["sender_type"] == "Agent"
+
+
+def test_rm06_nonprod_compat_gate_accepts_only_exact_match(client):
+    """Documented dev/test compat gate (flagged in the interface manifest):
+    outside production the frozen Codex-owned ``shared/proposal_room.py`` still
+    transmits identity fields, so an EXACT match is tolerated while a conflict
+    is still rejected. Stored identity is always server-derived."""
+    room_id = _create_room(client)
+    # Exact match tolerated (non-production).
+    ok = _post(
+        client,
+        room_id,
+        "recorder",
+        {"sender_id": AGENT_IDS["recorder"], "sender_role": "recorder", "sender_type": "Agent"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["sender_id"] == AGENT_IDS["recorder"]
+    # Conflict still rejected everywhere.
+    bad = _post(client, room_id, "recorder", {"sender_id": "someone-else"})
+    assert bad.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -306,10 +339,24 @@ def test_rm_join_is_idempotent_for_existing_member(client):
     assert response.json()["status"] == "joined"
 
 
-def test_rm_caller_supplied_participant_role_is_ignored(client, db):
-    """The participant role is derived from the registered agent id; a
-    caller-supplied role value is ignored (Recorder legacy clients send
-    junk in that field)."""
+def test_rm_production_rejects_caller_supplied_participant_role(client, monkeypatch):
+    """WP3-7: on the production boundary a caller-supplied participant ``role``
+    identity field is rejected (never silently ignored)."""
+    monkeypatch.setenv("APP_ENV", "production")
+    room_id = _create_room(client)
+    response = client.post(
+        f"/api/rooms/{room_id}/participants",
+        json={"participant_id": AGENT_IDS["triage"], "role": "commander"},
+        headers=_headers("recorder"),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "identity_fields_are_server_derived"
+
+
+def test_rm_nonprod_caller_supplied_participant_role_is_ignored(client, db):
+    """Documented dev/test compat gate: outside production the recorder sends
+    ``role=agent_id`` junk on every add_participant, so the role field is
+    ignored and the participant role is always derived from the agent id."""
     room_id = _create_room(client)
     response = client.post(
         f"/api/rooms/{room_id}/participants",
@@ -424,3 +471,73 @@ def test_rm_gateway_post_forbidden_in_production(client, monkeypatch):
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "gateway_fallback_forbidden_for_agent_traffic"
+
+
+# ---------------------------------------------------------------------------
+# WP3-8 — duplicate configured agent IDs must not resolve via set iteration
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def dup_agent_client(monkeypatch, tmp_path):
+    """App whose triage and diagnosis roles are misconfigured to the SAME
+    agent id — principal resolution must fail closed, not pick one by set
+    iteration order."""
+    for role, key in KEYS.items():
+        monkeypatch.setenv(f"{role.upper()}_SUBMISSION_KEY", key)
+    for role, agent_id in AGENT_IDS.items():
+        monkeypatch.setenv(f"{role.upper()}_AGENT_ID", agent_id)
+    # Collision: diagnosis now shares triage's agent id.
+    monkeypatch.setenv("DIAGNOSIS_AGENT_ID", AGENT_IDS["triage"])
+    monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    gateway_auth._reset_for_testing()
+    with TestClient(create_app(db_path=str(tmp_path / "dup.db"))) as test_client:
+        yield test_client
+    gateway_auth._reset_for_testing()
+
+
+def test_rm_wp3_8_duplicate_agent_id_participant_rejected(dup_agent_client):
+    """Adding a participant whose id is claimed by two roles is ambiguous and
+    fails closed (not resolved to an arbitrary role)."""
+    room_id = _create_room(dup_agent_client, "recorder")
+    response = dup_agent_client.post(
+        f"/api/rooms/{room_id}/participants",
+        json={"participant_id": AGENT_IDS["triage"]},  # collided id
+        headers=_headers("recorder"),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] in {"unknown_participant", "ambiguous_participant"}
+
+
+def test_rm_wp3_8_duplicate_principal_caller_rejected(dup_agent_client):
+    """A caller whose authenticated role resolves to a collided agent id cannot
+    establish a unique principal and is refused."""
+    room_id = _create_room(dup_agent_client, "recorder")
+    # triage & diagnosis both derive the same agent id -> ambiguous principal.
+    response = dup_agent_client.post(
+        f"/api/rooms/{room_id}/messages",
+        json={"content": "hi"},
+        headers=_headers("diagnosis"),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] in {"ambiguous_principal", "not_a_room_member"}
+
+
+# ---------------------------------------------------------------------------
+# Cross-room isolation — membership is per room
+# ---------------------------------------------------------------------------
+
+def test_rm_cross_room_isolation(client):
+    """A member of room A has no read/post rights in room B it never joined."""
+    room_a = _create_room(client, title="Room A")
+    room_b = _create_room(client, title="Room B")
+    assert _add(client, room_a, AGENT_IDS["triage"], role="recorder").status_code == 200
+
+    # triage is a member of A only.
+    assert _post(client, room_a, "triage").status_code == 200
+    assert _post(client, room_b, "triage").status_code == 403
+    read_b = client.get(
+        f"/api/rooms/{room_b}/messages", headers=_headers("triage")
+    )
+    assert read_b.status_code == 403

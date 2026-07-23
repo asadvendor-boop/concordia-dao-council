@@ -44,7 +44,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from .demo_cleanup import ensure_demo_tables
+from .demo_cleanup import (
+    ensure_demo_tables,
+    is_protected_proposal_id,
+    is_strict_demo_proposal_id,
+)
 from shared.config import llm_readiness_status
 from shared.runtime_secrets import read_secret
 
@@ -113,6 +117,31 @@ _DEMO_PROPOSAL_PREFIX = "DAO-DEMO-"  # never collides with DAO-PROP-6CB25C
 _ACTIVATION_WINDOW_SECONDS = 600
 _PER_CLIENT_ACTIVATION_LIMIT = 3
 _GLOBAL_ACTIVATION_LIMIT = 20
+
+# Durable capability ISSUANCE admission (WP3-6): per-client + global fixed-window
+# limits, outstanding + retained-row caps, bounded expired-row GC. Atomic
+# admission across independent DB connections is enforced by wrapping the whole
+# check-and-insert in one BEGIN IMMEDIATE (the shared SQLite write lock
+# serialises concurrent issuers).
+_ISSUE_WINDOW_SECONDS = 600
+_PER_CLIENT_ISSUE_LIMIT = 12
+_GLOBAL_ISSUE_LIMIT = 120
+_MAX_OUTSTANDING_CAPABILITIES = 2000  # unconsumed AND unexpired
+_MAX_RETAINED_CAPABILITIES = 10000    # all rows, including expired/consumed
+_EXPIRED_CLEANUP_BATCH = 100          # bounded GC per issuance
+
+# Durable capability lifecycle (WP3-1): a RUNNING claim older than this lease is
+# treated as crashed and recovered to a terminal FAILED WITHOUT re-running the
+# pipeline. The lease exceeds the capability lifetime so an unexpired run always
+# recovers via expiry first.
+_RUNNING_LEASE_SECONDS = 180
+
+# Durable lifecycle state values (ISSUED -> RUNNING -> SUCCEEDED|FAILED).
+_STATE_ISSUED = "ISSUED"
+_STATE_RUNNING = "RUNNING"
+_STATE_SUCCEEDED = "SUCCEEDED"
+_STATE_FAILED = "FAILED"
+_TERMINAL_STATES = frozenset({_STATE_SUCCEEDED, _STATE_FAILED})
 
 
 class DemoTriggerRequest(BaseModel):
@@ -357,6 +386,169 @@ def _activation_counts(db, client_binding_hash_hex: str) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
+# Capability issuance admission (WP3-6)
+# ---------------------------------------------------------------------------
+
+def _issue_rate_error() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "Demo capability issuance rate limit reached",
+            "error_code": "issue_rate_limited",
+        },
+        status_code=429,
+    )
+
+
+def _issue_capacity_error() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "Demo capability issuance capacity exhausted",
+            "error_code": "issue_capacity_exhausted",
+        },
+        status_code=503,
+    )
+
+
+def _counter_value(db, scope: str, client_key: str, window_start: int) -> int:
+    row = db.execute(
+        "SELECT count FROM demo_capability_issue_counters "
+        "WHERE scope=? AND client_key=? AND window_start=?",
+        (scope, client_key, window_start),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _bump_counter(db, scope: str, client_key: str, window_start: int) -> None:
+    db.execute(
+        "INSERT INTO demo_capability_issue_counters "
+        "(scope, client_key, window_start, count) VALUES (?, ?, ?, 1) "
+        "ON CONFLICT(scope, client_key, window_start) DO UPDATE SET "
+        "count=count+1",
+        (scope, client_key, window_start),
+    )
+
+
+def _admit_and_persist_capability(db, minted: dict[str, Any]) -> JSONResponse | None:
+    """Atomic issuance admission + durable capability insert (WP3-6).
+
+    One ``BEGIN IMMEDIATE`` runs bounded expired-row GC, retained/outstanding
+    capacity checks, durable per-client + global fixed-window rate admission,
+    and the ``demo_capabilities`` insert. Because the whole check-then-write is
+    under the shared SQLite write lock, concurrent issuers on independent
+    connections cannot bypass the limits. Returns an error response on refusal,
+    or ``None`` when the capability was persisted.
+    """
+    now = int(minted["issued_at"])
+    client_key = minted["client_binding_hash"]
+    window_start = (now // _ISSUE_WINDOW_SECONDS) * _ISSUE_WINDOW_SECONDS
+
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        # Bounded GC of expired, UNCONSUMED capabilities (consumed/terminal rows
+        # are never touched) and of stale counter windows.
+        db.execute(
+            "DELETE FROM demo_capabilities WHERE capability_id IN ("
+            "  SELECT capability_id FROM demo_capabilities "
+            "  WHERE consumed_at IS NULL AND expires_at <= ? "
+            "  ORDER BY expires_at ASC LIMIT ?"
+            ")",
+            (now, _EXPIRED_CLEANUP_BATCH),
+        )
+        db.execute(
+            "DELETE FROM demo_capability_issue_counters WHERE window_start < ?",
+            (window_start - _ISSUE_WINDOW_SECONDS,),
+        )
+
+        retained = db.execute(
+            "SELECT COUNT(*) FROM demo_capabilities"
+        ).fetchone()[0]
+        if retained >= _MAX_RETAINED_CAPABILITIES:
+            db.execute("COMMIT")
+            return _issue_capacity_error()
+
+        outstanding = db.execute(
+            "SELECT COUNT(*) FROM demo_capabilities "
+            "WHERE consumed_at IS NULL AND expires_at > ?",
+            (now,),
+        ).fetchone()[0]
+        if outstanding >= _MAX_OUTSTANDING_CAPABILITIES:
+            db.execute("COMMIT")
+            return _issue_capacity_error()
+
+        client_count = _counter_value(db, "client", client_key, window_start)
+        global_count = _counter_value(db, "global", "global", window_start)
+        if (
+            client_count >= _PER_CLIENT_ISSUE_LIMIT
+            or global_count >= _GLOBAL_ISSUE_LIMIT
+        ):
+            db.execute("COMMIT")
+            return _issue_rate_error()
+
+        _bump_counter(db, "client", client_key, window_start)
+        _bump_counter(db, "global", "global", window_start)
+        db.execute(
+            "INSERT INTO demo_capabilities "
+            "(capability_id, scenario_id, client_binding_hash, nonce_hash, "
+            "issued_at, expires_at, state) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                minted["capability_id"],
+                minted["scenario_id"],
+                minted["client_binding_hash"],
+                minted["nonce_hash"],
+                minted["issued_at"],
+                minted["expires_at"],
+                _STATE_ISSUED,
+            ),
+        )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Preallocated demo-proposal identity (WP3-2)
+# ---------------------------------------------------------------------------
+
+def _assert_demo_proposal_id(preallocated: str, observed: str) -> None:
+    """Require ``observed`` to EXACTLY equal the preallocated strict demo id.
+
+    Enforced BEFORE the first proposal mutation: a canonical/historical,
+    pre-existing, or otherwise non-matching id (even one that happens to equal a
+    protected id) fails closed.
+    """
+    if not is_strict_demo_proposal_id(preallocated) or is_protected_proposal_id(
+        preallocated
+    ):
+        raise ValueError("preallocated demo proposal id is not a strict demo id")
+    if observed != preallocated:
+        raise ValueError(
+            "simulator/preparer proposal id does not equal the preallocated "
+            "DAO-DEMO-* id"
+        )
+    if not is_strict_demo_proposal_id(observed) or is_protected_proposal_id(observed):
+        raise ValueError("observed proposal id is not a strict demo id")
+
+
+async def _run_simulator_scenario(
+    endpoint: str, requested_proposal_id: str
+) -> dict[str, Any]:
+    """Activate one simulator scenario and return its JSON payload.
+
+    Extracted so the preallocated-id contract can be unit/integration tested
+    without a live proposal-simulator service.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        response = await http.post(
+            f"{PROPOSAL_SIMULATOR_URL}{endpoint}",
+            json={"proposal_id": requested_proposal_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+# ---------------------------------------------------------------------------
 # Simulator payload validation (unchanged pipeline semantics)
 # ---------------------------------------------------------------------------
 
@@ -471,25 +663,53 @@ async def _execute_demo_trigger(
     proposal_id = ""
 
     async with _trigger_lock:
+        # Preallocate the exact, unique demo-proposal identity BEFORE any
+        # mutation (WP3-2). The distinct DAO-DEMO- prefix can never collide
+        # with the canonical DAO-PROP-6CB25C namespace, and it is validated
+        # strict + non-protected before use.
+        demo_proposal_id = (
+            f"{_DEMO_PROPOSAL_PREFIX}{uuid.uuid4().hex[:6].upper()}"
+        )
+        if not is_strict_demo_proposal_id(demo_proposal_id) or is_protected_proposal_id(
+            demo_proposal_id
+        ):  # pragma: no cover — defensive; uuid suffix is always strict
+            return 500, {
+                "success": False,
+                "error": "Failed to allocate a demo proposal id",
+            }
+
+        # Reserve run provenance BEFORE the first durable mutation (WP3-3).
+        # Kept on EVERY partial failure so the run stays discoverable and
+        # exactly cleanable via remove_demo_proposals(db, demo_run_id).
+        ensure_demo_tables(db)
+        db.execute(
+            "INSERT OR IGNORE INTO demo_runs "
+            "(demo_run_id, proposal_id, scenario_id, is_demo, created_at) "
+            "VALUES (?, ?, ?, 1, ?)",
+            (
+                demo_run_id,
+                demo_proposal_id,
+                scenario_type,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
         try:
-            # Distinct demo prefix — can never collide with the canonical
-            # DAO-PROP-6CB25C namespace record.
-            requested_proposal_id = (
-                f"{_DEMO_PROPOSAL_PREFIX}{uuid.uuid4().hex[:6].upper()}"
+            simulator_payload = await _run_simulator_scenario(
+                endpoint, demo_proposal_id
             )
-            async with httpx.AsyncClient(timeout=10.0) as http:
-                response = await http.post(
-                    f"{PROPOSAL_SIMULATOR_URL}{endpoint}",
-                    json={"proposal_id": requested_proposal_id},
-                )
-                response.raise_for_status()
-                simulator_payload = response.json()
 
             if not isinstance(simulator_payload, dict):
                 raise ValueError("simulator response was not a JSON object")
-            proposal_id, signal_payload = _validate_signal_payload(
+            returned_proposal_id, signal_payload = _validate_signal_payload(
                 scenario_type, simulator_payload
             )
+
+            # The simulator/preparer id MUST equal the preallocated id, checked
+            # BEFORE the first proposal mutation (WP3-2). Canonical/historical
+            # or pre-existing ids fail closed here.
+            _assert_demo_proposal_id(demo_proposal_id, returned_proposal_id)
+            proposal_id = demo_proposal_id
 
             # Cooldown starts only after simulator activation succeeds,
             # preserving a deterministic one-click demo path.
@@ -518,6 +738,8 @@ async def _execute_demo_trigger(
                 prepared = await submission.prepare(
                     signal, idempotency_key=str(uuid.uuid4())
                 )
+                # The sealed proposal id must still equal the preallocated id.
+                _assert_demo_proposal_id(demo_proposal_id, prepared.proposal_id)
 
                 recorder = Recorder()
                 room_title = (
@@ -542,21 +764,6 @@ async def _execute_demo_trigger(
                     room_id=room_id,
                 )
 
-            # Durable provenance: every demo-created record carries
-            # demo_run_id + is_demo=true.
-            ensure_demo_tables(db)
-            db.execute(
-                "INSERT OR IGNORE INTO demo_runs "
-                "(demo_run_id, proposal_id, scenario_id, is_demo, created_at) "
-                "VALUES (?, ?, ?, 1, ?)",
-                (
-                    demo_run_id,
-                    prepared.proposal_id,
-                    scenario_type,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-
             return 200, {
                 "success": True,
                 "scenario_type": scenario_type,
@@ -577,6 +784,8 @@ async def _execute_demo_trigger(
                 scenario_type,
                 type(exc).__name__,
             )
+            # Provenance is intentionally NOT removed — the partial run must
+            # stay discoverable and exactly cleanable (WP3-3).
             if simulator_active and proposal_id:
                 try:
                     async with httpx.AsyncClient(timeout=5.0) as http:
@@ -642,20 +851,11 @@ async def issue_demo_capability(body: CapabilityIssueRequest, request: Request):
 
     db = request.app.state.db
     ensure_demo_tables(db)
-    db.execute(
-        "INSERT INTO demo_capabilities "
-        "(capability_id, scenario_id, client_binding_hash, nonce_hash, "
-        "issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            minted["capability_id"],
-            minted["scenario_id"],
-            minted["client_binding_hash"],
-            minted["nonce_hash"],
-            minted["issued_at"],
-            minted["expires_at"],
-        ),
-    )
-    db.commit()
+    # Durable per-client/global rate + capacity admission and the capability
+    # insert happen atomically in one BEGIN IMMEDIATE (WP3-6).
+    admission_error = _admit_and_persist_capability(db, minted)
+    if admission_error is not None:
+        return admission_error
 
     # Frozen issue-response shape: exactly these four fields.
     return {
@@ -723,55 +923,113 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
 
     db = request.app.state.db
     ensure_demo_tables(db)
-    row = db.execute(
-        "SELECT * FROM demo_capabilities WHERE capability_id=?",
-        (payload["capability_id"],),
-    ).fetchone()
-    if (
-        row is None
-        or row["scenario_id"] != payload["scenario_id"]
-        or row["client_binding_hash"] != payload["client_binding_hash"].hex()
-        or row["nonce_hash"] != payload["nonce_hash"]
-    ):
-        # Signed but not present/consistent in the durable ledger — refuse.
-        return JSONResponse(
-            {"error": "Invalid capability", "error_code": "invalid_capability"},
-            status_code=401,
-        )
+    client_hash_hex = payload["client_binding_hash"].hex()
 
-    if row["consumed_at"] is not None:
-        # One-use with idempotent exact-retry semantics.
-        return _stored_capability_response(row)
-
-    client_count, global_count = _activation_counts(
-        db, payload["client_binding_hash"].hex()
-    )
-    if (
-        client_count >= _PER_CLIENT_ACTIVATION_LIMIT
-        or global_count >= _GLOBAL_ACTIVATION_LIMIT
-    ):
-        # Throttled BEFORE consumption — the capability stays usable within
-        # its remaining lifetime.
-        return JSONResponse(
-            {"error": "Demo activation limit reached", "error_code": "throttled"},
-            status_code=429,
-        )
-
-    # Atomic one-use claim.
-    cursor = db.execute(
-        "UPDATE demo_capabilities SET consumed_at=? "
-        "WHERE capability_id=? AND consumed_at IS NULL",
-        (now, payload["capability_id"]),
-    )
-    db.commit()
-    if cursor.rowcount != 1:
+    # Durable capability lifecycle (WP3-1 / addendum 1-2). ONE BEGIN IMMEDIATE
+    # dispatches terminal/running retries, recovers a crashed/expired RUNNING
+    # claim WITHOUT re-running, enforces activation limits, and atomically
+    # claims ISSUED -> RUNNING. No retry path can ever return an empty 200.
+    demo_run_id: str | None = None
+    db.execute("BEGIN IMMEDIATE")
+    try:
         row = db.execute(
             "SELECT * FROM demo_capabilities WHERE capability_id=?",
             (payload["capability_id"],),
         ).fetchone()
-        return _stored_capability_response(row)
+        if (
+            row is None
+            or row["scenario_id"] != payload["scenario_id"]
+            or row["client_binding_hash"] != client_hash_hex
+            or row["nonce_hash"] != payload["nonce_hash"]
+        ):
+            # Signed but not present/consistent in the durable ledger — refuse.
+            db.execute("COMMIT")
+            return JSONResponse(
+                {"error": "Invalid capability", "error_code": "invalid_capability"},
+                status_code=401,
+            )
 
-    demo_run_id = f"demo-run-{uuid.uuid4().hex}"
+        state = row["state"] or _STATE_ISSUED
+
+        if state in _TERMINAL_STATES:
+            # Terminal retry returns the EXACT stored status/body.
+            db.execute("COMMIT")
+            return _stored_capability_response(row)
+
+        if state == _STATE_RUNNING:
+            lease_deadline = int(row["consumed_at"] or 0) + _RUNNING_LEASE_SECONDS
+            if now < lease_deadline and now < int(row["expires_at"]):
+                # A concurrent, still-in-flight retry: honest 202 with the SAME
+                # run identity — never an empty 200.
+                running_run_id = row["demo_run_id"]
+                db.execute("COMMIT")
+                return JSONResponse(
+                    {
+                        "schema_version": "demo-run-v1",
+                        "status": "running",
+                        "demo_run_id": running_run_id,
+                        "scenario_id": row["scenario_id"],
+                        "is_demo": True,
+                    },
+                    status_code=202,
+                )
+            # Crash/expiry recovery: transition to terminal FAILED WITHOUT
+            # re-running any mutation.
+            crash_body = {
+                "schema_version": "demo-run-v1",
+                "status": "failed",
+                "error": "Demo run did not finish (crash/expiry recovery)",
+                "demo_run_id": row["demo_run_id"],
+                "scenario_id": row["scenario_id"],
+                "is_demo": True,
+            }
+            db.execute(
+                "UPDATE demo_capabilities SET state=?, response_status=?, "
+                "response_json=? WHERE capability_id=? AND state=?",
+                (
+                    _STATE_FAILED,
+                    503,
+                    json.dumps(crash_body),
+                    payload["capability_id"],
+                    _STATE_RUNNING,
+                ),
+            )
+            db.execute("COMMIT")
+            return JSONResponse(crash_body, status_code=503)
+
+        # state == ISSUED — enforce activation limits, then claim RUNNING.
+        client_count, global_count = _activation_counts(db, client_hash_hex)
+        if (
+            client_count >= _PER_CLIENT_ACTIVATION_LIMIT
+            or global_count >= _GLOBAL_ACTIVATION_LIMIT
+        ):
+            # Throttled BEFORE consumption — the capability stays ISSUED and
+            # usable within its remaining lifetime.
+            db.execute("COMMIT")
+            return JSONResponse(
+                {"error": "Demo activation limit reached", "error_code": "throttled"},
+                status_code=429,
+            )
+
+        demo_run_id = f"demo-run-{uuid.uuid4().hex}"
+        db.execute(
+            "UPDATE demo_capabilities SET state=?, consumed_at=?, demo_run_id=? "
+            "WHERE capability_id=? AND state=?",
+            (
+                _STATE_RUNNING,
+                now,
+                demo_run_id,
+                payload["capability_id"],
+                _STATE_ISSUED,
+            ),
+        )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+    # This request now exclusively owns the RUNNING claim. The pipeline runs
+    # OUTSIDE the write lock; provenance is reserved inside it (WP3-3).
     status_code, trigger_payload = await _execute_demo_trigger(
         db,
         payload["scenario_id"],
@@ -788,22 +1046,35 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
             "is_demo": True,
             "created_proposal_ids": [trigger_payload.get("proposal_id")],
         }
+        terminal_state = _STATE_SUCCEEDED
     else:
         # Honest degraded state — no fabricated success.
         response_body = trigger_payload
+        terminal_state = _STATE_FAILED
 
-    response_status = 200 if response_body.get("schema_version") == "demo-run-v1" else status_code
-    db.execute(
-        "UPDATE demo_capabilities SET demo_run_id=?, response_status=?, "
-        "response_json=? WHERE capability_id=?",
-        (
-            demo_run_id,
-            response_status,
-            json.dumps(response_body),
-            payload["capability_id"],
-        ),
+    response_status = (
+        200 if response_body.get("schema_version") == "demo-run-v1" else status_code
     )
-    db.commit()
+
+    # Record the terminal state + stored response atomically so terminal
+    # retries replay the exact status/body.
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute(
+            "UPDATE demo_capabilities SET state=?, response_status=?, "
+            "response_json=? WHERE capability_id=? AND state=?",
+            (
+                terminal_state,
+                response_status,
+                json.dumps(response_body),
+                payload["capability_id"],
+                _STATE_RUNNING,
+            ),
+        )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
 
     return JSONResponse(response_body, status_code=response_status)
 
