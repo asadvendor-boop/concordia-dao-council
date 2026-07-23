@@ -101,6 +101,19 @@ function balanceBundle({ account, blockHash, blockHeight, stateRootHash, balance
   };
 }
 
+function snapshotObservation({ nodeUrl, capturedAt, bundle }) {
+  return {
+    node_url: nodeUrl,
+    captured_at: capturedAt,
+    status_request: bundle.status_request,
+    status_response: bundle.status,
+    block_request: bundle.block_request,
+    block_response: bundle.block,
+    balance_request: bundle.balance_request,
+    balance_response: bundle.balance_response,
+  };
+}
+
 function finalityNode(nodeUrl, offset, deployHash, finalityHeight) {
   const statusId = 100 + offset;
   const transactionId = 110 + offset;
@@ -234,7 +247,7 @@ export async function buildNativeTreasuryArtifact(options = {}) {
   const source = body.source_account;
   const recipient = body.recipient_account;
   const deployHash = core.executor_journal.deploy_hash;
-  const snapshot = balanceBundle({
+  const primarySnapshotBundle = balanceBundle({
     account: source,
     blockHash: body.snapshot_block_hash,
     blockHeight: snapshotHeight,
@@ -242,6 +255,32 @@ export async function buildNativeTreasuryArtifact(options = {}) {
     balance: body.treasury_snapshot_balance_motes,
     idBase: 10,
   });
+  const secondarySnapshotBundle = balanceBundle({
+    account: source,
+    blockHash: body.snapshot_block_hash,
+    blockHeight: snapshotHeight,
+    stateRootHash: SNAPSHOT_ROOT,
+    balance: body.treasury_snapshot_balance_motes,
+    idBase: 60,
+  });
+  const snapshot = {
+    schema_id: "concordia.native-treasury-snapshot.v1",
+    network: "casper-test",
+    source_account_hash: source,
+    expected_balance_motes: body.treasury_snapshot_balance_motes,
+    observations: [
+      snapshotObservation({
+        nodeUrl: "https://snapshot-a.example.com/rpc",
+        capturedAt: "2026-07-22T23:58:00Z",
+        bundle: primarySnapshotBundle,
+      }),
+      snapshotObservation({
+        nodeUrl: "https://snapshot-b.example.com/rpc",
+        capturedAt: "2026-07-22T23:58:01Z",
+        bundle: secondarySnapshotBundle,
+      }),
+    ],
+  };
   const preRecipient = balanceBundle({
     account: recipient,
     blockHash: body.snapshot_block_hash,
@@ -271,7 +310,7 @@ export async function buildNativeTreasuryArtifact(options = {}) {
     finalityNode("https://rpc-b.example.com/rpc", 1, deployHash, finalityHeight),
   ];
   const balanceEvidence = {
-    pre_source: snapshot,
+    pre_source: primarySnapshotBundle,
     pre_recipient: preRecipient,
     post_source: postSource,
     post_recipient: postRecipient,
@@ -287,6 +326,9 @@ export async function buildNativeTreasuryArtifact(options = {}) {
   });
   const observedHeight = finalityHeight + 1;
   const observedHash = "53".repeat(32);
+  const authorizationBlockHash = authorizationHeight === finalityHeight
+    ? FINALITY_BLOCK
+    : "51".repeat(32);
   const digestMaterial = canonicalTranscriptJson(
     {
       post_balance_evidence_sha256: sha256Ascii(
@@ -307,8 +349,12 @@ export async function buildNativeTreasuryArtifact(options = {}) {
     release_identity: core.release_identity,
     authorization: {
       ...core.authorization,
+      exact_v3_proof: {},
       v3_readback: {},
       snapshot,
+      snapshot_sha256: sha256Ascii(
+        canonicalTranscriptJson(snapshot, "fixture treasury snapshot"),
+      ),
     },
     executor_journal: {
       state: "PROVEN",
@@ -339,6 +385,7 @@ export async function buildNativeTreasuryArtifact(options = {}) {
     balance_evidence: balanceEvidence,
     bounded_transfer_scan: {
       authorization_block_height: authorizationHeight,
+      authorization_block_hash: authorizationBlockHash,
       observed_through_block_height: observedHeight,
       observed_through_block_hash: observedHash,
       scanned_block_count: transcript.block_observations.length,

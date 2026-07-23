@@ -211,6 +211,8 @@ CREATE TABLE IF NOT EXISTS treasury_execution_journal (
     snapshot_block_sha256 TEXT NOT NULL,
     snapshot_balance_request_sha256 TEXT NOT NULL,
     snapshot_balance_response_sha256 TEXT NOT NULL,
+    treasury_snapshot_artifact_json TEXT NOT NULL,
+    treasury_snapshot_artifact_sha256 TEXT NOT NULL,
     finalization_block_hash BLOB NOT NULL CHECK(length(finalization_block_hash) = 32),
     finalization_block_height TEXT NOT NULL,
     finalization_state_root_hash BLOB NOT NULL CHECK(length(finalization_state_root_hash) = 32),
@@ -526,6 +528,10 @@ class TreasuryExecutor:
             snapshot_balance_request_sha256=str(row["snapshot_balance_request_sha256"]),
             snapshot_balance_response_sha256=str(
                 row["snapshot_balance_response_sha256"]
+            ),
+            treasury_snapshot_artifact_json=str(row["treasury_snapshot_artifact_json"]),
+            treasury_snapshot_artifact_sha256=str(
+                row["treasury_snapshot_artifact_sha256"]
             ),
             finalization_block_hash=bytes(row["finalization_block_hash"]),
             finalization_block_height=int(row["finalization_block_height"]),
@@ -844,6 +850,8 @@ class TreasuryExecutor:
                     "snapshot_status_request_sha256, snapshot_status_sha256, "
                     "snapshot_block_request_sha256, snapshot_block_sha256, "
                     "snapshot_balance_request_sha256, snapshot_balance_response_sha256, "
+                    "treasury_snapshot_artifact_json, "
+                    "treasury_snapshot_artifact_sha256, "
                     "finalization_block_hash, finalization_block_height, "
                     "finalization_state_root_hash, package_hash, contract_hash, "
                     "deployment_domain, source_sha256, wasm_sha256, schema_sha256, "
@@ -854,7 +862,7 @@ class TreasuryExecutor:
                     "payment_amount_motes, state, created_at, updated_at"
                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                     "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         authorization.network,
                         authorization.action_id,
@@ -881,6 +889,8 @@ class TreasuryExecutor:
                         authorization.snapshot_block_sha256,
                         authorization.snapshot_balance_request_sha256,
                         authorization.snapshot_balance_response_sha256,
+                        authorization.treasury_snapshot_artifact_json,
+                        authorization.treasury_snapshot_artifact_sha256,
                         authorization.finalization_block_hash,
                         str(authorization.finalization_block_height),
                         authorization.finalization_state_root_hash,

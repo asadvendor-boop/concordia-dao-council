@@ -428,10 +428,15 @@ def _project_method_result(method: str, value: object) -> dict[str, object]:
         if "deploy" in result:
             result["deploy"] = _project_fields(result["deploy"], _DEPLOY_FIELDS)
         if "execution_info" in result:
-            result["execution_info"] = _project_fields(
-                result["execution_info"],
-                _EXECUTION_INFO_FIELDS,
-            )
+            execution_info = result["execution_info"]
+            if execution_info is None:
+                result["execution_info"] = None
+            elif type(execution_info) is not dict or set(execution_info) != set(
+                _EXECUTION_INFO_FIELDS
+            ):
+                raise RpcTransportError("public RPC execution schema is invalid")
+            else:
+                result["execution_info"] = copy.deepcopy(execution_info)
         if "execution_results" in result:
             execution_results = result["execution_results"]
             if type(execution_results) is not list:

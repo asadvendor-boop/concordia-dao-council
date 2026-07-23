@@ -1,0 +1,101 @@
+{
+  "schema_id": "concordia.treasury-snapshot-validator-parity.v1",
+  "cases": [
+    {
+      "id": "canonical-control",
+      "accept": true,
+      "field": "none",
+      "value": null
+    },
+    {
+      "id": "localhost-subdomain",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://foo.localhost/rpc"
+    },
+    {
+      "id": "uppercase-host",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://SNAPSHOT-A.EXAMPLE.COM/rpc"
+    },
+    {
+      "id": "trailing-dot-host",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://snapshot-a.example.com./rpc"
+    },
+    {
+      "id": "invalid-ipv4-shaped-host",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://999.999.999.999/rpc"
+    },
+    {
+      "id": "percent-encoded-host-label",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://%65xample.com/rpc"
+    },
+    {
+      "id": "percent-encoded-host-dot",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://a%2eb.example/rpc"
+    },
+    {
+      "id": "shorthand-ipv4-host",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://127.1.1/rpc"
+    },
+    {
+      "id": "octal-ipv4-host",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://0177.0.0.1/rpc"
+    },
+    {
+      "id": "underscore-host-label",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://foo_bar.example/rpc"
+    },
+    {
+      "id": "leading-hyphen-host-label",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://-bad.example/rpc"
+    },
+    {
+      "id": "trailing-hyphen-host-label",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://bad-.example/rpc"
+    },
+    {
+      "id": "empty-host-label",
+      "accept": false,
+      "field": "node_url",
+      "value": "https://foo..example/rpc"
+    },
+    {
+      "id": "space-separated-time",
+      "accept": false,
+      "field": "captured_at",
+      "value": "2026-07-22 23:58:00Z"
+    },
+    {
+      "id": "numeric-expected-balance",
+      "accept": false,
+      "field": "expected_balance_motes",
+      "value": 625000000000
+    },
+    {
+      "id": "leading-zero-expected-balance",
+      "accept": false,
+      "field": "expected_balance_motes",
+      "value": "0625000000000"
+    }
+  ]
+}

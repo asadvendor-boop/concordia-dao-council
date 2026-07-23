@@ -106,7 +106,9 @@ def test_native_treasury_artifact_has_exact_outer_contract_and_is_canonical(
         "exact_v3_proof",
         "v3_readback",
         "snapshot",
+        "snapshot_sha256",
     }
+    assert len(artifact["authorization"]["snapshot"]["observations"]) == 2
     assert set(artifact["executor_journal"]) == {
         "state",
         "signed_deploy_bytes_hex",
@@ -201,6 +203,19 @@ def test_native_treasury_artifact_reparses_emitted_balance_transcript(
                 execution_proof_sha256=digest,
             )
         )
+
+
+def test_native_treasury_artifact_requires_pre_source_to_equal_snapshot_observer_one(
+    tmp_path: Path,
+) -> None:
+    executor, authorization, proofs = _proof_inputs(
+        tmp_path,
+        alternate_pre_source=True,
+    )
+    entry = executor.prove_execution(_key(authorization), **proofs)
+
+    with pytest.raises(TreasuryExecutionArtifactError, match="snapshot.*observer"):
+        _build(entry)
 
 
 def test_native_treasury_artifact_reparses_emitted_bounded_scan(

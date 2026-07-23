@@ -166,18 +166,36 @@ def _proof_inputs(
     tmp_path: Path,
     *,
     scan_authorization_block_hash: bytes | None = None,
+    alternate_pre_source: bool = False,
 ):
     executor, authorization, finality = _finalized(tmp_path)
     pre_source = authorization.treasury_snapshot_balance_motes
     pre_recipient = 7_000_000_000
-    pre_source_proof = _balance(
-        account=SOURCE_ACCOUNT,
-        block_hash=authorization.snapshot_block_hash,
-        block_height=authorization.snapshot_block_height,
-        state_root=authorization.snapshot_state_root_hash,
-        balance=pre_source,
-        request_base=100,
-    )
+    if alternate_pre_source:
+        pre_source_proof = _balance(
+            account=SOURCE_ACCOUNT,
+            block_hash=authorization.snapshot_block_hash,
+            block_height=authorization.snapshot_block_height,
+            state_root=authorization.snapshot_state_root_hash,
+            balance=pre_source,
+            request_base=100,
+        )
+    else:
+        snapshot = json.loads(authorization.treasury_snapshot_artifact_json)
+        observation = snapshot["observations"][0]
+        pre_source_proof = verify_account_balance_at_block(
+            chain_status_request=observation["status_request"],
+            chain_status_payload=observation["status_response"],
+            canonical_block_request=observation["block_request"],
+            canonical_block_payload=observation["block_response"],
+            balance_request=observation["balance_request"],
+            balance_response=observation["balance_response"],
+            expected_account_hash=authorization.source_account,
+            expected_block_hash=authorization.snapshot_block_hash,
+            expected_block_height=authorization.snapshot_block_height,
+            expected_state_root_hash=authorization.snapshot_state_root_hash,
+            expected_balance_motes=pre_source,
+        )
     pre_recipient_proof = _balance(
         account=RECIPIENT_ACCOUNT,
         block_hash=authorization.snapshot_block_hash,

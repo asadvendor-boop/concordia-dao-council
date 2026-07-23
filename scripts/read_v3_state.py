@@ -24,6 +24,10 @@ from shared.casper_rpc_transport import (
     RpcTransportError,
     parse_rpc_authorization_file_args,
 )
+from shared.atomic_private_file import (
+    AtomicPrivateFileError,
+    write_private_file_once,
+)
 
 
 SCHEMA_ID = "concordia.v3-chain-readback.v1"
@@ -1073,9 +1077,9 @@ def main() -> int:
             block_hash=args.block_hash,
         )
         verify_and_seal_readback_artifact(artifact)
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(
-            json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        write_private_file_once(
+            args.out,
+            (json.dumps(artifact, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         )
         print(
             json.dumps(
@@ -1091,6 +1095,7 @@ def main() -> int:
         ReadbackValidationError,
         RpcEndpointPolicyError,
         RpcTransportError,
+        AtomicPrivateFileError,
         KeyError,
         TypeError,
         ValueError,
