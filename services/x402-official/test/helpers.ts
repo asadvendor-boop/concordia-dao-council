@@ -329,10 +329,15 @@ export class MockRegistry implements RegistryTransport {
 
 /**
  * A negative locator result carrying a well-formed finalized observation
- * boundary — the ONLY negative shape the pipeline may treat as proof that the
- * authorization nonce is unconsumed (safe to resubmit exactly once).
+ * boundary. Even this strongest negative shape proves ONLY "the nonce was not
+ * consumed as of that finalized snapshot" — NEVER that the original `/settle`
+ * submission didn't happen — so the pipeline must keep the row pending with
+ * ZERO additional facilitator calls. Its only affirmative use is expiry
+ * terminalization: with `blockTimestamp` strictly after the authorization's
+ * `valid_before` (and the window passed on the local clock), the contract can
+ * no longer accept the original transaction.
  */
-export function provedUnconsumed(
+export function unconsumedAtFinalizedBoundary(
   overrides: Partial<FinalizedObservationBoundary> = {},
 ): SettlementLocator {
   return {
@@ -341,6 +346,7 @@ export function provedUnconsumed(
       finalized: true,
       blockHeight: 424242,
       stateRootHash: "ee".repeat(32),
+      blockTimestamp: new Date().toISOString(),
       ...overrides,
     },
   };

@@ -82,6 +82,42 @@ describe("untrusted upstream text is never surfaced", () => {
   });
 });
 
+describe("no automatic-resubmission path exists in the service source (protocol-safety blocker)", () => {
+  // The removed defect: a negative used_nonces observation routed a reserved
+  // submission_started row back into a second facilitator /settle call
+  // (`resubmit_from_reserved`, serialized by `claimRecoveryLease`). The hard
+  // invariant is now "at most one facilitator /settle request per
+  // authorization, ever", so none of the identifiers that made up that path
+  // may reappear anywhere in src/.
+  const FORBIDDEN_RESUBMISSION_TOKENS = [
+    "resubmit_from_reserved",
+    "resubmitFromReserved",
+    "claimRecoveryLease",
+    "releaseRecoveryLease",
+    "SUBMISSION_LEASE_TTL",
+  ];
+
+  it("src/ contains none of the removed resubmission-path identifiers", () => {
+    const srcDir = join(here, "..", "src");
+    for (const entry of readdirSync(srcDir)) {
+      if (!entry.endsWith(".ts")) continue;
+      const text = readFileSync(join(srcDir, entry), "utf8");
+      for (const token of FORBIDDEN_RESUBMISSION_TOKENS) {
+        expect(
+          text.includes(token),
+          `src/${entry} still references removed resubmission token "${token}"`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("pipeline source keeps exactly one facilitator.settle call site", () => {
+    const text = readFileSync(join(here, "..", "src", "pipeline.ts"), "utf8");
+    const matches = text.match(/facilitator\s*\.\s*settle\s*\(/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+});
+
 describe("source tree is text-safe", () => {
   it("no test source file contains a raw NUL byte", () => {
     for (const entry of readdirSync(here)) {

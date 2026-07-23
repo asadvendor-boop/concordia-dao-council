@@ -100,6 +100,15 @@ export const REFUSAL_CODES = {
   SECRET_UNAVAILABLE: "secret_unavailable",
   SETTLEMENT_NOT_FINALIZED: "settlement_not_finalized",
   SETTLEMENT_EXECUTION_FAILED: "settlement_execution_failed",
+  /**
+   * Expiry terminalization of a lost-response settlement: the authorization's
+   * own validity window has passed AND a finalized observation strictly after
+   * `valid_before` shows the nonce unconsumed, so the on-chain contract can no
+   * longer accept the original transaction. Manual reauthorization (a fresh
+   * authorization/nonce from the payer) is required. Never emitted while the
+   * original submission could still land.
+   */
+  AUTHORIZATION_EXPIRED_UNRECOVERED: "authorization_expired_unrecovered",
   POST_SETTLE_READBACK_FAILED: "post_settle_readback_failed",
   FACILITATOR_REPORTED_FAILURE: "facilitator_reported_failure",
   /** Bounded stable codes for untrusted upstream facilitator reasons. */

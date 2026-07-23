@@ -1,20 +1,23 @@
 /**
- * Adversarial concurrency (security addendum, reviewer items 1 + 5).
+ * Adversarial concurrency (protocol-safety blocker).
  *
- * The reviewer reproduced a real race: two concurrent lost-response retries
- * both observed `found:false`, both received the resubmission path, and both
- * called `/settle` (3 total settle calls including the lost original). These
- * tests reproduce that race and then pin the fixed invariant: across N
- * concurrent callers there is EXACTLY ONE facilitator settlement, losers get a
- * bounded retryable refusal (never a crash, never a second settle), and a
- * negative locator result without a well-formed finalized observation boundary
- * is indeterminate — pending, never a resubmission.
+ * The reviewer's original race: two concurrent lost-response retries both
+ * observed `found:false`, both received a resubmission path, and both called
+ * `/settle` (3 total calls including the lost original). The first fix
+ * serialized resubmission behind a lease — but the reviewer's follow-up
+ * blocker is stronger: a finalized `used_nonces=false` observation proves only
+ * "not consumed yet", NOT "the first submission never happened", so ANY
+ * automatic resubmission is unsafe. These tests pin the corrected invariant:
+ * once submission_started is durably written, that authorization causes AT
+ * MOST ONE LIFETIME facilitator `/settle` call — across N concurrent callers,
+ * process restarts on the same volume, and any sequence of negative locator
+ * observations. Losers get a bounded retryable refusal (never a crash, never
+ * another settle call).
  */
 
 import { describe, expect, it } from "vitest";
 
 import { ServiceRefusal, upstreamUnavailable } from "../src/errors.js";
-import { FulfillmentLedger } from "../src/ledger.js";
 import { runSettle } from "../src/pipeline.js";
 import type { SettleResponseWire, SettlementLocator } from "../src/types.js";
 import { join } from "node:path";
@@ -23,7 +26,7 @@ import {
   goodPackageState,
   makeDeps,
   makeSignedRequest,
-  provedUnconsumed,
+  unconsumedAtFinalizedBoundary,
   readbackFor,
   tempDir,
   type TestHarness,
@@ -92,13 +95,15 @@ function expectBoundedOutcomes(
 }
 
 describe("concurrent lost-response recovery (reviewer race)", () => {
-  it("N concurrent retries from a reserved row issue EXACTLY ONE resubmission", async () => {
+  it("N concurrent retries observing finalized found:false: ALL pending, ONE lifetime settle call, no resubmission", async () => {
     const h = makeDeps();
     const made = await lostResponse(h);
     const nonceHex = made.payment.nonce.toString("hex");
-    // The lost attempt never reached the chain; the nonce is provably unused
-    // at an explicit finalized observation boundary.
-    h.chain.locators.set(nonceHex, provedUnconsumed());
+    // Every concurrent retry sees the nonce unconsumed at a finalized
+    // observation boundary. Under the superseded design this admitted one
+    // "safe" resubmission; the corrected invariant is that it admits NONE —
+    // the pending original can still land later.
+    h.chain.locators.set(nonceHex, unconsumedAtFinalizedBoundary());
     h.facilitator.settleResponse = {
       success: true,
       transaction: TX,
@@ -112,57 +117,73 @@ describe("concurrent lost-response recovery (reviewer race)", () => {
       runSettle(made.request, h.deps),
     ]);
 
-    // The reviewer's failure was 3 total settle calls (lost original + two
-    // concurrent resubmissions). The fixed invariant: 1 lost + EXACTLY 1
-    // recovery resubmission, no matter how many callers race.
-    expect(h.facilitator.settleCalls).toHaveLength(2);
-    const { fulfilled } = expectBoundedOutcomes(results, TX);
-    expect(fulfilled).toBeGreaterThanOrEqual(1);
-
+    // The reviewer's original failure was 3 total settle calls; the first fix
+    // allowed 2 (lost original + one leased resubmission). The corrected
+    // invariant: the lost original was this authorization's ONE lifetime call.
+    expect(h.facilitator.settleCalls).toHaveLength(1);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.reason).toBeInstanceOf(ServiceRefusal);
+        const refused = result.reason as ServiceRefusal;
+        expect(refused.code).toBe("reconciliation_pending");
+        expect(refused.retryable).toBe(true);
+      }
+    }
     const row = h.ledger.get(h.config.network, made.payment.signedPaymentPayloadHashHex);
-    expect(row?.state).toBe("finalized");
-    expect(row?.settlementTransactionHash).toBe(TX);
+    expect(row?.state).toBe("submission_started");
+    expect(row?.settlementTransactionHash).toBeNull();
 
-    // Any loser's retry converges on the stored response with no new traffic.
-    const replay = await runSettle(made.request, h.deps);
-    expect(replay.success).toBe(true);
-    expect(replay.transaction).toBe(TX);
-    expect(h.facilitator.settleCalls).toHaveLength(2);
+    // The original transaction eventually lands: adoption reconciles it with
+    // the lifetime settle-call count still exactly one.
+    h.chain.locators.set(nonceHex, { found: true, transactionHash: TX });
+    const adopted = await runSettle(made.request, h.deps);
+    expect(adopted.success).toBe(true);
+    expect(adopted.transaction).toBe(TX);
+    expect(h.facilitator.settleCalls).toHaveLength(1);
   });
 
-  it("recovery resubmission ownership is a durable CAS: a second ledger handle on the same volume cannot also claim it", async () => {
+  it("restart on the same durable volume: a second process observing finalized found:false stays pending — the reservation, not a lease, forbids submission", async () => {
     const dir = tempDir();
     const path = join(dir, "x402-official.db");
-    const h = makeDeps({}, path);
-    const made = await lostResponse(h);
-    const hash = made.payment.signedPaymentPayloadHashHex;
+    const h1 = makeDeps({}, path);
+    const made = await lostResponse(h1);
+    const nonceHex = made.payment.nonce.toString("hex");
+    h1.ledger.close();
 
-    // A second process (second connection on the same durable volume).
-    const other = new FulfillmentLedger(path);
-    const now = new Date();
-    const expires = new Date(now.getTime() + 60_000).toISOString();
-    const won = h.ledger.claimRecoveryLease(
-      h.config.network, hash, "lease-a", now.toISOString(), expires,
-    );
-    expect(won).toBe(true);
-    // The loser process must NOT be able to own resubmission concurrently.
-    const lost = other.claimRecoveryLease(
-      h.config.network, hash, "lease-b", now.toISOString(), expires,
-    );
-    expect(lost).toBe(false);
-    // After the lease expires, recovery ownership can be claimed again.
-    const later = new Date(now.getTime() + 61_000).toISOString();
-    const reclaimed = other.claimRecoveryLease(
-      h.config.network, hash, "lease-c", later,
-      new Date(now.getTime() + 121_000).toISOString(),
-    );
-    expect(reclaimed).toBe(true);
-    other.close();
+    // A fresh process on the same volume (its own transports, zero calls yet).
+    const h2 = makeDeps({}, path);
+    h2.registry.result = {
+      outcome: "found",
+      record: buildRegistryRecord(made.payment, h2.config),
+    };
+    h2.chain.locators.set(nonceHex, unconsumedAtFinalizedBoundary());
+    h2.facilitator.settleResponse = {
+      success: true,
+      transaction: TX,
+      network: h2.config.network,
+    };
+    const err = await refusal(() => runSettle(made.request, h2.deps));
+    expect(err.code).toBe("reconciliation_pending");
+    // ZERO settle calls from the new process: one lifetime call total.
+    expect(h2.facilitator.settleCalls).toHaveLength(0);
+    expect(
+      h2.ledger.get(h2.config.network, made.payment.signedPaymentPayloadHashHex)?.state,
+    ).toBe("submission_started");
+
+    // found:true in the new process adopts the ORIGINAL transaction only.
+    h2.chain.locators.set(nonceHex, { found: true, transactionHash: TX });
+    h2.chain.transactions.set(TX, readbackFor(made.payment, TX));
+    const adopted = await runSettle(made.request, h2.deps);
+    expect(adopted.success).toBe(true);
+    expect(adopted.transaction).toBe(TX);
+    expect(h2.facilitator.settleCalls).toHaveLength(0);
+    h2.ledger.close();
   });
 });
 
 describe("indeterminate negative locator results (no finalized boundary)", () => {
-  it("a bare found:false with NO observation boundary is indeterminate: pending, never resubmits", async () => {
+  it("a bare found:false with NO observation boundary is indeterminate: pending, never submits again", async () => {
     const h = makeDeps();
     const made = await lostResponse(h);
     const nonceHex = made.payment.nonce.toString("hex");
@@ -177,7 +198,7 @@ describe("indeterminate negative locator results (no finalized boundary)", () =>
     ).toBe("submission_started");
   });
 
-  it("a negative result observed at a NON-finalized boundary is indeterminate: pending, never resubmits", async () => {
+  it("a negative result observed at a NON-finalized boundary is indeterminate: pending, never submits again", async () => {
     const h = makeDeps();
     const made = await lostResponse(h);
     const nonceHex = made.payment.nonce.toString("hex");
@@ -199,7 +220,7 @@ describe("indeterminate negative locator results (no finalized boundary)", () =>
     ["malformed state root", { finalized: true, blockHeight: 7, stateRootHash: "not-hex" }],
     ["missing state root", { finalized: true, blockHeight: 7 }],
     ["boundary not an object", "finalized"],
-  ])("a malformed observation boundary (%s) is indeterminate: pending, never resubmits", async (_n, observed) => {
+  ])("a malformed observation boundary (%s) is indeterminate: pending, never submits again", async (_n, observed) => {
     const h = makeDeps();
     const made = await lostResponse(h);
     const nonceHex = made.payment.nonce.toString("hex");

@@ -142,27 +142,40 @@ export interface AuthorizationLocatorQuery {
 
 /**
  * Explicit finalized-state observation boundary for a NEGATIVE locator result.
- * A negative chain lookup is only proof of non-submission when the observer
- * asserts the exact finalized snapshot it queried: `finalized` must be the
- * literal `true`, `blockHeight` the finalized block height of that snapshot,
- * and `stateRootHash` the 64-hex state root actually queried. An ordinary
- * indexer miss, a mempool/non-finalized head read, or any malformed boundary
- * is NOT proof — the pipeline treats anything weaker as indeterminate and
- * stays pending (never resubmits).
+ * The observer must assert the exact finalized snapshot it queried:
+ * `finalized` must be the literal `true`, `blockHeight` the finalized block
+ * height of that snapshot, `stateRootHash` the 64-hex state root actually
+ * queried, and `blockTimestamp` the strict RFC3339 UTC timestamp of that
+ * finalized block.
+ *
+ * A negative observation — even at a finalized boundary — proves ONLY "the
+ * nonce was not consumed as of that snapshot". It is NEVER proof that the
+ * original facilitator submission did not happen: a pending first transaction
+ * can still land later, so the pipeline never uses a negative observation to
+ * submit again. Its only affirmative use is expiry terminalization: when the
+ * boundary's `blockTimestamp` is strictly after the authorization's
+ * `valid_before` (and the window has passed on the local clock), the on-chain
+ * contract can no longer accept the original transaction, so the row may be
+ * terminalized for manual reauthorization. Any malformed boundary is
+ * indeterminate — the row stays pending.
  */
 export interface FinalizedObservationBoundary {
   finalized: true;
   blockHeight: number;
   stateRootHash: string;
+  blockTimestamp: string;
 }
 
 /**
  * Authoritative result of locating a settlement by authorization identity.
- * `found:false` is only accepted as proof that the nonce is unconsumed when it
- * carries a well-formed `observed` finalized-state boundary (see
- * FinalizedObservationBoundary). An indeterminate observer must throw instead
- * of returning `found:false`; a boundary-less or malformed negative result is
- * treated as indeterminate by the pipeline (pending, no resubmission).
+ * `found:true` names the exact original transaction (adopt + reconcile, never
+ * a second settlement). `found:false` must carry a well-formed `observed`
+ * finalized-state boundary (see FinalizedObservationBoundary) and even then
+ * means only "keep waiting" — or, strictly after authorization expiry,
+ * "terminalize for manual reauthorization". An indeterminate observer must
+ * throw instead of returning `found:false`; a boundary-less or malformed
+ * negative result is treated as indeterminate by the pipeline (pending). No
+ * locator result ever triggers a facilitator submission.
  */
 export type SettlementLocator =
   | { found: true; transactionHash: string }

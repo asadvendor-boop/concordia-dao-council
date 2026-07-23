@@ -17,22 +17,30 @@
  * without ever issuing a second settlement (WP5-3). Untrusted upstream reason
  * strings are mapped to bounded local codes and never echoed or logged.
  *
+ * ONE HARD INVARIANT (protocol-safety blocker): AT MOST ONE facilitator
+ * `/settle` request per authorization, EVER — across retries, concurrency,
+ * restarts, lost responses, negative locator results, and elapsed time. The
+ * durable verified→submission_started CAS is the single exclusive-submission
+ * gate, taken BEFORE any settlement network I/O; states are monotonic, so once
+ * `submission_started` is journaled no code path can reach `/settle` for that
+ * authorization again. There is NO automatic resubmission: a `found:false`
+ * authorization lookup — even at a finalized observation boundary — proves
+ * only "not consumed yet", NOT "the first submission never happened" (a
+ * pending first transaction can still land later). A reserved lost-response
+ * row is resolved only by (a) adopting the exact original transaction when
+ * `found:true`, or (b) proven-expiry terminalization: once `valid_before` has
+ * passed AND a finalized observation strictly after `valid_before` shows the
+ * nonce unconsumed, the contract can no longer accept the original
+ * transaction, and the row terminalizes as `authorization_expired_unrecovered`
+ * (manual reauthorization with a FRESH authorization/nonce — never the old
+ * one). Anything weaker stays pending. New settlements for a NEW authorization
+ * are unaffected.
+ *
  * Security addendum:
- *  - Exactly-one-submission is enforced under CONCURRENCY: every path to a
- *    facilitator `/settle` call first takes durable exclusive ownership in the
- *    ledger (the verified→submission_started CAS for a fresh submission, the
- *    atomic recovery lease for a lost-response resubmission) BEFORE any
- *    settlement network I/O. A caller that loses any ownership CAS returns a
- *    bounded retryable pending refusal and never submits.
- *  - A negative authorization lookup is proof of non-submission ONLY when it
- *    asserts an explicit finalized observation boundary; anything weaker is
- *    indeterminate and stays pending.
  *  - Every stored-response replay is integrity-verified (canonical digest of
  *    the stored bytes + terminal-field binding to the row); a mismatch is a
  *    fail-closed integrity refusal, never a synthesized fallback.
  */
-
-import { randomUUID } from "node:crypto";
 
 import {
   ServiceRefusal,
@@ -63,6 +71,7 @@ import {
   type FulfillmentRow,
   type RowState,
 } from "./ledger.js";
+import { parseRfc3339Utc } from "./time.js";
 import type {
   ChainTransport,
   ConfiguredResource,
@@ -75,13 +84,6 @@ import type {
   ValidatedPayment,
   VerifyResponseWire,
 } from "./types.js";
-
-/**
- * Exclusive submission/recovery ownership window (security addendum, item 1).
- * Long enough to cover the credentialed settle + readback round trips; short
- * enough that a crashed owner's lease expires and recovery can proceed.
- */
-const SUBMISSION_LEASE_TTL_MS = 120_000;
 
 const HEX64_RE = /^[0-9a-f]{64}$/;
 
@@ -365,8 +367,7 @@ function writeFinalized(
 type Recovery =
   | { status: "finalized"; response: SettleResponseWire }
   | { status: "failed"; response: SettleResponseWire }
-  | { status: "pending" }
-  | { status: "unconsumed" };
+  | { status: "pending" };
 
 /**
  * Apply a chain readback to an observed row. A pending readback leaves the row
@@ -405,38 +406,70 @@ function applyReadback(
 }
 
 /**
- * A negative chain lookup (`found:false`) is proof of non-submission ONLY when
- * the observer explicitly asserts the finalized observation boundary it
- * queried: the literal `finalized:true`, a non-negative integer finalized
- * block height, and the 64-hex state root actually queried. Ordinary indexer
- * absence — or any weaker/malformed assertion — is NOT proof and is treated as
- * indeterminate (pending; never a resubmission).
+ * Extract the finalized observation boundary's block timestamp (epoch ms) from
+ * a NEGATIVE locator result. Returns a number ONLY when the whole boundary is
+ * well-formed: the literal `finalized:true`, a non-negative integer finalized
+ * block height, the 64-hex state root actually queried, and a strict RFC3339
+ * UTC block timestamp. Anything weaker or malformed is indeterminate (null).
+ *
+ * NOTE what even a well-formed boundary proves: ONLY "the nonce was not
+ * consumed as of that finalized snapshot" — NEVER "the original facilitator
+ * submission did not happen". No negative observation ever justifies a second
+ * `/settle` call; its only affirmative use is proven-expiry terminalization.
  */
-function isProvedUnconsumed(locator: SettlementLocator): boolean {
-  if (locator.found !== false) return false;
+function finalizedBoundaryTimestampMs(locator: SettlementLocator): number | null {
+  if (locator.found !== false) return null;
   const observed: unknown = (locator as { observed?: unknown }).observed;
-  if (typeof observed !== "object" || observed === null) return false;
+  if (typeof observed !== "object" || observed === null) return null;
   const boundary = observed as Record<string, unknown>;
   const height = boundary["blockHeight"];
   const stateRoot = boundary["stateRootHash"];
-  return (
-    boundary["finalized"] === true &&
-    typeof height === "number" &&
-    Number.isInteger(height) &&
-    height >= 0 &&
-    typeof stateRoot === "string" &&
-    HEX64_RE.test(stateRoot)
-  );
+  if (
+    boundary["finalized"] !== true ||
+    typeof height !== "number" ||
+    !Number.isInteger(height) ||
+    height < 0 ||
+    typeof stateRoot !== "string" ||
+    !HEX64_RE.test(stateRoot)
+  ) {
+    return null;
+  }
+  return parseRfc3339Utc(boundary["blockTimestamp"]);
+}
+
+/** Maximum epoch seconds still exactly representable after ×1000 (Date range). */
+const MAX_EPOCH_SECONDS = 8_640_000_000_000;
+
+/**
+ * The row's persisted `valid_before` (canonical U64 epoch seconds) as epoch
+ * milliseconds. Returns null (fail-safe: never terminalize) for any value that
+ * is not a safely representable epoch.
+ */
+function validBeforeEpochMs(row: FulfillmentRow): number | null {
+  if (!/^\d+$/.test(row.validBefore)) return null;
+  const seconds = Number(row.validBefore);
+  if (!Number.isSafeInteger(seconds) || seconds > MAX_EPOCH_SECONDS) return null;
+  return seconds * 1000;
 }
 
 /**
  * Reconcile one in-flight row against the chain. For a row with a recorded
  * deploy hash, read it back. For a row whose `/settle` response was lost (no
- * recorded hash), recover the deploy by exact authorization identity — adopting
- * an already-submitted transaction WITHOUT a second settlement, or proving the
- * nonce is unconsumed at an explicit finalized observation boundary so that
- * exactly one lease-holding caller may resubmit (WP5-3, security addendum
- * item 1). Never issues a facilitator call.
+ * recorded hash), poll for the EXACT original transaction by authorization
+ * identity (WP5-3):
+ *  - `found:true`  → adopt the original transaction and reconcile through the
+ *    readback path — never a second settlement.
+ *  - `found:false` — even at a finalized observation boundary — proves only
+ *    "not consumed yet": the row stays PENDING (the pending first transaction
+ *    can still land later). The ONLY exception is proven expiry: when
+ *    `valid_before` has passed on the local clock AND the finalized boundary's
+ *    block timestamp is strictly after `valid_before`, the on-chain contract
+ *    can no longer accept the original transaction, so the row terminalizes as
+ *    `authorization_expired_unrecovered` (manual reauthorization required)
+ *    through the ledger's terminal CAS — exactly one caller writes it.
+ *  - observer unavailable/indeterminate → pending.
+ * NEVER issues a facilitator call (hard invariant: at most one `/settle` per
+ * authorization, ever).
  */
 async function recoverInFlightRow(
   deps: PipelineDeps,
@@ -457,12 +490,35 @@ async function recoverInFlightRow(
       return { status: "pending" };
     }
     if (locator.found !== true) {
-      if (!isProvedUnconsumed(locator)) {
-        // Weaker than a finalized-boundary proof: indeterminate → pending.
-        return { status: "pending" };
+      const boundaryMs = finalizedBoundaryTimestampMs(locator);
+      const expiryMs = validBeforeEpochMs(current);
+      if (
+        boundaryMs !== null &&
+        expiryMs !== null &&
+        Date.now() > expiryMs &&
+        boundaryMs > expiryMs
+      ) {
+        // Proven expiry: the authorization's own validity window has passed
+        // AND a finalized observation strictly after valid_before shows the
+        // nonce unconsumed — the contract can no longer accept the original
+        // transaction. Terminalize (bounded code, replayable stored failure)
+        // via the existing terminal CAS: exactly one caller writes it, every
+        // racer adopts the durable outcome. Recovery now requires MANUAL
+        // reauthorization with a FRESH authorization/nonce — the old
+        // authorization is never resubmitted.
+        const response = writeTerminalFailure(
+          deps,
+          current.signedPaymentPayloadHash,
+          ["submission_started"],
+          REFUSAL_CODES.AUTHORIZATION_EXPIRED_UNRECOVERED,
+          "",
+        );
+        return { status: "failed", response };
       }
-      // Provably unconsumed at an explicit finalized observation boundary.
-      return { status: "unconsumed" };
+      // Not provably expired: keep waiting. A negative lookup — finalized
+      // boundary or not — never proves the first submission didn't happen,
+      // so it must never trigger another one.
+      return { status: "pending" };
     }
     try {
       current = deps.ledger.transition(
@@ -587,66 +643,56 @@ function transitionOrPending(
   hash: string,
   from: RowState[],
   to: RowState,
-  extra?: {
-    recoveryLeaseId?: string;
-    recoveryLeaseExpiresAt?: string;
-  },
 ): FulfillmentRow {
   try {
-    return deps.ledger.transition(deps.config.network, hash, from, to, extra);
+    return deps.ledger.transition(deps.config.network, hash, from, to);
   } catch (error) {
     if (error instanceof ServiceRefusal) throw error;
     throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
   }
 }
 
-type SubmissionMode =
-  | { freshVerify: true }
-  | { freshVerify: false; leaseId: string };
-
 /**
- * Submit a settlement exactly once, under concurrency (security addendum,
- * item 1). `freshVerify` runs the credentialed verify + claimed→verified CAS
- * for a genuinely new claim and takes the durable submission lease inside the
- * verified→submission_started CAS; a proven-unconsumed lost-response
- * resubmission arrives already holding the recovery lease. Either way, the
- * caller owns durable exclusive submission rights BEFORE the `/settle` network
- * I/O — a caller that loses any CAS returns pending and never submits.
+ * Submit a settlement for a genuinely NEW claim (or a resumed claimed/verified
+ * row that has never been submitted). This is the ONLY function that calls
+ * `facilitator.settle`, and the durable verified→submission_started CAS taken
+ * here — BEFORE the `/settle` network I/O — is the single exclusive-submission
+ * gate: exactly one caller (across processes and restarts) can ever journal
+ * `submission_started` for an authorization, states are monotonic, and no
+ * recovery path re-enters this function. That is the hard invariant: at most
+ * ONE facilitator `/settle` request per authorization, EVER. A caller that
+ * loses any CAS returns a bounded retryable pending refusal and never submits.
  */
 async function submitSettlement(
   deps: PipelineDeps,
   initialRow: FulfillmentRow,
   payment: ValidatedPayment,
-  mode: SubmissionMode,
 ): Promise<SettleResponseWire> {
   const { config } = deps;
   const hash = payment.signedPaymentPayloadHashHex;
   let row = initialRow;
-  let leaseId: string;
 
-  if (mode.freshVerify) {
-    try {
-      await requireActiveV8(deps.chain, config);
-    } catch (error) {
-      markDrift(deps, error);
-      throw error;
-    }
-    const rawVerify = await deps.facilitator.verify({
-      x402Version: 2,
-      paymentPayload: payment.paymentPayload,
-      paymentRequirements: payment.requirements,
-    });
-    const verifyResponse = validateVerifyResponse(rawVerify);
-    if (verifyResponse.isValid !== true) {
-      const code = boundFacilitatorReason(
-        verifyResponse.invalidReason,
-        REFUSAL_CODES.FACILITATOR_DECLINED,
-      );
-      return writeTerminalFailure(deps, hash, ["claimed", "verified"], code, "");
-    }
-    if (row.state === "claimed") {
-      row = transitionOrPending(deps, hash, ["claimed"], "verified");
-    }
+  try {
+    await requireActiveV8(deps.chain, config);
+  } catch (error) {
+    markDrift(deps, error);
+    throw error;
+  }
+  const rawVerify = await deps.facilitator.verify({
+    x402Version: 2,
+    paymentPayload: payment.paymentPayload,
+    paymentRequirements: payment.requirements,
+  });
+  const verifyResponse = validateVerifyResponse(rawVerify);
+  if (verifyResponse.isValid !== true) {
+    const code = boundFacilitatorReason(
+      verifyResponse.invalidReason,
+      REFUSAL_CODES.FACILITATOR_DECLINED,
+    );
+    return writeTerminalFailure(deps, hash, ["claimed", "verified"], code, "");
+  }
+  if (row.state === "claimed") {
+    row = transitionOrPending(deps, hash, ["claimed"], "verified");
   }
 
   // Fresh pre-settle drift guard, immediately before submission (§11 TOCTOU).
@@ -657,21 +703,10 @@ async function submitSettlement(
     throw error;
   }
 
-  if (mode.freshVerify) {
-    // Exclusive-ownership CAS: exactly one caller journals submission_started,
-    // taking the durable submission lease in the same atomic write.
-    leaseId = randomUUID();
-    row = transitionOrPending(deps, hash, ["verified"], "submission_started", {
-      recoveryLeaseId: leaseId,
-      recoveryLeaseExpiresAt: new Date(
-        Date.now() + SUBMISSION_LEASE_TTL_MS,
-      ).toISOString(),
-    });
-  } else {
-    // Lost-response resubmission: the recovery lease was claimed atomically
-    // before this call.
-    leaseId = mode.leaseId;
-  }
+  // Exclusive-ownership CAS: exactly one caller, ever, journals
+  // submission_started for this authorization. Once this durable write lands,
+  // the row can never return to a submittable state.
+  row = transitionOrPending(deps, hash, ["verified"], "submission_started");
   if (row.state !== "submission_started") {
     // Never submit without durable exclusive ownership.
     throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
@@ -687,11 +722,12 @@ async function submitSettlement(
     settleResponse = validateSettleResponse(rawSettle, config.network);
   } catch (error) {
     // Response lost/malformed after journaling: the attempt is over but its
-    // outcome is unrecorded. Release the exclusive lease (owner-checked); the
-    // nonce stays reserved by the durable submission_started row, and any
-    // resubmission must first re-prove the nonce unconsumed at a finalized
-    // observation boundary AND win the recovery lease. Never resubmit blindly.
-    deps.ledger.releaseRecoveryLease(config.network, hash, leaseId);
+    // outcome is unrecorded. The durable submission_started row keeps the
+    // authorization reserved FOREVER against another submission: every retry
+    // and startup reconciliation only polls for the exact original
+    // transaction (adopt on found:true) or terminalizes on proven expiry.
+    // There is no resubmission path — this `/settle` call was this
+    // authorization's one and only.
     if (error instanceof ServiceRefusal) throw error;
     throw upstreamUnavailable(REFUSAL_CODES.FACILITATOR_UNREACHABLE);
   }
@@ -763,10 +799,15 @@ async function submitSettlement(
 
 type ExistingResolution =
   | { kind: "response"; response: SettleResponseWire }
-  | { kind: "resume_new" }
-  | { kind: "resubmit_from_reserved"; leaseId: string };
+  | { kind: "resume_new" };
 
-/** Resolve an already-existing ledger row; returns a response or falls through. */
+/**
+ * Resolve an already-existing ledger row; returns a response or falls through
+ * to the fresh pipeline ONLY for a never-submitted claimed/verified row. A row
+ * that has reached submission_started can NEVER route back to a facilitator
+ * submission (hard invariant): its only exits are adopting the exact original
+ * transaction, proven-expiry terminalization, or staying pending.
+ */
 async function resolveExistingRow(
   deps: PipelineDeps,
   row: FulfillmentRow,
@@ -781,25 +822,9 @@ async function resolveExistingRow(
     if (recovery.status === "finalized" || recovery.status === "failed") {
       return { kind: "response", response: recovery.response };
     }
-    if (recovery.status === "pending") {
-      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
-    }
-    // Provably unconsumed. Exactly ONE caller may own resubmission: take the
-    // durable atomic recovery lease BEFORE any resubmission network I/O
-    // (item 1). Every loser stays pending and never resubmits.
-    const leaseId = randomUUID();
-    const now = Date.now();
-    const claimed = deps.ledger.claimRecoveryLease(
-      deps.config.network,
-      row.signedPaymentPayloadHash,
-      leaseId,
-      new Date(now).toISOString(),
-      new Date(now + SUBMISSION_LEASE_TTL_MS).toISOString(),
-    );
-    if (!claimed) {
-      throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
-    }
-    return { kind: "resubmit_from_reserved", leaseId };
+    // Pending: the original submission's outcome is still unknown — keep the
+    // durable row reserved and retry reconciliation later. NEVER submit again.
+    throw upstreamUnavailable(REFUSAL_CODES.RECONCILIATION_PENDING);
   }
   // claimed / verified: resume the pipeline using the STORED binding.
   return { kind: "resume_new" };
@@ -812,13 +837,7 @@ async function settleExistingRow(
 ): Promise<SettleResponseWire> {
   const resolved = await resolveExistingRow(deps, row);
   if (resolved.kind === "response") return resolved.response;
-  if (resolved.kind === "resubmit_from_reserved") {
-    return submitSettlement(deps, row, payment, {
-      freshVerify: false,
-      leaseId: resolved.leaseId,
-    });
-  }
-  return submitSettlement(deps, row, payment, { freshVerify: true });
+  return submitSettlement(deps, row, payment);
 }
 
 export async function runSettle(
@@ -843,15 +862,16 @@ export async function runSettle(
     // Concurrent claim raced us: resolve the now-existing row.
     return settleExistingRow(deps, claim.row, payment);
   }
-  return submitSettlement(deps, claim.row, payment, { freshVerify: true });
+  return submitSettlement(deps, claim.row, payment);
 }
 
 /**
  * Startup crash-safety: reconcile every journaled in-flight settlement so an
- * authorization nonce can never be reused (or resubmitted) through a crash gap.
- * A lost-response row with no recorded hash is recovered by authorization
- * identity when the observer can prove it; otherwise it stays reserved and a
- * later retry (with request context) submits exactly once.
+ * authorization nonce can never be reused — or submitted a second time —
+ * through a crash gap. A lost-response row with no recorded hash is resolved
+ * ONLY by adopting the exact original transaction (`found:true`) or by
+ * proven-expiry terminalization; anything else stays reserved and pending.
+ * Startup reconciliation never issues a facilitator call.
  */
 export async function reconcileLedgerOnStartup(
   deps: PipelineDeps,
@@ -863,7 +883,7 @@ export async function reconcileLedgerOnStartup(
     const recovery = await recoverInFlightRow(deps, row);
     if (recovery.status === "finalized") finalized += 1;
     else if (recovery.status === "failed") failed += 1;
-    else pending += 1; // pending or provably-unconsumed both await a retry
+    else pending += 1; // outcome still unknown: reserved, awaiting evidence
   }
   return { finalized, failed, pending };
 }

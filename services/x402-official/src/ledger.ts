@@ -22,9 +22,17 @@
  *    failed_terminal row requires its bounded failure code and a matching
  *    stored failure response. Corrupt/impossible rows fail closed
  *    (ledger_terminal_invariant_violated) and are never replayed as success.
- *  - Submission/recovery ownership is a durable atomic lease (CAS in one
- *    SQLite statement): no two callers/processes can own resubmission of a
- *    reserved `submission_started` row at the same time.
+ *  - HARD INVARIANT: at most ONE facilitator `/settle` request per
+ *    authorization, EVER. The durable verified→submission_started transition
+ *    CAS is the single exclusive-submission gate: exactly one caller across
+ *    all processes can ever journal `submission_started` for an
+ *    authorization, states are monotonic, and NO code path resubmits after a
+ *    lost response — a reserved row is resolved only by adopting the exact
+ *    original transaction or by proven-expiry terminalization.
+ *  - The recovery_lease_* columns are INERT legacy schema (retained additively
+ *    for volumes written by the previous fix, cleared on every transition).
+ *    The lease-claiming logic they once served existed only to serialize
+ *    automatic resubmission, which has been removed entirely.
  */
 
 import DatabaseConstructor from "better-sqlite3";
@@ -84,7 +92,10 @@ export interface FulfillmentRow extends FulfillmentBinding {
   responseJson: string | null;
   settledAt: string | null;
   failureReason: string | null;
-  /** Durable exclusive submission/recovery ownership (security addendum). */
+  /**
+   * INERT legacy columns (previous fix's resubmission lease). Retained only
+   * for additive schema compatibility; never set, cleared on every transition.
+   */
   recoveryLeaseId: string | null;
   recoveryLeaseExpiresAt: string | null;
   createdAt: string;
@@ -305,7 +316,9 @@ export class FulfillmentLedger {
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(CREATE_SQL);
-    // Additive migration for volumes created before the recovery lease.
+    // Additive migration for volumes created before the (now inert, legacy)
+    // recovery-lease columns existed. The columns stay so older volumes and
+    // this schema remain interchangeable; no logic reads or sets them.
     const columns = (
       this.db.prepare(`PRAGMA table_info(x402_fulfillments)`).all() as {
         name: string;
@@ -421,8 +434,8 @@ export class FulfillmentLedger {
    * to leave failed_terminal / regress from finalized. A transition to a
    * terminal state is validated against the terminal invariants INSIDE the
    * transaction, so a violating write rolls back (enforced on write). The
-   * recovery lease is set only when the new state's owner supplies one
-   * (verified → submission_started); every other transition clears it.
+   * inert legacy recovery_lease_* columns are cleared on every transition —
+   * nothing sets them anymore.
    */
   transition(
     network: string,
@@ -435,8 +448,6 @@ export class FulfillmentLedger {
       responseJson?: string;
       settledAt?: string;
       failureReason?: string;
-      recoveryLeaseId?: string;
-      recoveryLeaseExpiresAt?: string;
     },
   ): FulfillmentRow {
     const tx = this.db.transaction((): FulfillmentRow => {
@@ -465,8 +476,8 @@ export class FulfillmentLedger {
              response_json = COALESCE(?, response_json),
              settled_at = COALESCE(?, settled_at),
              failure_reason = COALESCE(?, failure_reason),
-             recovery_lease_id = ?,
-             recovery_lease_expires_at = ?,
+             recovery_lease_id = NULL,
+             recovery_lease_expires_at = NULL,
              updated_at = ?
            WHERE network = ? AND signed_payment_payload_hash = ?`,
         )
@@ -477,8 +488,6 @@ export class FulfillmentLedger {
           extra?.responseJson ?? null,
           extra?.settledAt ?? null,
           extra?.failureReason ?? null,
-          extra?.recoveryLeaseId ?? null,
-          extra?.recoveryLeaseExpiresAt ?? null,
           now,
           network,
           payloadHash,
@@ -490,61 +499,6 @@ export class FulfillmentLedger {
       return updated;
     });
     return tx.immediate();
-  }
-
-  /**
-   * Atomically claim exclusive ownership of resubmitting a reserved
-   * lost-response row (security addendum, item 1). One SQLite statement — a
-   * durable compare-and-swap: it succeeds only while the row is still
-   * `submission_started` with no recorded transaction and no live lease.
-   * Exactly one caller/process can win; every loser must stay pending and
-   * must NOT resubmit. A crashed winner's lease expires and can be reclaimed.
-   */
-  claimRecoveryLease(
-    network: string,
-    payloadHash: string,
-    leaseId: string,
-    nowIso: string,
-    expiresAtIso: string,
-  ): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE x402_fulfillments SET
-           recovery_lease_id = ?,
-           recovery_lease_expires_at = ?,
-           updated_at = ?
-         WHERE network = ? AND signed_payment_payload_hash = ?
-           AND state = 'submission_started'
-           AND settlement_transaction_hash IS NULL
-           AND (recovery_lease_id IS NULL
-                OR recovery_lease_expires_at IS NULL
-                OR recovery_lease_expires_at <= ?)`,
-      )
-      .run(leaseId, expiresAtIso, nowIso, network, payloadHash, nowIso);
-    return result.changes === 1;
-  }
-
-  /**
-   * Release an owned lease after a settle attempt whose outcome was NOT
-   * recorded (transport failure / malformed response). Owner-checked: only the
-   * exact lease id releases. Any later resubmission must first re-prove the
-   * nonce unconsumed at a finalized observation boundary.
-   */
-  releaseRecoveryLease(
-    network: string,
-    payloadHash: string,
-    leaseId: string,
-  ): void {
-    this.db
-      .prepare(
-        `UPDATE x402_fulfillments SET
-           recovery_lease_id = NULL,
-           recovery_lease_expires_at = NULL,
-           updated_at = ?
-         WHERE network = ? AND signed_payment_payload_hash = ?
-           AND recovery_lease_id = ?`,
-      )
-      .run(new Date().toISOString(), network, payloadHash, leaseId);
   }
 
   /** Rows that were in flight when the process last stopped. */
