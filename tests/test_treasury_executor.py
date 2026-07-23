@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import multiprocessing
 import sqlite3
 import threading
@@ -16,7 +15,6 @@ import pytest
 from pycspr.factory.accounts import parse_private_key_bytes
 from pycspr.types.crypto import KeyAlgorithm
 
-from shared.actions_v3 import build_native_material
 from shared.casper_state_proof import verify_account_balance_at_block
 from shared.native_transfer_deploy import (
     DEFAULT_NATIVE_TRANSFER_PAYMENT_MOTES,
@@ -36,20 +34,19 @@ from shared.treasury_executor import (
 from shared.v3_authorization import (
     V3DeploymentIdentity,
     VerifiedNativeAuthorization,
+    verify_exact_v3_finalization,
     verify_native_authorization,
 )
-from tests.v3_readback_fixtures import sealed_v3_readback
+from scripts.read_v3_state import verify_and_seal_readback_artifact
+from tests.v3_treasury_fixtures import treasury_v3_proof
 
 
-VECTOR = Path(__file__).parent / "golden/envelope_v3/native_transfer/GV-NT-01.json"
 SOURCE_KEY = parse_private_key_bytes(bytes(range(1, 33)), KeyAlgorithm.ED25519)
 SOURCE_ACCOUNT = SOURCE_KEY.to_public_key().to_account_hash()
 RECIPIENT_ACCOUNT = bytes.fromhex("42" * 32)
 TIMESTAMP_SECONDS = 1_753_228_800.0
-
-
-def _values(fields: list[dict[str, object]]) -> dict[str, object]:
-    return {str(field["name"]): field["value"] for field in fields}
+SOURCE_COMMIT = "ab" * 20
+DEPLOYMENT_COMMIT = "cd" * 20
 
 
 def _verified(
@@ -58,39 +55,30 @@ def _verified(
     action_nonce: bytes = bytes.fromhex("44" * 32),
     recipient_account: bytes = RECIPIENT_ACCOUNT,
 ) -> VerifiedNativeAuthorization:
-    typed = json.loads(VECTOR.read_text(encoding="utf-8"))["typed_input"]
-    header = _values(typed["header"])
-    body = _values(typed["body"])
-    header["proposal_id"] = proposal_id
-    header["action_id"] = "00" * 32
-    body["source_account"] = SOURCE_ACCOUNT.hex()
-    body["recipient_account"] = recipient_account.hex()
-    body["action_nonce"] = action_nonce.hex()
-    body["transfer_id"] = "0"
-    header, body, material = build_native_material(header, body)
+    proof = treasury_v3_proof(
+        source_account=SOURCE_ACCOUNT,
+        recipient_account=recipient_account,
+        proposal_id=proposal_id,
+        action_nonce=action_nonce,
+    )
+    header = proof["input"]["header"]
+    body = proof["input"]["body"]
+    deployment_raw = proof["deployment"]
+    build = deployment_raw["build"]
+    source = deployment_raw["source"]
 
     deployment = V3DeploymentIdentity(
         network="casper-test",
-        package_hash=bytes.fromhex("91" * 32),
-        contract_hash=bytes.fromhex("92" * 32),
+        package_hash=bytes.fromhex(str(deployment_raw["package_hash"])),
+        contract_hash=bytes.fromhex(str(deployment_raw["contract_hash"])),
         schema_version=3,
         deployment_domain=bytes.fromhex(str(header["deployment_domain"])),
         casper_chain_name="casper-test",
-        source_sha256=bytes.fromhex("93" * 32),
-        wasm_sha256=bytes.fromhex("94" * 32),
-        schema_sha256=bytes.fromhex("95" * 32),
+        source_sha256=bytes.fromhex(str(source["lib_rs_sha256"])),
+        wasm_sha256=bytes.fromhex(str(build["wasm_sha256"])),
+        schema_sha256=bytes.fromhex(str(build["schema_sha256"])),
     )
-    readback = sealed_v3_readback(
-        package_hash=deployment.package_hash,
-        contract_hash=deployment.contract_hash,
-        deployment_domain=deployment.deployment_domain,
-        proposal_id=proposal_id,
-        envelope_hash=material.envelope_hash,
-        action_id=material.action_id,
-        observed_block_hash=bytes.fromhex("96" * 32),
-        observed_block_height=8_600_000,
-        observed_state_root_hash=bytes.fromhex("97" * 32),
-    )
+    readback = verify_and_seal_readback_artifact(proof["readback"])
     snapshot_block_hash = str(body["snapshot_block_hash"])
     snapshot_block_height = int(str(body["snapshot_block_height"]))
     snapshot_state_root = "98" * 32
@@ -164,6 +152,7 @@ def _verified(
         deployment=deployment,
         readback=readback,
         snapshot=snapshot,
+        finalization=verify_exact_v3_finalization(proof),
     )
 
 
@@ -189,6 +178,7 @@ def _evidence(
     deploy_hash: str,
     *,
     gas_motes: int = 123_456_789,
+    block_height: int = 8_600_100,
     mutate_rpc: object = None,
     mutate_block: object = None,
 ) -> FinalityEvidence:
@@ -212,7 +202,7 @@ def _evidence(
             "block": {
                 "hash": "cd" * 32,
                 "header": {
-                    "height": 8_600_100,
+                    "height": block_height,
                     "state_root_hash": "ce" * 32,
                 },
                 "body": {"deploy_hashes": [], "transfer_hashes": [deploy_hash]},
@@ -223,6 +213,7 @@ def _evidence(
         mutate_rpc(rpc)
     if callable(mutate_block):
         mutate_block(block)
+
     def observation(node_url: str, captured_at: str) -> dict[str, object]:
         return {
             "node_url": node_url,
@@ -284,7 +275,11 @@ def _authorized_executor(
 ) -> tuple[TreasuryExecutor, VerifiedNativeAuthorization]:
     authorization = authorization or _verified()
     executor = TreasuryExecutor(database_path, **executor_options)
-    executor.authorize(authorization)
+    executor.authorize(
+        authorization,
+        source_commit=SOURCE_COMMIT,
+        deployment_commit=DEPLOYMENT_COMMIT,
+    )
     return executor, authorization
 
 
@@ -311,17 +306,37 @@ def test_tx01_accepts_only_factory_verified_exact_envelope_authorization(
     authorization = _verified()
 
     with pytest.raises(AuthorizationMismatch, match="factory-verified"):
-        executor.authorize(object())  # type: ignore[arg-type]
+        executor.authorize(
+            object(),  # type: ignore[arg-type]
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+        )
     with pytest.raises(AuthorizationMismatch, match="recomputed typed envelope"):
-        executor.authorize(replace(authorization, amount_motes=1))
+        executor.authorize(
+            replace(authorization, amount_motes=1),
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+        )
+    with pytest.raises(AuthorizationMismatch, match="deployment commit"):
+        executor.authorize(
+            authorization,
+            source_commit=SOURCE_COMMIT,
+            deployment_commit="ee" * 20,
+        )
 
-    entry = executor.authorize(authorization)
+    entry = executor.authorize(
+        authorization,
+        source_commit=SOURCE_COMMIT,
+        deployment_commit=DEPLOYMENT_COMMIT,
+    )
     assert entry.authorization == authorization
     assert entry.state is ExecutionState.AUTHORIZED
     assert executor.count() == 1
 
 
-def test_tx01_restart_revalidates_every_persisted_authorization_field(tmp_path: Path) -> None:
+def test_tx01_restart_revalidates_every_persisted_authorization_field(
+    tmp_path: Path,
+) -> None:
     database_path = tmp_path / "executor.db"
     executor, authorization = _authorized_executor(database_path)
 
@@ -329,7 +344,11 @@ def test_tx01_restart_revalidates_every_persisted_authorization_field(tmp_path: 
         db.execute(
             "UPDATE treasury_execution_journal SET approved_allocation_bps=801 "
             "WHERE network=? AND action_id=? AND envelope_hash=?",
-            (_key(authorization).network, _key(authorization).action_id, _key(authorization).envelope_hash),
+            (
+                _key(authorization).network,
+                _key(authorization).action_id,
+                _key(authorization).envelope_hash,
+            ),
         )
 
     with pytest.raises(AuthorizationMismatch, match="recomputed typed envelope"):
@@ -337,7 +356,9 @@ def test_tx01_restart_revalidates_every_persisted_authorization_field(tmp_path: 
     assert executor.count() == 1
 
 
-def test_tx01_restart_reparses_persisted_raw_snapshot_transcript(tmp_path: Path) -> None:
+def test_tx01_restart_reparses_persisted_raw_snapshot_transcript(
+    tmp_path: Path,
+) -> None:
     database_path = tmp_path / "executor.db"
     _executor, authorization = _authorized_executor(database_path)
     with sqlite3.connect(database_path) as db:
@@ -347,6 +368,30 @@ def test_tx01_restart_reparses_persisted_raw_snapshot_transcript(tmp_path: Path)
         db.execute(
             "UPDATE treasury_execution_journal SET snapshot_balance_response_json=?",
             (str(transcript).replace("625000000000", "625000000001"),),
+        )
+
+    with pytest.raises(AuthorizationMismatch, match="authorization transcript"):
+        TreasuryExecutor(database_path).get(_key(authorization))
+
+
+def test_tx01_restart_reparses_persisted_exact_finalization_proof(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "executor.db"
+    _executor, authorization = _authorized_executor(database_path)
+    with sqlite3.connect(database_path) as db:
+        artifact = db.execute(
+            "SELECT v3_proof_artifact_json FROM treasury_execution_journal"
+        ).fetchone()[0]
+        db.execute(
+            "UPDATE treasury_execution_journal SET v3_proof_artifact_json=?",
+            (
+                str(artifact).replace(
+                    authorization.finalization_state_root_hash.hex(),
+                    "ff" * 32,
+                    1,
+                ),
+            ),
         )
 
     with pytest.raises(AuthorizationMismatch, match="authorization transcript"):
@@ -396,7 +441,9 @@ def test_tx02_invalid_signed_bytes_never_enter_the_journal(
     assert entry.deploy_hash is None
 
 
-def test_tx03_concurrent_prepare_has_exactly_one_signer_invocation(tmp_path: Path) -> None:
+def test_tx03_concurrent_prepare_has_exactly_one_signer_invocation(
+    tmp_path: Path,
+) -> None:
     database_path = tmp_path / "executor.db"
     executor, authorization = _authorized_executor(database_path)
     barrier = threading.Barrier(2)
@@ -453,7 +500,9 @@ def test_tx04_duplicate_prepare_is_idempotent_and_never_resigns(tmp_path: Path) 
     assert second == first
 
 
-def test_tx05_concurrent_broadcast_has_exactly_one_network_invocation(tmp_path: Path) -> None:
+def test_tx05_concurrent_broadcast_has_exactly_one_network_invocation(
+    tmp_path: Path,
+) -> None:
     database_path = tmp_path / "executor.db"
     executor, authorization = _authorized_executor(database_path)
     executor.prepare(_key(authorization), lambda _: _signed(authorization))
@@ -486,7 +535,9 @@ def test_tx05_concurrent_broadcast_has_exactly_one_network_invocation(tmp_path: 
     assert executor.get(_key(authorization)).broadcast_attempts == 1
 
 
-def test_tx05_submitted_and_finalized_replays_never_broadcast_again(tmp_path: Path) -> None:
+def test_tx05_submitted_and_finalized_replays_never_broadcast_again(
+    tmp_path: Path,
+) -> None:
     executor, authorization = _authorized_executor(tmp_path / "executor.db")
     executor.prepare(_key(authorization), lambda _: _signed(authorization))
     submitted = executor.broadcast(
@@ -501,12 +552,15 @@ def test_tx05_submitted_and_finalized_replays_never_broadcast_again(tmp_path: Pa
         ),
     )
     assert executor.broadcast(_key(authorization), _fail_if_called) == final
-    assert executor.resume(
-        _key(authorization),
-        prepare=_fail_if_called,
-        broadcast=_fail_if_called,
-        reconcile=_fail_if_called,
-    ) == final
+    assert (
+        executor.resume(
+            _key(authorization),
+            prepare=_fail_if_called,
+            broadcast=_fail_if_called,
+            reconcile=_fail_if_called,
+        )
+        == final
+    )
 
 
 def test_tx06_crash_or_timeout_after_write_stays_ambiguous(tmp_path: Path) -> None:
@@ -553,7 +607,9 @@ def test_tx06_live_broadcast_lease_blocks_racing_reconciliation(tmp_path: Path) 
         assert future.result(timeout=5).state is ExecutionState.SUBMITTED
 
 
-def test_tx07_expired_ambiguous_lease_reconciles_only_by_stored_hash(tmp_path: Path) -> None:
+def test_tx07_expired_ambiguous_lease_reconciles_only_by_stored_hash(
+    tmp_path: Path,
+) -> None:
     now = [100.0]
     executor, authorization = _authorized_executor(
         tmp_path / "executor.db", clock=lambda: now[0], inflight_lease_seconds=10
@@ -569,9 +625,7 @@ def test_tx07_expired_ambiguous_lease_reconciles_only_by_stored_hash(tmp_path: P
         _key(authorization),
         lambda deploy_hash: (
             seen.append(deploy_hash)
-            or ReconciliationResult(
-                "finalized", deploy_hash, _evidence(deploy_hash)
-            )
+            or ReconciliationResult("finalized", deploy_hash, _evidence(deploy_hash))
         ),
     )
     assert seen == [ambiguous.deploy_hash]
@@ -605,7 +659,9 @@ def test_tx08_retryable_failure_survives_restart_and_reuses_identical_bytes(
     assert submitted.broadcast_attempts == 2
 
 
-def test_tx09_corrupted_persisted_bytes_fail_terminal_before_network(tmp_path: Path) -> None:
+def test_tx09_corrupted_persisted_bytes_fail_terminal_before_network(
+    tmp_path: Path,
+) -> None:
     database_path = tmp_path / "executor.db"
     executor, authorization = _authorized_executor(database_path)
     executor.prepare(_key(authorization), lambda _: _signed(authorization))
@@ -613,7 +669,12 @@ def test_tx09_corrupted_persisted_bytes_fail_terminal_before_network(tmp_path: P
         db.execute(
             "UPDATE treasury_execution_journal SET signed_bytes=? "
             "WHERE network=? AND action_id=? AND envelope_hash=?",
-            (b"corrupt", _key(authorization).network, _key(authorization).action_id, _key(authorization).envelope_hash),
+            (
+                b"corrupt",
+                _key(authorization).network,
+                _key(authorization).action_id,
+                _key(authorization).envelope_hash,
+            ),
         )
     failed = TreasuryExecutor(database_path).broadcast(
         _key(authorization), _fail_if_called
@@ -749,7 +810,9 @@ def test_tx11_finalized_status_without_evidence_is_terminal(tmp_path: Path) -> N
     assert failed.last_detail_code == "finality_evidence_missing"
 
 
-def test_tx11_artifact_booleans_cannot_substitute_for_node_evidence(tmp_path: Path) -> None:
+def test_tx11_artifact_booleans_cannot_substitute_for_node_evidence(
+    tmp_path: Path,
+) -> None:
     executor, authorization = _authorized_executor(tmp_path / "executor.db")
     executor.prepare(_key(authorization), lambda _: _signed(authorization))
     executor.broadcast(
@@ -798,32 +861,55 @@ def test_local_integrity_terminal_failure_is_never_retried(tmp_path: Path) -> No
         db.execute("UPDATE treasury_execution_journal SET signed_bytes=X'01'")
     failed = executor.broadcast(_key(authorization), _fail_if_called)
     assert failed.state is ExecutionState.TERMINAL_FAILURE
-    assert TreasuryExecutor(database_path).resume(
-        _key(authorization),
-        prepare=_fail_if_called,
-        broadcast=_fail_if_called,
-        reconcile=_fail_if_called,
-    ) == failed
+    assert (
+        TreasuryExecutor(database_path).resume(
+            _key(authorization),
+            prepare=_fail_if_called,
+            broadcast=_fail_if_called,
+            reconcile=_fail_if_called,
+        )
+        == failed
+    )
 
 
 def test_tx12_global_action_id_binding_blocks_reauthorization_under_new_proposal(
     tmp_path: Path,
 ) -> None:
     executor, first = _authorized_executor(tmp_path / "executor.db")
-    assert executor.authorize(first).state is ExecutionState.AUTHORIZED
+    assert (
+        executor.authorize(
+            first,
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+        ).state
+        is ExecutionState.AUTHORIZED
+    )
     second = _verified(proposal_id="DAO-PROP-V3-OTHER")
     assert second.action_id == first.action_id
     assert second.envelope_hash != first.envelope_hash
     with pytest.raises(JournalConflict, match="action_id"):
-        executor.authorize(second)
+        executor.authorize(
+            second,
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+        )
     assert executor.count() == 1
 
 
-def test_tx13_new_action_nonce_creates_a_distinct_legitimate_action(tmp_path: Path) -> None:
+def test_tx13_new_action_nonce_creates_a_distinct_legitimate_action(
+    tmp_path: Path,
+) -> None:
     executor, first = _authorized_executor(tmp_path / "executor.db")
     second = _verified(action_nonce=bytes.fromhex("45" * 32))
     assert second.action_id != first.action_id
-    assert executor.authorize(second).state is ExecutionState.AUTHORIZED
+    assert (
+        executor.authorize(
+            second,
+            source_commit=SOURCE_COMMIT,
+            deployment_commit=DEPLOYMENT_COMMIT,
+        ).state
+        is ExecutionState.AUTHORIZED
+    )
     assert executor.count() == 2
 
 
@@ -882,8 +968,7 @@ def test_tx14_restart_revalidates_persisted_finality_evidence(
     with sqlite3.connect(database_path) as db:
         if tamper == "evidence":
             observations_json = db.execute(
-                "SELECT finality_node_observations_json "
-                "FROM treasury_execution_journal"
+                "SELECT finality_node_observations_json FROM treasury_execution_journal"
             ).fetchone()[0]
             db.execute(
                 "UPDATE treasury_execution_journal "

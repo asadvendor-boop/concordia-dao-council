@@ -20,7 +20,11 @@ from urllib.parse import urlsplit
 
 from pycspr import crypto, serializer
 from pycspr.factory.accounts import parse_private_key
-from pycspr.factory.deploys import create_deploy, create_deploy_parameters, create_standard_payment
+from pycspr.factory.deploys import (
+    create_deploy,
+    create_deploy_parameters,
+    create_standard_payment,
+)
 from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
 from pycspr.types.cl import CLV_Bool, CLV_ByteArray, CLV_String, CLV_U512, CLV_U8
 from pycspr.types.crypto import KeyAlgorithm
@@ -32,6 +36,7 @@ from shared.casper_rpc_transport import (
     RpcEndpointPolicyError,
     RpcRemoteError,
     RpcTransportError,
+    parse_rpc_authorization_file_args,
     validate_public_rpc_endpoints as _validate_shared_rpc_endpoints,
 )
 
@@ -131,7 +136,10 @@ class DurableDeployJournal:
         }
         if not isinstance(value, Mapping) or set(value) != required:
             raise InstallValidationError("deploy journal field set is invalid")
-        if value["schema_id"] != JOURNAL_SCHEMA_ID or value["state"] not in JOURNAL_STATES:
+        if (
+            value["schema_id"] != JOURNAL_SCHEMA_ID
+            or value["state"] not in JOURNAL_STATES
+        ):
             raise InstallValidationError("deploy journal schema/state is invalid")
         if not isinstance(value["intent"], Mapping) or not isinstance(
             value["signed_deploy"], Mapping
@@ -144,8 +152,13 @@ class DurableDeployJournal:
         try:
             persisted = bytes.fromhex(str(value["signed_deploy_json_bytes_hex"]))
         except ValueError as exc:
-            raise InstallValidationError("deploy journal signed bytes are invalid") from exc
-        if persisted != canonical or hashlib.sha256(canonical).hexdigest() != value["signed_deploy_sha256"]:
+            raise InstallValidationError(
+                "deploy journal signed bytes are invalid"
+            ) from exc
+        if (
+            persisted != canonical
+            or hashlib.sha256(canonical).hexdigest() != value["signed_deploy_sha256"]
+        ):
             raise InstallValidationError("deploy journal signed bytes digest mismatch")
         try:
             parsed_deploy = serializer.from_json(dict(value["signed_deploy"]), Deploy)
@@ -206,7 +219,9 @@ class DurableDeployJournal:
         if value["intent"].get("kind") == "v3_install":
             manifest = value["intent"].get("manifest")
             if not isinstance(manifest, Mapping):
-                raise InstallValidationError("install journal immutable intent is invalid")
+                raise InstallValidationError(
+                    "install journal immutable intent is invalid"
+                )
             try:
                 validate_finalized_install_deploy(value["signed_deploy"], manifest)
             except InstallValidationError as exc:
@@ -258,11 +273,11 @@ class DurableDeployJournal:
         )
         rendered = json.dumps(value, indent=2, sort_keys=True).encode("ascii") + b"\n"
         try:
-            descriptor = os.open(
-                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-            )
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as exc:
-            raise InstallValidationError("deploy journal already exists; resume it") from exc
+            raise InstallValidationError(
+                "deploy journal already exists; resume it"
+            ) from exc
         try:
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(rendered)
@@ -442,10 +457,17 @@ def validate_public_rpc_endpoints(
 
 
 def build_public_rpc_transport(
-    urls: Sequence[str], *, resolver: Any | None = None
+    urls: Sequence[str],
+    *,
+    resolver: Any | None = None,
+    authorization_files: Mapping[str, Path] | None = None,
 ) -> PinnedHttpsJsonRpc:
     try:
-        return PinnedHttpsJsonRpc(urls, resolver=resolver)
+        return PinnedHttpsJsonRpc(
+            urls,
+            resolver=resolver,
+            authorization_files=authorization_files,
+        )
     except RpcEndpointPolicyError as exc:
         raise InstallValidationError(
             "RPC endpoints must be two distinct public credential-free HTTPS /rpc URLs"
@@ -455,10 +477,7 @@ def build_public_rpc_transport(
 def deploy_expiry_epoch(signed_deploy: Mapping[str, Any]) -> float:
     try:
         deploy = serializer.from_json(dict(signed_deploy), Deploy)
-        return (
-            deploy.header.timestamp.value
-            + deploy.header.ttl.as_milliseconds / 1000
-        )
+        return deploy.header.timestamp.value + deploy.header.ttl.as_milliseconds / 1000
     except Exception as exc:
         raise InstallValidationError("signed deploy expiry cannot be decoded") from exc
 
@@ -482,7 +501,9 @@ def verify_git_release_identity(
                 stderr=subprocess.DEVNULL,
             ).strip()
         except (OSError, subprocess.CalledProcessError) as exc:
-            raise InstallValidationError("release Git identity cannot be verified") from exc
+            raise InstallValidationError(
+                "release Git identity cannot be verified"
+            ) from exc
 
     head = git("rev-parse", "HEAD").lower()
     if deployment != head:
@@ -509,7 +530,9 @@ def verify_git_release_identity(
     return {"source_commit": source, "deployment_commit": deployment}
 
 
-def _block_inclusion(block_response: Mapping[str, Any], deploy_hash: str) -> dict[str, Any]:
+def _block_inclusion(
+    block_response: Mapping[str, Any], deploy_hash: str
+) -> dict[str, Any]:
     try:
         result = block_response["result"]
         wrapped = result["block_with_signatures"]
@@ -532,9 +555,7 @@ def _block_inclusion(block_response: Mapping[str, Any], deploy_hash: str) -> dic
     ):
         raise InstallValidationError("canonical block timestamp is invalid")
     try:
-        parsed_timestamp = datetime.fromisoformat(
-            block_timestamp[:-1] + "+00:00"
-        )
+        parsed_timestamp = datetime.fromisoformat(block_timestamp[:-1] + "+00:00")
     except ValueError as exc:
         raise InstallValidationError("canonical block timestamp is invalid") from exc
     if parsed_timestamp.tzinfo != timezone.utc:
@@ -542,7 +563,9 @@ def _block_inclusion(block_response: Mapping[str, Any], deploy_hash: str) -> dic
     matches = 0
     if version in {"Version1", "Legacy"}:
         for name in ("deploy_hashes", "transfer_hashes"):
-            matches += sum(str(item).lower() == deploy_hash for item in body.get(name, []))
+            matches += sum(
+                str(item).lower() == deploy_hash for item in body.get(name, [])
+            )
     elif version == "Version2":
         transactions = body.get("transactions")
         if not isinstance(transactions, Mapping):
@@ -552,7 +575,9 @@ def _block_inclusion(block_response: Mapping[str, Any], deploy_hash: str) -> dic
                 raise InstallValidationError("canonical block response is invalid")
             for item in items:
                 if isinstance(item, Mapping) and len(item) == 1:
-                    matches += int(str(next(iter(item.values()))).lower() == deploy_hash)
+                    matches += int(
+                        str(next(iter(item.values()))).lower() == deploy_hash
+                    )
     else:
         raise InstallValidationError("canonical block response is invalid")
     if matches == 0:
@@ -630,14 +655,18 @@ def verify_two_node_deploy_finality(
         if error_message is None:
             outcome = (True, None)
         elif isinstance(error_message, str):
-            match = re.search(r"(?:User error|ApiError::User)[:( ]+(\d+)", error_message)
+            match = re.search(
+                r"(?:User error|ApiError::User)[:( ]+(\d+)", error_message
+            )
             outcome = (False, int(match.group(1)) if match else None)
         else:
             raise InstallValidationError("deploy execution outcome is invalid")
         if expected_user_error is None and outcome != (True, None):
             raise InstallValidationError("deploy did not finalize successfully")
         if expected_user_error is not None and outcome != (False, expected_user_error):
-            raise InstallValidationError("deploy did not finalize with expected user error")
+            raise InstallValidationError(
+                "deploy did not finalize with expected user error"
+            )
         outcomes.append(outcome)
         block_request = observation.get("block_request")
         block_response = observation.get("block_response")
@@ -655,7 +684,10 @@ def verify_two_node_deploy_finality(
         ):
             raise InstallValidationError("canonical block request/response is invalid")
         block = _block_inclusion(block_response, expected_hash)
-        if block["block_hash"] != execution_block or block["block_height"] != execution_height:
+        if (
+            block["block_hash"] != execution_block
+            or block["block_height"] != execution_height
+        ):
             raise InstallValidationError("deploy finality and canonical block disagree")
         facts.append(block)
     if facts[0] != facts[1] or outcomes[0] != outcomes[1]:
@@ -786,9 +818,11 @@ def reconcile_two_node_deploy(
         deploy_hash=expected_hash,
         expected_user_error=expected_user_error,
     )
-    observed_at = datetime.now(timezone.utc).isoformat(
-        timespec="milliseconds"
-    ).replace("+00:00", "Z")
+    observed_at = (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
     finalized = datetime.fromisoformat(proof["finalized_at"][:-1] + "+00:00")
     observed = datetime.fromisoformat(observed_at[:-1] + "+00:00")
     if observed < finalized:
@@ -802,7 +836,9 @@ def _commit_hash(value: object, field: str) -> str:
     try:
         bytes.fromhex(value)
     except ValueError as exc:
-        raise InstallValidationError(f"{field}: exact lowercase 40-hex commit required") from exc
+        raise InstallValidationError(
+            f"{field}: exact lowercase 40-hex commit required"
+        ) from exc
     return value
 
 
@@ -836,16 +872,26 @@ def build_locked_install_args(
 ) -> dict[str, object]:
     expected_roles = {"proposer", "finalizer", "signer_a", "signer_b", "signer_c"}
     if set(roles) != expected_roles:
-        raise InstallValidationError("roles must contain exactly proposer, finalizer and signer_a/b/c")
+        raise InstallValidationError(
+            "roles must contain exactly proposer, finalizer and signer_a/b/c"
+        )
     installer = _hash32(installer_account_hash, "installer_account_hash")
-    role_values = {name: _role_account(roles[name], name) for name in sorted(expected_roles)}
+    role_values = {
+        name: _role_account(roles[name], name) for name in sorted(expected_roles)
+    }
     proposer = role_values["proposer"]
     finalizer = role_values["finalizer"]
     signers = [role_values[name] for name in ("signer_a", "signer_b", "signer_c")]
     if installer in role_values.values():
-        raise InstallValidationError("installer must be distinct from every governance role")
-    if proposer == finalizer or any(value in (proposer, finalizer) for value in signers):
-        raise InstallValidationError("proposer, finalizer and signers must be pairwise distinct")
+        raise InstallValidationError(
+            "installer must be distinct from every governance role"
+        )
+    if proposer == finalizer or any(
+        value in (proposer, finalizer) for value in signers
+    ):
+        raise InstallValidationError(
+            "proposer, finalizer and signers must be pairwise distinct"
+        )
     if len(set(signers)) != 3:
         raise InstallValidationError("three pairwise-distinct signers are required")
     if type(threshold) is not int or threshold != 2:
@@ -889,17 +935,31 @@ def diff_entry_point_args_against_schema(
     entry_point: str,
     runtime_args: Sequence[Mapping[str, Any]],
 ) -> list[str]:
-    matches = [item for item in schema.get("entry_points", []) if item.get("name") == entry_point]
+    matches = [
+        item
+        for item in schema.get("entry_points", [])
+        if item.get("name") == entry_point
+    ]
     if len(matches) != 1:
         return [f"schema entry point {entry_point!r} missing or duplicated"]
-    expected = [(arg["name"], _normalize_schema_type(arg["ty"])) for arg in matches[0]["arguments"]]
-    actual = [(arg.get("name"), _normalize_schema_type(arg.get("cl_type"))) for arg in runtime_args]
+    expected = [
+        (arg["name"], _normalize_schema_type(arg["ty"]))
+        for arg in matches[0]["arguments"]
+    ]
+    actual = [
+        (arg.get("name"), _normalize_schema_type(arg.get("cl_type")))
+        for arg in runtime_args
+    ]
     failures: list[str] = []
     if [name for name, _ in actual] != [name for name, _ in expected]:
         failures.append("runtime argument names/order differ from generated schema")
-    for position, (expected_item, actual_item) in enumerate(zip(expected, actual, strict=False)):
+    for position, (expected_item, actual_item) in enumerate(
+        zip(expected, actual, strict=False)
+    ):
         if expected_item != actual_item:
-            failures.append(f"argument {position}: expected {expected_item!r}, got {actual_item!r}")
+            failures.append(
+                f"argument {position}: expected {expected_item!r}, got {actual_item!r}"
+            )
     if len(expected) != len(actual):
         failures.append(f"argument count: expected {len(expected)}, got {len(actual)}")
     return failures
@@ -922,7 +982,9 @@ def build_signed_install_payload(
     source_commit = _commit_hash(source_commit, "source_commit")
     deployment_commit = _commit_hash(deployment_commit, "deployment_commit")
     if not wasm_path.is_file() or not wasm_path.read_bytes().startswith(b"\x00asm"):
-        raise InstallValidationError("release Wasm is missing or not a WebAssembly module")
+        raise InstallValidationError(
+            "release Wasm is missing or not a WebAssembly module"
+        )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     expected_wasm_name = schema.get("call", {}).get("wasm_file_name")
     if wasm_path.name != expected_wasm_name:
@@ -943,15 +1005,22 @@ def build_signed_install_payload(
         casper_chain_name=CHAIN_NAME,
         installation_nonce=installation_nonce,
     )
-    call_args = [{"name": name, **serializer.to_json(value)} for name, value in session_args.items()]
+    call_args = [
+        {"name": name, **serializer.to_json(value)}
+        for name, value in session_args.items()
+    ]
     expected_call = [(item["name"], item["ty"]) for item in schema["call"]["arguments"]]
     actual_call = [(item["name"], item["cl_type"]) for item in call_args]
     if expected_call != actual_call:
-        raise InstallValidationError("locked installer args differ from generated Odra call schema")
+        raise InstallValidationError(
+            "locked installer args differ from generated Odra call schema"
+        )
 
     params = create_deploy_parameters(private_key, CHAIN_NAME, ttl=ttl)
     payment = create_standard_payment(payment_amount_motes)
-    session = DeployOfModuleBytes(module_bytes=wasm_path.read_bytes(), args=session_args)
+    session = DeployOfModuleBytes(
+        module_bytes=wasm_path.read_bytes(), args=session_args
+    )
     deploy = create_deploy(params, payment, session)
     deploy.approve(private_key)
     deploy_json = serializer.to_json(deploy)
@@ -963,20 +1032,26 @@ def build_signed_install_payload(
     }
     template_path = wasm_path.parent.parent / "deployment.manifest.json"
     if not template_path.is_file():
-        raise InstallValidationError("versioned deployment.manifest.json template is missing")
+        raise InstallValidationError(
+            "versioned deployment.manifest.json template is missing"
+        )
     manifest = json.loads(template_path.read_text(encoding="utf-8"))
     actual_wasm_hash = hashlib.sha256(wasm_path.read_bytes()).hexdigest()
     actual_schema_hash = hashlib.sha256(schema_path.read_bytes()).hexdigest()
     if manifest.get("build", {}).get("wasm_sha256") != actual_wasm_hash:
         raise InstallValidationError("release Wasm differs from deployment manifest")
     if manifest.get("build", {}).get("schema_sha256") != actual_schema_hash:
-        raise InstallValidationError("generated schema differs from deployment manifest")
+        raise InstallValidationError(
+            "generated schema differs from deployment manifest"
+        )
     manifest.update(
         {
             "status": "prepared",
             "installer_public_key": public_key.account_key.hex(),
             "installer_account_hash": installer_hash,
-            "deployment_domain": deployment_domain_record(installation_nonce)["deployment_domain"],
+            "deployment_domain": deployment_domain_record(installation_nonce)[
+                "deployment_domain"
+            ],
             "installation_nonce": installation_nonce,
             "threshold": threshold,
             "roles": roles,
@@ -1077,13 +1152,21 @@ def validate_finalized_install_deploy(
         body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:
-        raise InstallValidationError("install deploy cannot be decoded canonically") from exc
+        raise InstallValidationError(
+            "install deploy cannot be decoded canonically"
+        ) from exc
     if _normalize_deploy_json(canonical_json) != _normalize_deploy_json(value):
-        raise InstallValidationError("install deploy parsed fields disagree with canonical bytes")
+        raise InstallValidationError(
+            "install deploy parsed fields disagree with canonical bytes"
+        )
     if deploy.header.body_hash != body_hash or deploy.hash != deploy_hash:
         raise InstallValidationError("install deploy body/deploy hash mismatch")
-    if deploy_hash.hex() != _strip_hash(manifest.get("install_deploy_hash"), "install deploy hash"):
-        raise InstallValidationError("finalized install deploy hash differs from prepared deploy")
+    if deploy_hash.hex() != _strip_hash(
+        manifest.get("install_deploy_hash"), "install deploy hash"
+    ):
+        raise InstallValidationError(
+            "finalized install deploy hash differs from prepared deploy"
+        )
     if deploy.header.chain_name != CHAIN_NAME:
         raise InstallValidationError("install deploy is not on casper-test")
     installer_public_key = manifest.get("installer_public_key")
@@ -1093,7 +1176,9 @@ def validate_finalized_install_deploy(
     ):
         raise InstallValidationError("install deploy initiator differs from installer")
     if len(deploy.approvals) != 1:
-        raise InstallValidationError("install deploy must carry exactly one installer approval")
+        raise InstallValidationError(
+            "install deploy must carry exactly one installer approval"
+        )
     approval = deploy.approvals[0]
     signer = getattr(approval.signer, "account_key", None)
     if not isinstance(signer, bytes) or signer.hex() != installer_public_key.lower():
@@ -1109,7 +1194,10 @@ def validate_finalized_install_deploy(
     if not signature_valid:
         raise InstallValidationError("install approval signature is invalid")
 
-    if type(deploy.payment) is not DeployOfModuleBytes or deploy.payment.module_bytes != b"":
+    if (
+        type(deploy.payment) is not DeployOfModuleBytes
+        or deploy.payment.module_bytes != b""
+    ):
         raise InstallValidationError("install payment must be standard ModuleBytes")
     expected_payment = manifest.get("install_payment_motes")
     if type(expected_payment) is not int or expected_payment <= 0:
@@ -1127,7 +1215,9 @@ def validate_finalized_install_deploy(
         raise InstallValidationError("install session must be ModuleBytes")
     wasm_sha256 = hashlib.sha256(deploy.session.module_bytes).hexdigest()
     if wasm_sha256 != manifest.get("build", {}).get("wasm_sha256"):
-        raise InstallValidationError("finalized install Wasm differs from release manifest")
+        raise InstallValidationError(
+            "finalized install Wasm differs from release manifest"
+        )
     roles = manifest.get("roles")
     if not isinstance(roles, Mapping):
         raise InstallValidationError("install manifest roles are invalid")
@@ -1142,9 +1232,13 @@ def validate_finalized_install_deploy(
         (argument.name, serializer.to_json(argument.value))
         for argument in deploy.session.arguments
     ]
-    frozen_args = [(name, serializer.to_json(clv)) for name, clv in expected_args.items()]
+    frozen_args = [
+        (name, serializer.to_json(clv)) for name, clv in expected_args.items()
+    ]
     if _normalize_deploy_json(actual_args) != _normalize_deploy_json(frozen_args):
-        raise InstallValidationError("finalized install arguments differ from locked constructor")
+        raise InstallValidationError(
+            "finalized install arguments differ from locked constructor"
+        )
     return {
         "deploy_hash": deploy_hash.hex(),
         "body_hash": body_hash.hex(),
@@ -1165,7 +1259,9 @@ def _validate_successful_install_rpc(
         "deploy",
         "execution_info",
     }:
-        raise InstallValidationError("install finality is not the exact Casper v2 deploy shape")
+        raise InstallValidationError(
+            "install finality is not the exact Casper v2 deploy shape"
+        )
     if not isinstance(result["api_version"], str) or not result["api_version"]:
         raise InstallValidationError("install finality lacks api_version")
     deploy_facts = validate_finalized_install_deploy(result["deploy"], manifest)
@@ -1201,10 +1297,14 @@ def _validate_successful_install_rpc(
         or initiator["PublicKey"].lower()
         != str(manifest.get("installer_public_key", "")).lower()
     ):
-        raise InstallValidationError("install execution initiator differs from installer")
+        raise InstallValidationError(
+            "install execution initiator differs from installer"
+        )
     if outcome["error_message"] is not None:
         raise InstallValidationError("v3 install execution failed")
-    block_hash = _strip_hash(execution_info["block_hash"], "install execution block hash")
+    block_hash = _strip_hash(
+        execution_info["block_hash"], "install execution block hash"
+    )
     block_height = execution_info["block_height"]
     if type(block_height) is not int or block_height < 0:
         raise InstallValidationError("install execution block height is invalid")
@@ -1227,7 +1327,9 @@ def _resolve_locked_contract(package_value: object) -> tuple[int, str]:
         raise InstallValidationError("v3 package is not permanently locked")
     versions = package.get("versions")
     if not isinstance(versions, list) or len(versions) != 1:
-        raise InstallValidationError("v3 package must contain exactly one contract version")
+        raise InstallValidationError(
+            "v3 package must contain exactly one contract version"
+        )
     version_record = versions[0]
     if not isinstance(version_record, Mapping) or set(version_record) != {
         "protocol_version_major",
@@ -1235,10 +1337,17 @@ def _resolve_locked_contract(package_value: object) -> tuple[int, str]:
         "contract_hash",
     }:
         raise InstallValidationError("v3 contract version record is invalid")
-    if version_record["protocol_version_major"] != 2 or version_record["contract_version"] != 1:
-        raise InstallValidationError("v3 package must install exactly protocol-2 contract version 1")
+    if (
+        version_record["protocol_version_major"] != 2
+        or version_record["contract_version"] != 1
+    ):
+        raise InstallValidationError(
+            "v3 package must install exactly protocol-2 contract version 1"
+        )
     if package["disabled_versions"] != []:
-        raise InstallValidationError("v3 package contains disabled or historical versions")
+        raise InstallValidationError(
+            "v3 package contains disabled or historical versions"
+        )
     groups = package["groups"]
     if not isinstance(groups, list):
         raise InstallValidationError("v3 package groups are invalid")
@@ -1303,7 +1412,9 @@ def finalize_deployment_manifest(
     }
     install_facts = _validate_successful_install_rpc(install_rpc, manifest)
     if install_facts["block_hash"] != _strip_hash(block_hash, "install block hash"):
-        raise InstallValidationError("install finality summary disagrees with raw node response")
+        raise InstallValidationError(
+            "install finality summary disagrees with raw node response"
+        )
     root_rpc = _rpc(
         rpc_transport,
         rpc_url,
@@ -1348,11 +1459,19 @@ def finalize_deployment_manifest(
         },
     )
     contract_value = (contract_rpc["response"].get("result") or {}).get("stored_value")
-    contract = contract_value.get("Contract") if isinstance(contract_value, Mapping) else None
-    if not isinstance(contract, Mapping) or _strip_hash(
-        contract.get("contract_package_hash"), "contract package ownership"
-    ) != package_hash:
-        raise InstallValidationError("exact contract does not belong to the installed package")
+    contract = (
+        contract_value.get("Contract") if isinstance(contract_value, Mapping) else None
+    )
+    if (
+        not isinstance(contract, Mapping)
+        or _strip_hash(
+            contract.get("contract_package_hash"), "contract package ownership"
+        )
+        != package_hash
+    ):
+        raise InstallValidationError(
+            "exact contract does not belong to the installed package"
+        )
     result = dict(manifest)
     canonical_finality = {
         "status": "finalized",
@@ -1427,6 +1546,12 @@ def build_install_parser() -> argparse.ArgumentParser:
         default=[],
         help="repeat exactly twice when --submit is used",
     )
+    parser.add_argument(
+        "--rpc-authorization-file",
+        action="append",
+        default=[],
+        help="repeat URL=/absolute/token-file; token values are never accepted",
+    )
     parser.add_argument("--submit", action="store_true")
     parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--manifest-out", type=Path, required=True)
@@ -1485,8 +1610,20 @@ def main() -> int:
                 deployment_commit=str(manifest.get("deployment_commit", "")),
                 release_paths=RELEASE_IDENTITY_PATHS,
             )
-            rpc_transport = build_public_rpc_transport(args.rpc_urls)
+            authorization_files = parse_rpc_authorization_file_args(
+                args.rpc_authorization_file,
+                args.rpc_urls,
+            )
+            rpc_transport = (
+                build_public_rpc_transport(
+                    args.rpc_urls,
+                    authorization_files=authorization_files,
+                )
+                if authorization_files
+                else build_public_rpc_transport(args.rpc_urls)
+            )
             rpc_urls = rpc_transport.endpoints
+
             def broadcast(
                 signed_deploy: Mapping[str, Any], deploy_hash: str
             ) -> dict[str, Any]:

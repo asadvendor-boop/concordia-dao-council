@@ -3,10 +3,12 @@
 
 This tool is deliberately read-only.  It reconstructs the receipt-selected
 historical card prefix from exact public ``card_json`` rows, captures five
-credential-free RPC transcripts from each of two independently addressed
+URL-credential-free RPC transcripts from each of two independently addressed
 nodes, verifies each candidate with the strict offline adapter, and only then
-writes one new artifact.  It has no deploy/signing path and never overwrites an
-existing output.
+writes one new artifact.  An endpoint may receive raw Authorization loaded
+from an endpoint-scoped owner-private file; credentials never enter URLs or
+artifacts.  It has no deploy/signing path and never overwrites an existing
+output.
 """
 
 from __future__ import annotations
@@ -27,7 +29,11 @@ from typing import Any, Protocol
 
 from gateway.database import init_db
 from shared.card_chain_artifact import CardChainArtifactError, build_card_chain_artifact
-from shared.casper_rpc_transport import PinnedHttpsJsonRpc
+from shared.casper_rpc_transport import (
+    PinnedHttpsJsonRpc,
+    RpcEndpointPolicyError,
+    parse_rpc_authorization_file_args,
+)
 from shared.historical_odra_artifact import (
     HistoricalOdraArtifactError,
     PACKAGED_INVENTORY_PATH,
@@ -120,7 +126,9 @@ def _rpc_result(response: Mapping[str, Any], label: str) -> dict[str, Any]:
     return result
 
 
-def _request(method: str, params: dict[str, object], request_id: int) -> dict[str, object]:
+def _request(
+    method: str, params: dict[str, object], request_id: int
+) -> dict[str, object]:
     return {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -183,7 +191,9 @@ def _block_state_root(block_transcript: Mapping[str, Any]) -> str:
             raise HistoricalCaptureError("canonical block version is ambiguous")
         block = _object(block[versions[0]], "canonical block")
     header = _object(block.get("header"), "canonical block header")
-    roots = [header[name] for name in ("state_root_hash", "stateRootHash") if name in header]
+    roots = [
+        header[name] for name in ("state_root_hash", "stateRootHash") if name in header
+    ]
     if (
         len(roots) != 1
         or type(roots[0]) is not str
@@ -200,7 +210,9 @@ def _load_inventory(inventory_bytes: bytes) -> tuple[dict[str, Any], dict[str, A
         label="historical inventory",
         limit=256 * 1024,
     )
-    chain_identity = _object(inventory.get("chain_identity"), "inventory chain_identity")
+    chain_identity = _object(
+        inventory.get("chain_identity"), "inventory chain_identity"
+    )
     identity = _object(chain_identity.get("v1"), "inventory v1 identity")
     session = _object(identity.get("accepted_session"), "inventory v1 session")
     receipts = _object(identity.get("receipt_deploys"), "inventory v1 receipts")
@@ -239,7 +251,12 @@ def _card_chain_from_public_payload(
         db.execute(
             "INSERT INTO proposals (proposal_id, state, created_at, updated_at) "
             "VALUES (?, ?, ?, ?)",
-            (proposal_id, str(proposal.get("state") or "UNKNOWN"), captured_at, captured_at),
+            (
+                proposal_id,
+                str(proposal.get("state") or "UNKNOWN"),
+                captured_at,
+                captured_at,
+            ),
         )
         for raw_row in rows:
             row = _object(raw_row, "public card row")
@@ -366,7 +383,9 @@ def capture_historical_odra_v1(
 
     endpoints = tuple(rpc.endpoints)
     if len(endpoints) != 2 or endpoints[0] == endpoints[1]:
-        raise HistoricalCaptureError("exactly two distinct public RPC nodes are required")
+        raise HistoricalCaptureError(
+            "exactly two distinct public RPC nodes are required"
+        )
     identity, inventory = _load_inventory(inventory_bytes)
     if inventory.get("network") != "casper-test":
         raise HistoricalCaptureError("historical inventory network is invalid")
@@ -414,10 +433,19 @@ def capture_historical_odra_v1(
                 identity=identity,
             )
             facts = verify_historical_odra_artifact(
-                json.dumps(candidate, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+                json.dumps(
+                    candidate,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ),
                 inventory_bytes=inventory_bytes,
             )
-        except (HistoricalCaptureError, HistoricalOdraArtifactError, UnicodeError) as exc:
+        except (
+            HistoricalCaptureError,
+            HistoricalOdraArtifactError,
+            UnicodeError,
+        ) as exc:
             raise HistoricalCaptureError("public RPC candidate is invalid") from exc
         except Exception as exc:
             # RPC transport exceptions deliberately omit response bodies.  Keep
@@ -462,7 +490,9 @@ def write_capture_atomically(path: Path, payload: bytes) -> None:
         except OSError as exc:
             if exc.errno == errno.EEXIST:
                 raise HistoricalCaptureError("capture output already exists") from exc
-            raise HistoricalCaptureError("capture output could not be committed") from exc
+            raise HistoricalCaptureError(
+                "capture output could not be committed"
+            ) from exc
         directory_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory_fd)
@@ -502,8 +532,17 @@ def _read_bounded(path_value: str, *, limit: int) -> bytes:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--proposal-json", required=True, help="public proposal JSON file or -")
+    parser.add_argument(
+        "--proposal-json", required=True, help="public proposal JSON file or -"
+    )
     parser.add_argument("--rpc-url", action="append", required=True)
+    parser.add_argument(
+        "--rpc-authorization-file",
+        action="append",
+        default=[],
+        metavar="URL=/absolute/file",
+        help="endpoint-scoped raw Authorization secret file; repeat as needed",
+    )
     parser.add_argument("--captured-at", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--deployment-commit", required=True)
@@ -518,7 +557,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=MAX_PROPOSAL_PAYLOAD_BYTES,
         )
         inventory_bytes = _read_bounded(args.inventory, limit=256 * 1024)
-        rpc = PinnedHttpsJsonRpc(args.rpc_url)
+        authorization_files = parse_rpc_authorization_file_args(
+            args.rpc_authorization_file,
+            args.rpc_url,
+        )
+        rpc = PinnedHttpsJsonRpc(
+            args.rpc_url,
+            authorization_files=authorization_files,
+        )
         artifact = capture_historical_odra_v1(
             proposal_payload=proposal,
             rpc=rpc,
@@ -529,10 +575,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             inventory_bytes=inventory_bytes,
         )
         output = (
-            json.dumps(artifact, indent=2, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            json.dumps(artifact, indent=2, ensure_ascii=False, allow_nan=False).encode(
+                "utf-8"
+            )
             + b"\n"
         )
         write_capture_atomically(Path(args.output), output)
+    except RpcEndpointPolicyError:
+        print(
+            "historical capture failed: public RPC configuration is invalid",
+            file=sys.stderr,
+        )
+        return 1
     except HistoricalCaptureError as exc:
         print(f"historical capture failed: {exc}", file=sys.stderr)
         return 1

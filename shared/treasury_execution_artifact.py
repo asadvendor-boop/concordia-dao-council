@@ -283,7 +283,9 @@ def _reparse_emitted_evidence(
 
 def _validate_entry(value: object) -> JournalEntry:
     if type(value) is not JournalEntry:
-        raise TreasuryExecutionArtifactError("a parser-validated journal entry is required")
+        raise TreasuryExecutionArtifactError(
+            "a parser-validated journal entry is required"
+        )
     if value.state is not ExecutionState.PROVEN:
         raise TreasuryExecutionArtifactError("journal entry must be PROVEN")
     if value.broadcast_attempts != 1:
@@ -324,7 +326,9 @@ def _validate_entry(value: object) -> JournalEntry:
         PostTransferProofError,
         NativeTransferScanError,
     ) as exc:
-        raise TreasuryExecutionArtifactError("journal parser evidence is invalid") from exc
+        raise TreasuryExecutionArtifactError(
+            "journal parser evidence is invalid"
+        ) from exc
     if (
         hashlib.sha256(value.signed_bytes).hexdigest() != value.signed_bytes_sha256
         or deploy.deploy_hash_hex != value.deploy_hash
@@ -332,7 +336,9 @@ def _validate_entry(value: object) -> JournalEntry:
         or post.deploy_hash != value.deploy_hash
         or scan.deploy_hash != value.deploy_hash
     ):
-        raise TreasuryExecutionArtifactError("journal deploy identity does not match evidence")
+        raise TreasuryExecutionArtifactError(
+            "journal deploy identity does not match evidence"
+        )
     if value.last_detail_code != "execution_proven":
         raise TreasuryExecutionArtifactError(
             "PROVEN journal must carry execution_proven detail code"
@@ -340,7 +346,9 @@ def _validate_entry(value: object) -> JournalEntry:
     created = _journal_timestamp(value.created_at)
     updated = _journal_timestamp(value.updated_at)
     if updated < created:
-        raise TreasuryExecutionArtifactError("updated timestamp precedes created timestamp")
+        raise TreasuryExecutionArtifactError(
+            "updated timestamp precedes created timestamp"
+        )
     _reparse_emitted_evidence(
         value,
         authorization=authorization,
@@ -368,8 +376,6 @@ def _validate_entry(value: object) -> JournalEntry:
 def build_native_treasury_execution_artifact(
     entry: object,
     *,
-    source_commit: str,
-    deployment_commit: str,
     captured_at: str,
 ) -> bytes:
     """Serialize one strict ``native_treasury_execution_v1`` artifact."""
@@ -380,8 +386,8 @@ def build_native_treasury_execution_artifact(
     scan = journal.no_duplicate_proof
     assert finality is not None
     assert scan is not None
-    source_commit = _release_value(source_commit, "source_commit")
-    deployment_commit = _release_value(deployment_commit, "deployment_commit")
+    source_commit = _release_value(journal.source_commit, "source_commit")
+    deployment_commit = _release_value(journal.deployment_commit, "deployment_commit")
     captured_at = _captured_at(captured_at)
     if _journal_timestamp(captured_at) < _journal_timestamp(journal.updated_at):
         raise TreasuryExecutionArtifactError(
@@ -395,6 +401,17 @@ def build_native_treasury_execution_artifact(
     readback = _parse_canonical_json(
         authorization.readback_artifact_json, "v3 readback"
     )
+    v3_proof = _parse_canonical_json(
+        authorization.v3_proof_artifact_json, "exact v3 proof"
+    )
+    proof_deployment = v3_proof.get("deployment")
+    if (
+        type(proof_deployment) is not dict
+        or proof_deployment.get("deployment_commit") != deployment_commit
+    ):
+        raise TreasuryExecutionArtifactError(
+            "journal deployment commit differs from exact v3 proof"
+        )
     snapshot = {
         "status_request": _parse_canonical_json(
             authorization.snapshot_status_request_json, "snapshot status request"
@@ -461,6 +478,7 @@ def build_native_treasury_execution_artifact(
             "header_bytes_hex": authorization.header_bytes.hex(),
             "body_bytes_hex": authorization.body_bytes.hex(),
             "action_core_bytes_hex": authorization.action_core_bytes.hex(),
+            "exact_v3_proof": v3_proof,
             "v3_readback": readback,
             "snapshot": snapshot,
         },

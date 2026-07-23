@@ -22,7 +22,9 @@ from shared.treasury_executor import (
     TreasuryExecutor,
 )
 from tests.test_treasury_executor import (
+    DEPLOYMENT_COMMIT,
     RECIPIENT_ACCOUNT,
+    SOURCE_COMMIT,
     SOURCE_ACCOUNT,
     _evidence,
     _key,
@@ -32,7 +34,11 @@ from tests.test_treasury_executor import (
 
 
 GAS = 123_456_789
-FINALITY_HEIGHT = 8_600_100
+# The synthetic v3 proof finalizes at height 9,007 and is read back at 9,010.
+# Model the governed native transfer as a later deploy so the duplicate scan
+# begins at the exact authorization block without manufacturing millions of
+# unrelated synthetic blocks.
+FINALITY_HEIGHT = 9_012
 FINALITY_HASH = bytes.fromhex("cd" * 32)
 FINALITY_ROOT = bytes.fromhex("ce" * 32)
 
@@ -47,8 +53,17 @@ def _balance(
     request_base: int,
 ):
     return verify_account_balance_at_block(
-        chain_status_request={"jsonrpc": "2.0", "id": request_base, "method": "info_get_status", "params": {}},
-        chain_status_payload={"jsonrpc": "2.0", "id": request_base, "result": {"chainspec_name": "casper-test"}},
+        chain_status_request={
+            "jsonrpc": "2.0",
+            "id": request_base,
+            "method": "info_get_status",
+            "params": {},
+        },
+        chain_status_payload={
+            "jsonrpc": "2.0",
+            "id": request_base,
+            "result": {"chainspec_name": "casper-test"},
+        },
         canonical_block_request={
             "jsonrpc": "2.0",
             "id": request_base + 1,
@@ -61,7 +76,10 @@ def _balance(
             "result": {
                 "block": {
                     "hash": block_hash.hex(),
-                    "header": {"height": block_height, "state_root_hash": state_root.hex()},
+                    "header": {
+                        "height": block_height,
+                        "state_root_hash": state_root.hex(),
+                    },
                     "body": {},
                 }
             },
@@ -72,7 +90,9 @@ def _balance(
             "method": "query_balance_details",
             "params": {
                 "state_identifier": {"StateRootHash": state_root.hex()},
-                "purse_identifier": {"main_purse_under_account_hash": f"account-hash-{account.hex()}"},
+                "purse_identifier": {
+                    "main_purse_under_account_hash": f"account-hash-{account.hex()}"
+                },
             },
         },
         balance_response={
@@ -100,7 +120,11 @@ def _balance(
 def _finalized(tmp_path: Path):
     authorization = _verified()
     executor = TreasuryExecutor(tmp_path / "executor.db")
-    executor.authorize(authorization)
+    executor.authorize(
+        authorization,
+        source_commit=SOURCE_COMMIT,
+        deployment_commit=DEPLOYMENT_COMMIT,
+    )
     prepared = executor.prepare(_key(authorization), lambda _: _signed(authorization))
     executor.broadcast(
         _key(authorization),
@@ -111,10 +135,18 @@ def _finalized(tmp_path: Path):
         lambda deploy_hash: ReconciliationResult(
             "finalized",
             deploy_hash,
-            _evidence(deploy_hash, gas_motes=GAS),
+            _evidence(
+                deploy_hash,
+                gas_motes=GAS,
+                block_height=FINALITY_HEIGHT,
+            ),
         ),
     )
-    evidence = _evidence(prepared.deploy_hash or "", gas_motes=GAS)
+    evidence = _evidence(
+        prepared.deploy_hash or "",
+        gas_motes=GAS,
+        block_height=FINALITY_HEIGHT,
+    )
     finality = verify_finalized_native_transfer(
         requested_deploy_hash=prepared.deploy_hash or "",
         node_observations=evidence.node_observations,
@@ -173,7 +205,9 @@ def _proof_inputs(
 
     start = authorization.finalization_block_height
     observed = FINALITY_HEIGHT + 1
-    block_hashes = {height: f"{height - start + 1:064x}" for height in range(start, observed + 1)}
+    block_hashes = {
+        height: f"{height - start + 1:064x}" for height in range(start, observed + 1)
+    }
     block_hashes[start] = (
         scan_authorization_block_hash or authorization.finalization_block_hash
     ).hex()
@@ -184,60 +218,89 @@ def _proof_inputs(
         parent_hash = "aa" * 32 if height == start else block_hashes[height - 1]
         transfers: list[dict[str, object]] = []
         if height == FINALITY_HEIGHT:
-            transfers = [{
-                "Version1": {
-                    "deploy_hash": finality.deploy_hash,
-                    "from": f"account-hash-{SOURCE_ACCOUNT.hex()}",
-                    "to": f"account-hash-{RECIPIENT_ACCOUNT.hex()}",
-                    "source": "uref-" + "11" * 32 + "-007",
-                    "target": "uref-" + "12" * 32 + "-000",
-                    "amount": str(authorization.amount_motes),
-                    "gas": str(GAS),
-                    "id": authorization.transfer_id,
+            transfers = [
+                {
+                    "Version1": {
+                        "deploy_hash": finality.deploy_hash,
+                        "from": f"account-hash-{SOURCE_ACCOUNT.hex()}",
+                        "to": f"account-hash-{RECIPIENT_ACCOUNT.hex()}",
+                        "source": "uref-" + "11" * 32 + "-007",
+                        "target": "uref-" + "12" * 32 + "-000",
+                        "amount": str(authorization.amount_motes),
+                        "gas": str(GAS),
+                        "id": authorization.transfer_id,
+                    }
                 }
-            }]
-        observations.append({
-            "block_request": {
-                "jsonrpc": "2.0",
-                "id": f"b-{height}",
-                "method": "chain_get_block",
-                "params": {"block_identifier": {"Height": height}},
-            },
-            "block_response": {
-                "jsonrpc": "2.0",
-                "id": f"b-{height}",
-                "result": {"block": {"hash": block_hash, "header": {"height": height, "parent_hash": parent_hash, "state_root_hash": "dd" * 32}, "body": {}}},
-            },
-            "transfers_request": {
-                "jsonrpc": "2.0",
-                "id": f"t-{height}",
-                "method": "chain_get_block_transfers",
-                "params": {"block_identifier": {"Hash": block_hash}},
-            },
-            "transfers_response": {
-                "jsonrpc": "2.0",
-                "id": f"t-{height}",
-                "result": {"block_hash": block_hash, "transfers": transfers},
-            },
-        })
+            ]
+        observations.append(
+            {
+                "block_request": {
+                    "jsonrpc": "2.0",
+                    "id": f"b-{height}",
+                    "method": "chain_get_block",
+                    "params": {"block_identifier": {"Height": height}},
+                },
+                "block_response": {
+                    "jsonrpc": "2.0",
+                    "id": f"b-{height}",
+                    "result": {
+                        "block": {
+                            "hash": block_hash,
+                            "header": {
+                                "height": height,
+                                "parent_hash": parent_hash,
+                                "state_root_hash": "dd" * 32,
+                            },
+                            "body": {},
+                        }
+                    },
+                },
+                "transfers_request": {
+                    "jsonrpc": "2.0",
+                    "id": f"t-{height}",
+                    "method": "chain_get_block_transfers",
+                    "params": {"block_identifier": {"Hash": block_hash}},
+                },
+                "transfers_response": {
+                    "jsonrpc": "2.0",
+                    "id": f"t-{height}",
+                    "result": {"block_hash": block_hash, "transfers": transfers},
+                },
+            }
+        )
     no_duplicate = verify_no_duplicate_native_transfer(
-        chain_status_request={"jsonrpc": "2.0", "id": "tip", "method": "info_get_status", "params": {}},
+        chain_status_request={
+            "jsonrpc": "2.0",
+            "id": "tip",
+            "method": "info_get_status",
+            "params": {},
+        },
         chain_status_response={
             "jsonrpc": "2.0",
             "id": "tip",
-            "result": {"chainspec_name": "casper-test", "last_added_block_info": {"hash": block_hashes[observed], "height": observed}},
+            "result": {
+                "chainspec_name": "casper-test",
+                "last_added_block_info": {
+                    "hash": block_hashes[observed],
+                    "height": observed,
+                },
+            },
         },
         block_observations=observations,
         authorization_block_height=start,
         finality_proof=finality,
     )
-    return executor, authorization, {
-        "pre_source_balance": pre_source_proof,
-        "pre_recipient_balance": pre_recipient_proof,
-        "post_source_balance": post_source_proof,
-        "post_recipient_balance": post_recipient_proof,
-        "no_duplicate_proof": no_duplicate,
-    }
+    return (
+        executor,
+        authorization,
+        {
+            "pre_source_balance": pre_source_proof,
+            "pre_recipient_balance": pre_recipient_proof,
+            "post_source_balance": post_source_proof,
+            "post_recipient_balance": post_recipient_proof,
+            "no_duplicate_proof": no_duplicate,
+        },
+    )
 
 
 def test_proof_gate_persists_and_reparses_all_raw_evidence(tmp_path: Path) -> None:
@@ -272,7 +335,11 @@ def test_stale_reconcile_callback_cannot_demote_proven_execution(
 
     database_path = tmp_path / "race.db"
     executor = TreasuryExecutor(database_path)
-    executor.authorize(expected_authorization)
+    executor.authorize(
+        expected_authorization,
+        source_commit=SOURCE_COMMIT,
+        deployment_commit=DEPLOYMENT_COMMIT,
+    )
     executor.prepare(
         _key(expected_authorization),
         lambda _: _signed(expected_authorization),
@@ -294,7 +361,11 @@ def test_stale_reconcile_callback_cannot_demote_proven_execution(
             return ReconciliationResult(
                 "finalized",
                 deploy_hash,
-                _evidence(deploy_hash, gas_motes=GAS),
+                _evidence(
+                    deploy_hash,
+                    gas_motes=GAS,
+                    block_height=FINALITY_HEIGHT,
+                ),
             )
         return ReconciliationResult("pending", deploy_hash)
 
@@ -312,7 +383,11 @@ def test_stale_reconcile_callback_cannot_demote_proven_execution(
             lambda deploy_hash: ReconciliationResult(
                 "finalized",
                 deploy_hash,
-                _evidence(deploy_hash, gas_motes=GAS),
+                _evidence(
+                    deploy_hash,
+                    gas_motes=GAS,
+                    block_height=FINALITY_HEIGHT,
+                ),
             ),
         )
         proven = winning_executor.prove_execution(
@@ -336,12 +411,18 @@ def test_stale_reconcile_callback_cannot_demote_proven_execution(
 def test_proof_gate_rejects_nonfinalized_execution(tmp_path: Path) -> None:
     authorization = _verified()
     executor = TreasuryExecutor(tmp_path / "executor.db")
-    executor.authorize(authorization)
+    executor.authorize(
+        authorization,
+        source_commit=SOURCE_COMMIT,
+        deployment_commit=DEPLOYMENT_COMMIT,
+    )
     with pytest.raises(InvalidTransition, match="AUTHORIZED"):
         executor.prove_execution(_key(authorization), **{})  # type: ignore[arg-type]
 
 
-def test_proof_gate_requires_authorization_snapshot_as_pre_source(tmp_path: Path) -> None:
+def test_proof_gate_requires_authorization_snapshot_as_pre_source(
+    tmp_path: Path,
+) -> None:
     executor, authorization, proofs = _proof_inputs(tmp_path)
     proofs["pre_source_balance"] = _balance(
         account=SOURCE_ACCOUNT,
@@ -367,13 +448,19 @@ def test_proof_gate_rejects_competing_block_at_v3_authorization_height(
         executor.prove_execution(_key(authorization), **proofs)
 
 
-@pytest.mark.parametrize("column", ["post_balance_evidence_json", "no_duplicate_scan_json"])
-def test_restart_rejects_tampered_persisted_execution_proof(tmp_path: Path, column: str) -> None:
+@pytest.mark.parametrize(
+    "column", ["post_balance_evidence_json", "no_duplicate_scan_json"]
+)
+def test_restart_rejects_tampered_persisted_execution_proof(
+    tmp_path: Path, column: str
+) -> None:
     executor, authorization, proofs = _proof_inputs(tmp_path)
     executor.prove_execution(_key(authorization), **proofs)
     database_path = tmp_path / "executor.db"
     with sqlite3.connect(database_path) as db:
-        raw = db.execute(f"SELECT {column} FROM treasury_execution_journal").fetchone()[0]
+        raw = db.execute(f"SELECT {column} FROM treasury_execution_journal").fetchone()[
+            0
+        ]
         decoded = json.loads(raw)
         if column == "post_balance_evidence_json":
             decoded["post_recipient"]["balance_response"]["result"]["balance"] = "1"

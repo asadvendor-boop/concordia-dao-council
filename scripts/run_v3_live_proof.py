@@ -63,6 +63,10 @@ from scripts.read_v3_state import (
     capture_v3_state,
     verify_checkpoint_state_readback_artifact,
 )
+from shared.casper_rpc_transport import (
+    RpcEndpointPolicyError,
+    parse_rpc_authorization_file_args,
+)
 
 
 class LiveProofError(RuntimeError):
@@ -76,7 +80,9 @@ SIGNATURE_IMPORT_SCHEMA_ID = "concordia.v3-browser-signature-import.v1"
 
 
 def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
 
 
 def _normalize_deploy_json(value: object) -> object:
@@ -84,7 +90,11 @@ def _normalize_deploy_json(value: object) -> object:
         return {str(key): _normalize_deploy_json(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_normalize_deploy_json(item) for item in value]
-    if isinstance(value, str) and len(value) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", value):
+    if (
+        isinstance(value, str)
+        and len(value) % 2 == 0
+        and re.fullmatch(r"[0-9a-fA-F]+", value)
+    ):
         return value.lower()
     return value
 
@@ -114,7 +124,10 @@ def _validate_checkpoint_state_readback(
         verified = verify_checkpoint_state_readback_artifact(value)
     except ReadbackValidationError as exc:
         raise LiveProofError("checkpoint prior state-readback is invalid") from exc
-    if verified["schema_id"] != CHECKPOINT_READBACK_SCHEMA_ID or verified["network"] != network:
+    if (
+        verified["schema_id"] != CHECKPOINT_READBACK_SCHEMA_ID
+        or verified["network"] != network
+    ):
         raise LiveProofError("checkpoint prior state-readback schema/network mismatch")
     expected = verified["expected"]
     exact_identities = {
@@ -133,7 +146,10 @@ def _validate_checkpoint_state_readback(
     facts = verified["facts"]
     _hash32(facts["observed_block_hash"], "checkpoint observed block hash")
     _hash32(facts["observed_state_root_hash"], "checkpoint observed state root")
-    if type(facts["observed_block_height"]) is not int or facts["observed_block_height"] < 0:
+    if (
+        type(facts["observed_block_height"]) is not int
+        or facts["observed_block_height"] < 0
+    ):
         raise LiveProofError("checkpoint observed block height is invalid")
     completed = expected["completed_steps"]
     if not isinstance(completed, list):
@@ -148,7 +164,9 @@ def _validate_checkpoint_state_readback(
         if not isinstance(item["name"], str) or not item["name"]:
             raise LiveProofError("checkpoint completed-step name is invalid")
         _hash32(item["deploy_hash"], "checkpoint completed deploy hash")
-        _hash32(item["finality_transcript_sha256"], "checkpoint finality transcript hash")
+        _hash32(
+            item["finality_transcript_sha256"], "checkpoint finality transcript hash"
+        )
     return verified
 
 
@@ -173,7 +191,9 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != expected:
         raise LiveProofError("browser checkpoint field set is invalid")
     sealed = _seal_checkpoint(value)
-    if not hmac.compare_digest(str(value["checkpoint_sha256"]), sealed["checkpoint_sha256"]):
+    if not hmac.compare_digest(
+        str(value["checkpoint_sha256"]), sealed["checkpoint_sha256"]
+    ):
         raise LiveProofError("browser checkpoint checksum mismatch")
     if value["schema_id"] != CHECKPOINT_SCHEMA_ID:
         raise LiveProofError("browser checkpoint schema mismatch")
@@ -183,7 +203,10 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
     }:
         raise LiveProofError("browser checkpoint status is invalid")
     run = value["run"]
-    if not isinstance(run, Mapping) or run.get("schema_id") != "concordia.v3-live-proof-run.v1":
+    if (
+        not isinstance(run, Mapping)
+        or run.get("schema_id") != "concordia.v3-live-proof-run.v1"
+    ):
         raise LiveProofError("browser checkpoint run is invalid")
     if run.get("network") != "casper-test":
         raise LiveProofError("browser checkpoint network must be exactly casper-test")
@@ -206,7 +229,11 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
     )
     index = value["next_step_index"]
     steps = run.get("steps")
-    if type(index) is not int or not isinstance(steps, list) or not 0 <= index < len(steps):
+    if (
+        type(index) is not int
+        or not isinstance(steps, list)
+        or not 0 <= index < len(steps)
+    ):
         raise LiveProofError("browser checkpoint step cursor is invalid")
     step = steps[index]
     if not isinstance(step, Mapping):
@@ -234,7 +261,9 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
         if value["status"] == "waiting_for_browser_signature"
         else "signed_deploy_staged"
     )
-    if run.get("status") != expected_run_status or run.get("next_step") != step.get("name"):
+    if run.get("status") != expected_run_status or run.get("next_step") != step.get(
+        "name"
+    ):
         raise LiveProofError("browser checkpoint run status/cursor mismatch")
     request = value["signature_request"]
     if not isinstance(request, Mapping) or set(request) != {
@@ -253,21 +282,32 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
         raise LiveProofError("browser checkpoint signature request is invalid")
     role_accounts = run.get("role_accounts")
     role = step.get("role")
-    role_account = role_accounts.get(role) if isinstance(role_accounts, Mapping) else None
+    role_account = (
+        role_accounts.get(role) if isinstance(role_accounts, Mapping) else None
+    )
     deploy_json = step.get("deploy")
-    if not isinstance(role_account, Mapping) or role_account.get("custody") != "browser":
-        raise LiveProofError("browser checkpoint step is not assigned to browser custody")
+    if (
+        not isinstance(role_account, Mapping)
+        or role_account.get("custody") != "browser"
+    ):
+        raise LiveProofError(
+            "browser checkpoint step is not assigned to browser custody"
+        )
     if not isinstance(deploy_json, Mapping):
         raise LiveProofError("browser checkpoint deploy is invalid")
     approvals = deploy_json.get("approvals")
     if value["status"] == "waiting_for_browser_signature" and approvals != []:
-        raise LiveProofError("waiting browser checkpoint must contain one unsigned deploy")
+        raise LiveProofError(
+            "waiting browser checkpoint must contain one unsigned deploy"
+        )
     if value["status"] == "signed_deploy_staged" and (
         not isinstance(approvals, list) or len(approvals) != 1
     ):
         raise LiveProofError("staged browser checkpoint must contain one signed deploy")
     session = deploy_json.get("session")
-    stored = session.get("StoredContractByHash") if isinstance(session, Mapping) else None
+    stored = (
+        session.get("StoredContractByHash") if isinstance(session, Mapping) else None
+    )
     if not isinstance(stored, Mapping):
         raise LiveProofError("browser checkpoint deploy session is invalid")
     if set(stored) != {"hash", "entry_point", "args"}:
@@ -280,13 +320,18 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
             [
                 [
                     item["name"],
-                    {key: copy.deepcopy(item[key]) for key in ("cl_type", "bytes", "parsed")},
+                    {
+                        key: copy.deepcopy(item[key])
+                        for key in ("cl_type", "bytes", "parsed")
+                    },
                 ]
                 for item in frozen_step["args"]
             ]
         )
     ):
-        raise LiveProofError("browser checkpoint target/entry point/arguments are not frozen")
+        raise LiveProofError(
+            "browser checkpoint target/entry point/arguments are not frozen"
+        )
     try:
         parsed_deploy = serializer.from_json(dict(deploy_json), Deploy)
         canonical_deploy = serializer.to_json(parsed_deploy)
@@ -296,21 +341,28 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
         )
         deploy_hash = create_digest_of_deploy(parsed_deploy.header)
     except Exception as exc:
-        raise LiveProofError("browser checkpoint deploy cannot be decoded canonically") from exc
+        raise LiveProofError(
+            "browser checkpoint deploy cannot be decoded canonically"
+        ) from exc
     if _normalize_deploy_json(canonical_deploy) != _normalize_deploy_json(deploy_json):
-        raise LiveProofError("browser checkpoint deploy parsed fields disagree with bytes")
+        raise LiveProofError(
+            "browser checkpoint deploy parsed fields disagree with bytes"
+        )
     if (
         parsed_deploy.header.body_hash != body_hash
         or parsed_deploy.hash != deploy_hash
         or parsed_deploy.header.chain_name != "casper-test"
-        or deploy_hash.hex() != _hash32(deploy_json.get("hash"), "checkpoint deploy hash")
+        or deploy_hash.hex()
+        != _hash32(deploy_json.get("hash"), "checkpoint deploy hash")
         or parsed_deploy.header.account.account_key.hex()
         != str(role_account.get("public_key", "")).lower()
     ):
         raise LiveProofError("browser checkpoint deploy hash/network/role mismatch")
     completed = _completed_step_readbacks(run, before_index=index)
     if value["prior_state_readback"]["expected"]["completed_steps"] != completed:
-        raise LiveProofError("browser checkpoint prior state does not bind completed run prefix")
+        raise LiveProofError(
+            "browser checkpoint prior state does not bind completed run prefix"
+        )
     expected_request = {
         "network": "casper-test",
         "package_hash": package_hash,
@@ -320,12 +372,18 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
         "role": role,
         "public_key": str(role_account.get("public_key", "")).lower(),
         "entry_point": step.get("entry_point"),
-        "unsigned_deploy_hash": _hash32(deploy_json.get("hash"), "unsigned deploy hash"),
-        "runtime_args_sha256": hashlib.sha256(_canonical_json(stored.get("args"))).hexdigest(),
+        "unsigned_deploy_hash": _hash32(
+            deploy_json.get("hash"), "unsigned deploy hash"
+        ),
+        "runtime_args_sha256": hashlib.sha256(
+            _canonical_json(stored.get("args"))
+        ).hexdigest(),
         "prior_state_readback_sha256": prior["artifact_sha256"],
     }
     if _normalize_deploy_json(request) != _normalize_deploy_json(expected_request):
-        raise LiveProofError("browser checkpoint signature request differs from frozen run")
+        raise LiveProofError(
+            "browser checkpoint signature request differs from frozen run"
+        )
     consumed = value["consumed_import_deploy_hashes"]
     if not isinstance(consumed, list) or len(set(consumed)) != len(consumed):
         raise LiveProofError("browser checkpoint consumed imports are invalid")
@@ -342,20 +400,37 @@ def build_browser_checkpoint(
 ) -> dict[str, Any]:
     run = copy.deepcopy(dict(run_output))
     if run.get("status") != "waiting_for_browser_signature":
-        raise LiveProofError("checkpoint can only be built at a browser-signature boundary")
+        raise LiveProofError(
+            "checkpoint can only be built at a browser-signature boundary"
+        )
     steps = run.get("steps")
-    if type(next_step_index) is not int or not isinstance(steps, list) or not 0 <= next_step_index < len(steps):
+    if (
+        type(next_step_index) is not int
+        or not isinstance(steps, list)
+        or not 0 <= next_step_index < len(steps)
+    ):
         raise LiveProofError("checkpoint next step index is invalid")
     step = steps[next_step_index]
     role_accounts = run.get("role_accounts")
-    role_account = role_accounts.get(step.get("role")) if isinstance(role_accounts, Mapping) else None
+    role_account = (
+        role_accounts.get(step.get("role"))
+        if isinstance(role_accounts, Mapping)
+        else None
+    )
     deploy_json = step.get("deploy") if isinstance(step, Mapping) else None
     session = deploy_json.get("session") if isinstance(deploy_json, Mapping) else None
-    stored = session.get("StoredContractByHash") if isinstance(session, Mapping) else None
-    if not isinstance(role_account, Mapping) or role_account.get("custody") != "browser":
+    stored = (
+        session.get("StoredContractByHash") if isinstance(session, Mapping) else None
+    )
+    if (
+        not isinstance(role_account, Mapping)
+        or role_account.get("custody") != "browser"
+    ):
         raise LiveProofError("checkpoint next role is not browser-held")
     if not isinstance(stored, Mapping) or deploy_json.get("approvals") != []:
-        raise LiveProofError("checkpoint next deploy must be one unsigned stored-contract call")
+        raise LiveProofError(
+            "checkpoint next deploy must be one unsigned stored-contract call"
+        )
     package_hash = _hash32(run.get("package_hash"), "checkpoint package hash")
     contract_hash = _hash32(run.get("contract_hash"), "checkpoint contract hash")
     prepared = run.get("prepared")
@@ -384,8 +459,12 @@ def build_browser_checkpoint(
             "role": step.get("role"),
             "public_key": str(role_account.get("public_key", "")).lower(),
             "entry_point": step.get("entry_point"),
-            "unsigned_deploy_hash": _hash32(deploy_json.get("hash"), "unsigned deploy hash"),
-            "runtime_args_sha256": hashlib.sha256(_canonical_json(stored.get("args"))).hexdigest(),
+            "unsigned_deploy_hash": _hash32(
+                deploy_json.get("hash"), "unsigned deploy hash"
+            ),
+            "runtime_args_sha256": hashlib.sha256(
+                _canonical_json(stored.get("args"))
+            ).hexdigest(),
             "prior_state_readback_sha256": prior["artifact_sha256"],
         },
         "consumed_import_deploy_hashes": [],
@@ -448,9 +527,13 @@ def validate_and_stage_browser_import(
         body_hash = create_digest_of_deploy_body(signed.payment, signed.session)
         deploy_hash = create_digest_of_deploy(signed.header)
     except Exception as exc:
-        raise LiveProofError("browser signed deploy cannot be decoded canonically") from exc
+        raise LiveProofError(
+            "browser signed deploy cannot be decoded canonically"
+        ) from exc
     if _normalize_deploy_json(canonical_signed) != _normalize_deploy_json(signed_json):
-        raise LiveProofError("browser signed deploy parsed fields disagree with canonical bytes")
+        raise LiveProofError(
+            "browser signed deploy parsed fields disagree with canonical bytes"
+        )
     unsigned_without_approvals = serializer.to_json(unsigned)
     signed_without_approvals = copy.deepcopy(canonical_signed)
     unsigned_without_approvals["approvals"] = []
@@ -458,12 +541,22 @@ def validate_and_stage_browser_import(
     if _normalize_deploy_json(unsigned_without_approvals) != _normalize_deploy_json(
         signed_without_approvals
     ):
-        raise LiveProofError("browser signed deploy differs from the checkpoint payload")
-    expected_hash = _hash32(checkpoint["signature_request"]["unsigned_deploy_hash"], "unsigned deploy hash")
-    if signed.header.body_hash != body_hash or signed.hash != deploy_hash or deploy_hash.hex() != expected_hash:
+        raise LiveProofError(
+            "browser signed deploy differs from the checkpoint payload"
+        )
+    expected_hash = _hash32(
+        checkpoint["signature_request"]["unsigned_deploy_hash"], "unsigned deploy hash"
+    )
+    if (
+        signed.header.body_hash != body_hash
+        or signed.hash != deploy_hash
+        or deploy_hash.hex() != expected_hash
+    ):
         raise LiveProofError("browser signed deploy hash/body differs from checkpoint")
     if signed.header.chain_name != "casper-test":
-        raise LiveProofError("browser signed deploy network must be exactly casper-test")
+        raise LiveProofError(
+            "browser signed deploy network must be exactly casper-test"
+        )
     expected_public_key = str(checkpoint["signature_request"]["public_key"]).lower()
     if signed.header.account.account_key.hex() != expected_public_key:
         raise LiveProofError("browser signed deploy initiator differs from exact role")
@@ -484,9 +577,17 @@ def validate_and_stage_browser_import(
     if not signature_valid:
         raise LiveProofError("browser signed deploy signature is invalid")
     now = time.time() if now_seconds is None else now_seconds
-    expires_at = signed.header.timestamp.value + signed.header.ttl.as_milliseconds / 1000
-    if not isinstance(now, (int, float)) or now < signed.header.timestamp.value or now >= expires_at:
-        raise LiveProofError("browser signed deploy checkpoint is stale or not yet valid")
+    expires_at = (
+        signed.header.timestamp.value + signed.header.ttl.as_milliseconds / 1000
+    )
+    if (
+        not isinstance(now, (int, float))
+        or now < signed.header.timestamp.value
+        or now >= expires_at
+    ):
+        raise LiveProofError(
+            "browser signed deploy checkpoint is stale or not yet valid"
+        )
     normalized_hash = deploy_hash.hex()
     if normalized_hash in checkpoint["consumed_import_deploy_hashes"]:
         raise LiveProofError("browser signed deploy import was already consumed")
@@ -499,7 +600,14 @@ def validate_and_stage_browser_import(
     return _seal_checkpoint(staged)
 
 
-def _transcript(*, node_id: str, method: str, params: Mapping[str, Any], request: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
+def _transcript(
+    *,
+    node_id: str,
+    method: str,
+    params: Mapping[str, Any],
+    request: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> dict[str, Any]:
     value: dict[str, Any] = {
         "rpc_url_identity_or_node_id": node_id,
         "method": method,
@@ -521,7 +629,9 @@ def outcome_from_finality_response(response: Mapping[str, Any]) -> dict[str, Any
         raise LiveProofError("finality RPC lacks a result object")
     if set(result) != {"api_version", "deploy", "execution_info"}:
         raise LiveProofError("finality RPC is not the exact Casper v2 deploy result")
-    if not isinstance(result["api_version"], str) or not isinstance(result["deploy"], Mapping):
+    if not isinstance(result["api_version"], str) or not isinstance(
+        result["deploy"], Mapping
+    ):
         raise LiveProofError("finality RPC has invalid api_version/deploy")
     execution_info = result["execution_info"]
     if execution_info is None:
@@ -550,7 +660,9 @@ def outcome_from_finality_response(response: Mapping[str, Any]) -> dict[str, Any
     if type(block_height) is not int or block_height < 0:
         raise LiveProofError("finality block height is invalid")
     execution_result = execution_info["execution_result"]
-    if not isinstance(execution_result, Mapping) or set(execution_result) != {"Version2"}:
+    if not isinstance(execution_result, Mapping) or set(execution_result) != {
+        "Version2"
+    }:
         raise LiveProofError("finality execution result must contain exactly Version2")
     versioned = execution_result["Version2"]
     if not isinstance(versioned, Mapping) or set(versioned) != {
@@ -607,7 +719,10 @@ def _role_key(role: Mapping[str, Any]) -> tuple[object, object | None, str]:
     if set(role) == {"custody", "public_key"} and role["custody"] == "browser":
         public = _public_key(str(role["public_key"]))
         return public, None, "browser"
-    if set(role) == {"custody", "secret_key_path", "key_algorithm"} and role["custody"] == "server":
+    if (
+        set(role) == {"custody", "secret_key_path", "key_algorithm"}
+        and role["custody"] == "server"
+    ):
         try:
             private = parse_private_key(
                 Path(str(role["secret_key_path"])),
@@ -656,7 +771,9 @@ def _build_call(
 ) -> dict[str, Any]:
     if len(contract_hash) != 64:
         raise LiveProofError("exact contract hash must be 64 hex characters")
-    deploy_args = [DeployArgument(str(item["name"]), _runtime_value(item)) for item in runtime_args]
+    deploy_args = [
+        DeployArgument(str(item["name"]), _runtime_value(item)) for item in runtime_args
+    ]
     deploy = create_deploy(
         create_deploy_parameters(signer, "casper-test", ttl=ttl),
         create_standard_payment(payment_motes),
@@ -677,13 +794,18 @@ def _build_call(
 def _simple_args(proposal_id: str, envelope_hash: str) -> list[dict[str, Any]]:
     return [
         {"name": "proposal_id", **serializer.to_json(CLV_String(proposal_id))},
-        {"name": "envelope_hash", **serializer.to_json(CLV_ByteArray(bytes.fromhex(envelope_hash)))},
+        {
+            "name": "envelope_hash",
+            **serializer.to_json(CLV_ByteArray(bytes.fromhex(envelope_hash))),
+        },
     ]
 
 
 def choose_negative_allocation_bps(approved: object) -> int:
     if type(approved) is not int or not 0 <= approved <= 10_000:
-        raise LiveProofError("approved_allocation_bps must be an exact basis-point value")
+        raise LiveProofError(
+            "approved_allocation_bps must be an exact basis-point value"
+        )
     return 2_999 if approved == 3_000 else 3_000
 
 
@@ -701,13 +823,55 @@ def _steps(prepared: Mapping[str, Any]) -> list[dict[str, Any]]:
     proposal_id = str(prepared["proposal_id"])
     envelope_hash = str(prepared["envelope_hash"])
     return [
-        {"name": "propose_exact", "role": "proposer", "entry_point": "propose_envelope", "args": _simple_args(proposal_id, envelope_hash), "expected": "success"},
-        {"name": "finalize_pre_quorum", "role": "finalizer", "entry_point": prepared["entry_point"], "args": exact, "expected_error": 8},
-        {"name": "approve_a", "role": "signer_a", "entry_point": "approve_envelope", "args": _simple_args(proposal_id, envelope_hash), "expected": "success"},
-        {"name": "approve_b", "role": "signer_b", "entry_point": "approve_envelope", "args": _simple_args(proposal_id, envelope_hash), "expected": "success"},
-        {"name": "finalize_mutated_3000_bps", "role": "finalizer", "entry_point": prepared["entry_point"], "args": mutated, "expected_error": 10},
-        {"name": "finalize_exact", "role": "finalizer", "entry_point": prepared["entry_point"], "args": exact, "expected": "success"},
-        {"name": "finalize_again", "role": "finalizer", "entry_point": prepared["entry_point"], "args": exact, "expected_error": 12},
+        {
+            "name": "propose_exact",
+            "role": "proposer",
+            "entry_point": "propose_envelope",
+            "args": _simple_args(proposal_id, envelope_hash),
+            "expected": "success",
+        },
+        {
+            "name": "finalize_pre_quorum",
+            "role": "finalizer",
+            "entry_point": prepared["entry_point"],
+            "args": exact,
+            "expected_error": 8,
+        },
+        {
+            "name": "approve_a",
+            "role": "signer_a",
+            "entry_point": "approve_envelope",
+            "args": _simple_args(proposal_id, envelope_hash),
+            "expected": "success",
+        },
+        {
+            "name": "approve_b",
+            "role": "signer_b",
+            "entry_point": "approve_envelope",
+            "args": _simple_args(proposal_id, envelope_hash),
+            "expected": "success",
+        },
+        {
+            "name": "finalize_mutated_3000_bps",
+            "role": "finalizer",
+            "entry_point": prepared["entry_point"],
+            "args": mutated,
+            "expected_error": 10,
+        },
+        {
+            "name": "finalize_exact",
+            "role": "finalizer",
+            "entry_point": prepared["entry_point"],
+            "args": exact,
+            "expected": "success",
+        },
+        {
+            "name": "finalize_again",
+            "role": "finalizer",
+            "entry_point": prepared["entry_point"],
+            "args": exact,
+            "expected_error": 12,
+        },
     ]
 
 
@@ -735,9 +899,7 @@ def _persist_artifact(path: Path, value: Mapping[str, Any]) -> None:
             temporary.unlink()
 
 
-def _persist_run_artifact(
-    args: argparse.Namespace, value: Mapping[str, Any]
-) -> None:
+def _persist_run_artifact(args: argparse.Namespace, value: Mapping[str, Any]) -> None:
     _persist_artifact(args.journal, value)
 
 
@@ -814,31 +976,36 @@ def _validate_journal_step(
         body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:
-        raise LiveProofError("server journal deploy cannot be decoded canonically") from exc
+        raise LiveProofError(
+            "server journal deploy cannot be decoded canonically"
+        ) from exc
     if _normalize_deploy_json(canonical) != _normalize_deploy_json(deploy_json):
-        raise LiveProofError("server journal deploy differs from canonical Casper bytes")
+        raise LiveProofError(
+            "server journal deploy differs from canonical Casper bytes"
+        )
     expected_public_key = str(role_account.get("public_key", "")).lower()
     if (
         deploy.header.body_hash != body_hash
         or deploy.hash != deploy_hash
         or deploy.header.chain_name != "casper-test"
-        or deploy_hash.hex() != _hash32(record.get("deploy_hash"), "journal deploy hash")
+        or deploy_hash.hex()
+        != _hash32(record.get("deploy_hash"), "journal deploy hash")
         or deploy.header.account.account_key.hex() != expected_public_key
     ):
         raise LiveProofError("server journal deploy hash/network/role is invalid")
     unsigned_browser = custody == "browser" and state == "prepared"
     if unsigned_browser:
         if deploy.approvals:
-            raise LiveProofError(
-                "browser journal deploy must be unsigned and prepared"
-            )
+            raise LiveProofError("browser journal deploy must be unsigned and prepared")
     else:
         if len(deploy.approvals) != 1:
             raise LiveProofError("server journal deploy requires one approval")
         approval = deploy.approvals[0]
         signer = getattr(approval.signer, "account_key", None)
         if not isinstance(signer, bytes) or signer.hex() != expected_public_key:
-            raise LiveProofError("server journal deploy approval differs from frozen role")
+            raise LiveProofError(
+                "server journal deploy approval differs from frozen role"
+            )
         try:
             valid_signature = crypto.verify_deploy_approval_signature(
                 deploy_hash, approval.signature, signer
@@ -848,7 +1015,9 @@ def _validate_journal_step(
         if not valid_signature:
             raise LiveProofError("server journal deploy signature is invalid")
     session = deploy_json.get("session")
-    stored = session.get("StoredContractByHash") if isinstance(session, Mapping) else None
+    stored = (
+        session.get("StoredContractByHash") if isinstance(session, Mapping) else None
+    )
     expected_args = [
         [
             item["name"],
@@ -859,13 +1028,14 @@ def _validate_journal_step(
     if (
         not isinstance(stored, Mapping)
         or set(stored) != {"hash", "entry_point", "args"}
-        or _hash32(stored.get("hash"), "journal session contract hash")
-        != contract_hash
+        or _hash32(stored.get("hash"), "journal session contract hash") != contract_hash
         or stored.get("entry_point") != frozen_step["entry_point"]
         or _normalize_deploy_json(stored.get("args"))
         != _normalize_deploy_json(expected_args)
     ):
-        raise LiveProofError("server journal target/entry point/arguments are not frozen")
+        raise LiveProofError(
+            "server journal target/entry point/arguments are not frozen"
+        )
 
 
 def _completed_step_readbacks(
@@ -899,7 +1069,10 @@ def _completed_step_readbacks(
 
 def _expected_outcome(step: Mapping[str, Any], outcome: Mapping[str, Any]) -> None:
     if "expected_error" in step:
-        if outcome.get("success") is not False or outcome.get("user_error") != step["expected_error"]:
+        if (
+            outcome.get("success") is not False
+            or outcome.get("user_error") != step["expected_error"]
+        ):
             raise LiveProofError(
                 f"{step['name']}: expected User error {step['expected_error']}"
             )
@@ -913,7 +1086,11 @@ def _validate_broadcast_response(
     request_id: str,
     deploy_hash: str,
 ) -> Mapping[str, Any]:
-    if not isinstance(response, Mapping) or set(response) != {"jsonrpc", "id", "result"}:
+    if not isinstance(response, Mapping) or set(response) != {
+        "jsonrpc",
+        "id",
+        "result",
+    }:
         raise LiveProofError("broadcast response is not the exact Casper v2 result")
     if response["jsonrpc"] != "2.0" or response["id"] != request_id:
         raise LiveProofError("broadcast response request identity mismatch")
@@ -952,9 +1129,9 @@ def _revalidate_staged_checkpoint(
         imported,
         now_seconds=now_seconds,
     )
-    if _normalize_deploy_json(restaged["run"]["steps"][index]["deploy"]) != _normalize_deploy_json(
-        signed
-    ):
+    if _normalize_deploy_json(
+        restaged["run"]["steps"][index]["deploy"]
+    ) != _normalize_deploy_json(signed):
         raise LiveProofError("staged browser deploy changed during revalidation")
     return verified
 
@@ -964,7 +1141,9 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
     prepared = prepare_v3_envelope(document)
     roles = json.loads(args.roles.read_text(encoding="utf-8"))
     if set(roles) != {"proposer", "finalizer", "signer_a", "signer_b", "signer_c"}:
-        raise LiveProofError("role manifest must contain exactly five frozen governance roles")
+        raise LiveProofError(
+            "role manifest must contain exactly five frozen governance roles"
+        )
     package_hash = _hash32(args.package_hash, "package hash")
     contract_hash = _hash32(args.contract_hash, "contract hash")
     configured_role_accounts = _role_accounts(roles)
@@ -973,11 +1152,21 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
     rpc_transport: object | None = None
     if submit:
         try:
-            rpc_transport = build_public_rpc_transport(
-                getattr(args, "rpc_urls", [])
+            rpc_urls_input = getattr(args, "rpc_urls", [])
+            authorization_files = parse_rpc_authorization_file_args(
+                getattr(args, "rpc_authorization_file", []),
+                rpc_urls_input,
+            )
+            rpc_transport = (
+                build_public_rpc_transport(
+                    rpc_urls_input,
+                    authorization_files=authorization_files,
+                )
+                if authorization_files
+                else build_public_rpc_transport(rpc_urls_input)
             )
             rpc_urls = rpc_transport.endpoints
-        except InstallValidationError as exc:
+        except (InstallValidationError, RpcEndpointPolicyError) as exc:
             raise LiveProofError(str(exc)) from exc
         args.rpc_url = rpc_urls[0]
     node_id = urlsplit(args.rpc_url).hostname if args.rpc_url else None
@@ -989,15 +1178,15 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             raise LiveProofError("prepare-only cannot resume a browser checkpoint")
         if args.journal.resolve() != args.resume_checkpoint.resolve():
             raise LiveProofError("resume must use the authoritative journal path")
-        resumed_value = json.loads(
-            args.resume_checkpoint.read_text(encoding="utf-8")
-        )
+        resumed_value = json.loads(args.resume_checkpoint.read_text(encoding="utf-8"))
         if (
             isinstance(resumed_value, Mapping)
             and resumed_value.get("schema_id") == "concordia.v3-live-proof-run.v1"
         ):
             if args.signed_deploy is not None:
-                raise LiveProofError("server journal rejects browser signed-deploy import")
+                raise LiveProofError(
+                    "server journal rejects browser signed-deploy import"
+                )
             output = copy.deepcopy(dict(resumed_value))
             if (
                 output.get("prepared") != prepared
@@ -1050,11 +1239,15 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             run_output = checkpoint["run"]
             if (
                 run_output.get("prepared") != prepared
-                or _hash32(run_output.get("package_hash"), "checkpoint package hash") != package_hash
-                or _hash32(run_output.get("contract_hash"), "checkpoint contract hash") != contract_hash
+                or _hash32(run_output.get("package_hash"), "checkpoint package hash")
+                != package_hash
+                or _hash32(run_output.get("contract_hash"), "checkpoint contract hash")
+                != contract_hash
                 or run_output.get("role_accounts") != configured_role_accounts
             ):
-                raise LiveProofError("checkpoint differs from current input, roles, package or contract")
+                raise LiveProofError(
+                    "checkpoint differs from current input, roles, package or contract"
+                )
             start_index = checkpoint["next_step_index"]
             if checkpoint["status"] == "waiting_for_browser_signature":
                 if args.signed_deploy is None:
@@ -1068,19 +1261,25 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     "session",
                 }:
                     imported = build_browser_signature_import(checkpoint, imported)
-                active_checkpoint = validate_and_stage_browser_import(checkpoint, imported)
-                active_checkpoint["run"]["steps"][start_index][
-                    "submission_state"
-                ] = "prepared"
+                active_checkpoint = validate_and_stage_browser_import(
+                    checkpoint, imported
+                )
+                active_checkpoint["run"]["steps"][start_index]["submission_state"] = (
+                    "prepared"
+                )
                 _persist_run_artifact(args, active_checkpoint)
             else:
                 if args.signed_deploy is not None:
-                    raise LiveProofError("staged checkpoint rejects duplicate signed-deploy imports")
+                    raise LiveProofError(
+                        "staged checkpoint rejects duplicate signed-deploy imports"
+                    )
                 record = run_output["steps"][start_index]
                 revalidation_time: float | None = None
                 if "finality_transcript" in record:
                     try:
-                        finalized_deploy = serializer.from_json(record["deploy"], Deploy)
+                        finalized_deploy = serializer.from_json(
+                            record["deploy"], Deploy
+                        )
                         revalidation_time = finalized_deploy.header.timestamp.value + 1
                     except Exception as exc:
                         raise LiveProofError(
@@ -1136,7 +1335,11 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             }
             output["steps"].append(record)
         if not submit or private_key is None:
-            if private_key is None and active_checkpoint is not None and step_index == start_index:
+            if (
+                private_key is None
+                and active_checkpoint is not None
+                and step_index == start_index
+            ):
                 pass
             else:
                 output["status"] = (
@@ -1147,6 +1350,7 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
                     _persist_run_artifact(args, output)
                     return output
                 prior_state = capture_v3_checkpoint_state(
+                    rpc_transport=rpc_transport,
                     rpc_url=args.rpc_url,
                     package_hash=package_hash,
                     contract_hash=contract_hash,
@@ -1220,9 +1424,7 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
         }
         if record.get("submission_state") == "broadcast_inflight":
             try:
-                raw_response = _safe_rpc_payload(
-                    rpc_transport, rpc_urls[0], payload
-                )
+                raw_response = _safe_rpc_payload(rpc_transport, rpc_urls[0], payload)
                 rpc_response = _validate_broadcast_response(
                     raw_response,
                     request_id=request_id,
@@ -1292,6 +1494,7 @@ async def _run_unlocked(args: argparse.Namespace) -> dict[str, Any]:
             _persist_run_artifact(args, output)
 
     output["readback"] = capture_v3_state(
+        rpc_transport=rpc_transport,
         rpc_url=args.rpc_url,
         package_hash=package_hash,
         contract_hash=contract_hash,
@@ -1329,6 +1532,12 @@ def build_live_parser() -> argparse.ArgumentParser:
     parser.add_argument("--package-hash", required=True)
     parser.add_argument("--contract-hash", required=True)
     parser.add_argument("--rpc-url", dest="rpc_urls", action="append", default=[])
+    parser.add_argument(
+        "--rpc-authorization-file",
+        action="append",
+        default=[],
+        help="repeat URL=/absolute/token-file; token values are never accepted",
+    )
     parser.add_argument("--payment-motes", type=int, default=5_000_000_000)
     parser.add_argument("--ttl", default="30m")
     parser.add_argument("--max-attempts", type=int, default=30)

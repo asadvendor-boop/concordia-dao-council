@@ -15,10 +15,15 @@ import hmac
 import json
 import secrets
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
-import httpx
+from shared.casper_rpc_transport import (
+    PinnedHttpsJsonRpc,
+    RpcEndpointPolicyError,
+    RpcTransportError,
+    parse_rpc_authorization_file_args,
+)
 
 
 SCHEMA_ID = "concordia.v3-chain-readback.v1"
@@ -32,8 +37,24 @@ class ReadbackValidationError(ValueError):
     pass
 
 
+class ReadbackRpc(Protocol):
+    endpoints: Sequence[str]
+
+    def call(
+        self,
+        endpoint: str,
+        method: str,
+        params: dict[str, object],
+        request_id: object,
+        *,
+        allow_submit: bool = False,
+    ) -> dict[str, object]: ...
+
+
 def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
 
 
 def _hex32(value: object, field: str) -> bytes:
@@ -113,13 +134,17 @@ class VerifiedV3Readback:
             object.__setattr__(self, name, bytes.fromhex(facts[name]))
         object.__setattr__(self, "schema_version", facts["schema_version"])
         object.__setattr__(self, "casper_chain_name", facts["casper_chain_name"])
-        object.__setattr__(self, "signers", tuple(bytes.fromhex(item) for item in facts["signers"]))
+        object.__setattr__(
+            self, "signers", tuple(bytes.fromhex(item) for item in facts["signers"])
+        )
         object.__setattr__(self, "threshold", facts["threshold"])
         object.__setattr__(self, "proposal_id", facts["proposal_id"])
         object.__setattr__(self, "approval_count", facts["approval_count"])
         object.__setattr__(self, "finalized", facts["finalized"])
         object.__setattr__(self, "action_authorized", facts["action_authorized"])
-        object.__setattr__(self, "observed_block_height", facts["observed_block_height"])
+        object.__setattr__(
+            self, "observed_block_height", facts["observed_block_height"]
+        )
         object.__setattr__(self, "_artifact_json", artifact_json)
         object.__setattr__(
             self,
@@ -147,25 +172,46 @@ def _validate_transcript(value: object) -> dict[str, Any]:
         "canonical_sha256",
     }
     if not isinstance(value, Mapping) or set(value) != expected:
-        raise ReadbackValidationError("every transcript must have the exact frozen field set")
+        raise ReadbackValidationError(
+            "every transcript must have the exact frozen field set"
+        )
     node_id = value["rpc_url_identity_or_node_id"]
     if not isinstance(node_id, str) or not node_id or "@" in node_id:
-        raise ReadbackValidationError("RPC node identity is missing or contains credentials")
+        raise ReadbackValidationError(
+            "RPC node identity is missing or contains credentials"
+        )
     method = value["method"]
     params = value["params"]
     request = value["request"]
     response = value["response"]
     if not isinstance(method, str) or not isinstance(params, Mapping):
         raise ReadbackValidationError("invalid transcript method/params")
-    if not isinstance(request, Mapping) or set(request) != {"jsonrpc", "id", "method", "params"}:
+    if not isinstance(request, Mapping) or set(request) != {
+        "jsonrpc",
+        "id",
+        "method",
+        "params",
+    }:
         raise ReadbackValidationError("raw RPC request shape is not canonical")
-    if request["jsonrpc"] != "2.0" or request["method"] != method or request["params"] != params:
-        raise ReadbackValidationError("transcript summary does not match raw RPC request")
-    if not isinstance(response, Mapping) or set(response) != {"jsonrpc", "id", "result"}:
+    if (
+        request["jsonrpc"] != "2.0"
+        or request["method"] != method
+        or request["params"] != params
+    ):
+        raise ReadbackValidationError(
+            "transcript summary does not match raw RPC request"
+        )
+    if not isinstance(response, Mapping) or set(response) != {
+        "jsonrpc",
+        "id",
+        "result",
+    }:
         raise ReadbackValidationError("RPC response must contain result and no error")
     if response["jsonrpc"] != "2.0" or response["id"] != request["id"]:
         raise ReadbackValidationError("RPC request/response identity mismatch")
-    digest = hashlib.sha256(_canonical_json({"request": request, "response": response})).hexdigest()
+    digest = hashlib.sha256(
+        _canonical_json({"request": request, "response": response})
+    ).hexdigest()
     if not hmac.compare_digest(str(value["canonical_sha256"]), digest):
         raise ReadbackValidationError("raw RPC transcript checksum mismatch")
     return copy.deepcopy(dict(value))
@@ -183,12 +229,18 @@ def _stored_value(transcript: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _inner_state_bytes(transcript: Mapping[str, Any]) -> bytes:
     cl_value = _stored_value(transcript).get("CLValue")
-    if not isinstance(cl_value, Mapping) or set(cl_value) != {"cl_type", "bytes", "parsed"}:
+    if not isinstance(cl_value, Mapping) or set(cl_value) != {
+        "cl_type",
+        "bytes",
+        "parsed",
+    }:
         raise ReadbackValidationError("Odra state item must be one exact CLValue")
     if cl_value["cl_type"] != {"List": "U8"}:
         raise ReadbackValidationError("Odra state dictionary value must be List<U8>")
     parsed = cl_value["parsed"]
-    if not isinstance(parsed, list) or any(type(item) is not int or not 0 <= item <= 255 for item in parsed):
+    if not isinstance(parsed, list) or any(
+        type(item) is not int or not 0 <= item <= 255 for item in parsed
+    ):
         raise ReadbackValidationError("Odra state parsed bytes are invalid")
     inner = bytes(parsed)
     raw_hex = cl_value["bytes"]
@@ -197,9 +249,13 @@ def _inner_state_bytes(transcript: Mapping[str, Any]) -> bytes:
     try:
         raw = bytes.fromhex(raw_hex)
     except ValueError as exc:
-        raise ReadbackValidationError("Odra state raw CLValue bytes are malformed") from exc
+        raise ReadbackValidationError(
+            "Odra state raw CLValue bytes are malformed"
+        ) from exc
     if raw != len(inner).to_bytes(4, "little") + inner:
-        raise ReadbackValidationError("Odra state parsed value disagrees with raw CLValue bytes")
+        raise ReadbackValidationError(
+            "Odra state parsed value disagrees with raw CLValue bytes"
+        )
     return inner
 
 
@@ -243,7 +299,9 @@ def _extract_package_hash(transcript: Mapping[str, Any]) -> str:
     stored = _stored_value(transcript)
     contract = stored.get("Contract")
     if not isinstance(contract, Mapping):
-        raise ReadbackValidationError("exact contract query did not return a legacy Contract record")
+        raise ReadbackValidationError(
+            "exact contract query did not return a legacy Contract record"
+        )
     value = contract.get("contract_package_hash")
     if not isinstance(value, str):
         raise ReadbackValidationError("contract record lacks contract_package_hash")
@@ -264,8 +322,13 @@ def _unwrap_block_with_signatures(response: Mapping[str, Any]) -> Mapping[str, A
     """
 
     result = response.get("result")
-    if not isinstance(result, Mapping) or set(result) != {"api_version", "block_with_signatures"}:
-        raise ReadbackValidationError("block RPC result is not the exact Casper v2 wrapper")
+    if not isinstance(result, Mapping) or set(result) != {
+        "api_version",
+        "block_with_signatures",
+    }:
+        raise ReadbackValidationError(
+            "block RPC result is not the exact Casper v2 wrapper"
+        )
     if not isinstance(result["api_version"], str) or not result["api_version"]:
         raise ReadbackValidationError("block RPC api_version is missing")
     wrapped = result["block_with_signatures"]
@@ -282,12 +345,16 @@ def _unwrap_block_with_signatures(response: Mapping[str, Any]) -> Mapping[str, A
     block = versioned[version]
     if not isinstance(block, Mapping) or not {"hash", "header", "body"}.issubset(block):
         raise ReadbackValidationError("versioned block lacks hash/header/body")
-    if not isinstance(block["header"], Mapping) or not isinstance(block["body"], Mapping):
+    if not isinstance(block["header"], Mapping) or not isinstance(
+        block["body"], Mapping
+    ):
         raise ReadbackValidationError("versioned block header/body must be objects")
     return block
 
 
-def _expected_state_items(proposal_id: str, action_id: bytes) -> dict[str, tuple[int, bytes]]:
+def _expected_state_items(
+    proposal_id: str, action_id: bytes
+) -> dict[str, tuple[int, bytes]]:
     proposal_raw = proposal_id.encode("ascii")
     proposal_key = len(proposal_raw).to_bytes(4, "little") + proposal_raw
     return {
@@ -316,11 +383,15 @@ def _parse_transcripts(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if network != NETWORK:
         raise ReadbackValidationError("network must be exactly casper-test")
-    if not isinstance(transcripts_value, Sequence) or isinstance(transcripts_value, (str, bytes)):
+    if not isinstance(transcripts_value, Sequence) or isinstance(
+        transcripts_value, (str, bytes)
+    ):
         raise ReadbackValidationError("transcripts must be a list")
     transcripts = [_validate_transcript(item) for item in transcripts_value]
     package_hash = _hex32(expected.get("package_hash"), "expected package_hash").hex()
-    contract_hash = _hex32(expected.get("contract_hash"), "expected contract_hash").hex()
+    contract_hash = _hex32(
+        expected.get("contract_hash"), "expected contract_hash"
+    ).hex()
     action_id = _hex32(expected.get("action_id"), "expected action_id")
     proposal_id = expected.get("proposal_id")
     if not isinstance(proposal_id, str) or not proposal_id or len(proposal_id) > 64:
@@ -331,24 +402,36 @@ def _parse_transcripts(
         raise ReadbackValidationError("proposal_id must be ASCII") from exc
 
     block_calls = [item for item in transcripts if item["method"] == "chain_get_block"]
-    contract_calls = [item for item in transcripts if item["method"] == "query_global_state"]
-    dictionary_calls = [item for item in transcripts if item["method"] == "state_get_dictionary_item"]
+    contract_calls = [
+        item for item in transcripts if item["method"] == "query_global_state"
+    ]
+    dictionary_calls = [
+        item for item in transcripts if item["method"] == "state_get_dictionary_item"
+    ]
     if len(block_calls) != 1 or len(contract_calls) != 1:
-        raise ReadbackValidationError("exactly one block and one contract-identity query are required")
+        raise ReadbackValidationError(
+            "exactly one block and one contract-identity query are required"
+        )
     if len(dictionary_calls) != 14 or len(transcripts) != 16:
-        raise ReadbackValidationError("readback requires exactly fourteen state queries")
+        raise ReadbackValidationError(
+            "readback requires exactly fourteen state queries"
+        )
     try:
         block = _unwrap_block_with_signatures(block_calls[0]["response"])
         block_hash = _hex32(block["hash"], "block hash").hex()
         state_root = _hex32(block["header"]["state_root_hash"], "state root").hex()
         block_height = block["header"]["height"]
     except (KeyError, TypeError) as exc:
-        raise ReadbackValidationError("block transcript lacks hash/header provenance") from exc
+        raise ReadbackValidationError(
+            "block transcript lacks hash/header provenance"
+        ) from exc
     if type(block_height) is not int or not 0 <= block_height < 1 << 64:
         raise ReadbackValidationError("block height must be u64")
     block_identifier = block_calls[0]["params"].get("block_identifier")
     if block_identifier is not None and block_identifier != {"Hash": block_hash}:
-        raise ReadbackValidationError("block query identifier disagrees with returned block")
+        raise ReadbackValidationError(
+            "block query identifier disagrees with returned block"
+        )
 
     contract_params = contract_calls[0]["params"]
     if contract_params != {
@@ -356,9 +439,13 @@ def _parse_transcripts(
         "key": "hash-" + contract_hash,
         "path": [],
     }:
-        raise ReadbackValidationError("contract identity query is not pinned to exact hash/state root")
+        raise ReadbackValidationError(
+            "contract identity query is not pinned to exact hash/state root"
+        )
     if _extract_package_hash(contract_calls[0]) != package_hash:
-        raise ReadbackValidationError("exact contract does not belong to expected package")
+        raise ReadbackValidationError(
+            "exact contract does not belong to expected package"
+        )
 
     by_key: dict[str, dict[str, Any]] = {}
     exact_dictionary = {
@@ -366,15 +453,24 @@ def _parse_transcripts(
     }
     for transcript in dictionary_calls:
         params = transcript["params"]
-        if params.get("state_root_hash") != state_root or params.get("dictionary_identifier") != exact_dictionary:
-            raise ReadbackValidationError("dictionary query is not pinned to exact state root/contract")
+        if (
+            params.get("state_root_hash") != state_root
+            or params.get("dictionary_identifier") != exact_dictionary
+        ):
+            raise ReadbackValidationError(
+                "dictionary query is not pinned to exact state root/contract"
+            )
         item_key = params.get("dictionary_item_key")
         if not isinstance(item_key, str) or item_key in by_key:
-            raise ReadbackValidationError("dictionary item query key is missing or duplicated")
+            raise ReadbackValidationError(
+                "dictionary item query key is missing or duplicated"
+            )
         by_key[item_key] = transcript
 
     observed: dict[str, bytes] = {}
-    for name, (index, mapping_key) in _expected_state_items(proposal_id, action_id).items():
+    for name, (index, mapping_key) in _expected_state_items(
+        proposal_id, action_id
+    ).items():
         key = state_dictionary_key(index, mapping_key)
         if key not in by_key:
             raise ReadbackValidationError(f"missing exact state query for {name}")
@@ -388,8 +484,12 @@ def _parse_transcripts(
         "package_hash": package_hash,
         "contract_hash": contract_hash,
         "schema_version": _u32(observed["schema_version"], "schema_version"),
-        "deployment_domain": _bytes32(observed["deployment_domain"], "deployment_domain"),
-        "casper_chain_name": _string(observed["casper_chain_name"], "casper_chain_name"),
+        "deployment_domain": _bytes32(
+            observed["deployment_domain"], "deployment_domain"
+        ),
+        "casper_chain_name": _string(
+            observed["casper_chain_name"], "casper_chain_name"
+        ),
         "proposer": _bytes32(observed["proposer"], "proposer"),
         "finalizer": _bytes32(observed["finalizer"], "finalizer"),
         "signers": [
@@ -399,10 +499,14 @@ def _parse_transcripts(
         ],
         "threshold": _u8(observed["threshold"], "threshold"),
         "proposal_id": proposal_id,
-        "proposed_envelope": _bytes32(observed["proposed_envelope"], "proposed_envelope"),
+        "proposed_envelope": _bytes32(
+            observed["proposed_envelope"], "proposed_envelope"
+        ),
         "approval_count": _u8(observed["approval_count"], "approval_count"),
         "finalized": _bool(observed["finalized"], "finalized"),
-        "finalized_envelope": _bytes32(observed["finalized_envelope"], "finalized_envelope"),
+        "finalized_envelope": _bytes32(
+            observed["finalized_envelope"], "finalized_envelope"
+        ),
         "action_id": action_id.hex(),
         "action_authorized": _bool(observed["action_authorized"], "action_authorized"),
         "observed_block_hash": block_hash,
@@ -410,7 +514,9 @@ def _parse_transcripts(
         "observed_state_root_hash": state_root,
     }
     if facts["schema_version"] != 3 or facts["casper_chain_name"] != NETWORK:
-        raise ReadbackValidationError("on-chain schema/network is not Concordia v3 Testnet")
+        raise ReadbackValidationError(
+            "on-chain schema/network is not Concordia v3 Testnet"
+        )
     governance_roles = [facts["proposer"], facts["finalizer"], *facts["signers"]]
     if (
         any(role == "00" * 32 for role in governance_roles)
@@ -436,7 +542,9 @@ def build_readback_artifact_from_transcripts(
         "proposal_id": proposal_id,
         "action_id": action_id,
     }
-    validated, facts = _parse_transcripts(transcripts, network=expected_network, expected=expected)
+    validated, facts = _parse_transcripts(
+        transcripts, network=expected_network, expected=expected
+    )
     artifact: dict[str, Any] = {
         "schema_id": SCHEMA_ID,
         "network": expected_network,
@@ -472,7 +580,9 @@ def _parse_checkpoint_state_transcripts(
     if len(block_calls) != 1 or len(contract_calls) != 1:
         raise ReadbackValidationError("checkpoint state readback method set is invalid")
     package_hash = _hex32(expected.get("package_hash"), "expected package_hash").hex()
-    contract_hash = _hex32(expected.get("contract_hash"), "expected contract_hash").hex()
+    contract_hash = _hex32(
+        expected.get("contract_hash"), "expected contract_hash"
+    ).hex()
     action_id = _hex32(expected.get("action_id"), "expected action_id").hex()
     proposal_id = expected.get("proposal_id")
     if not isinstance(proposal_id, str) or not proposal_id or len(proposal_id) > 64:
@@ -588,7 +698,9 @@ def verify_checkpoint_state_readback_artifact(value: object) -> dict[str, Any]:
             "checkpoint state-readback artifact field set is invalid"
         )
     if value["schema_id"] != CHECKPOINT_SCHEMA_ID or value["network"] != NETWORK:
-        raise ReadbackValidationError("checkpoint state-readback schema/network mismatch")
+        raise ReadbackValidationError(
+            "checkpoint state-readback schema/network mismatch"
+        )
     expected = value["expected"]
     if not isinstance(expected, Mapping) or set(expected) != {
         "package_hash",
@@ -597,9 +709,13 @@ def verify_checkpoint_state_readback_artifact(value: object) -> dict[str, Any]:
         "action_id",
         "completed_steps",
     }:
-        raise ReadbackValidationError("checkpoint expected identity field set is invalid")
+        raise ReadbackValidationError(
+            "checkpoint expected identity field set is invalid"
+        )
     unsigned = {
-        key: copy.deepcopy(item) for key, item in value.items() if key != "artifact_sha256"
+        key: copy.deepcopy(item)
+        for key, item in value.items()
+        if key != "artifact_sha256"
     }
     digest = hashlib.sha256(_canonical_json(unsigned)).hexdigest()
     if not hmac.compare_digest(str(value["artifact_sha256"]), digest):
@@ -643,13 +759,21 @@ def verify_and_seal_readback_artifact(value: object) -> VerifiedV3Readback:
         "action_id",
     }:
         raise ReadbackValidationError("readback expected identity field set is invalid")
-    artifact_without_hash = {key: copy.deepcopy(item) for key, item in value.items() if key != "artifact_sha256"}
+    artifact_without_hash = {
+        key: copy.deepcopy(item)
+        for key, item in value.items()
+        if key != "artifact_sha256"
+    }
     digest = hashlib.sha256(_canonical_json(artifact_without_hash)).hexdigest()
     if not hmac.compare_digest(str(value["artifact_sha256"]), digest):
         raise ReadbackValidationError("readback artifact checksum mismatch")
-    transcripts, facts = _parse_transcripts(value["transcripts"], network=value["network"], expected=expected)
+    transcripts, facts = _parse_transcripts(
+        value["transcripts"], network=value["network"], expected=expected
+    )
     if value["facts"] != facts:
-        raise ReadbackValidationError("persisted facts differ from raw RPC transcript recomputation")
+        raise ReadbackValidationError(
+            "persisted facts differ from raw RPC transcript recomputation"
+        )
     canonical_artifact = {
         "schema_id": SCHEMA_ID,
         "network": NETWORK,
@@ -664,8 +788,12 @@ def verify_and_seal_readback_artifact(value: object) -> VerifiedV3Readback:
 
 def validate_verified_readback(value: object) -> VerifiedV3Readback:
     if type(value) is not VerifiedV3Readback:
-        raise ReadbackValidationError("consumer requires a factory-verified v3 readback")
-    expected = hmac.new(_PROCESS_SEAL_KEY, value._artifact_json, hashlib.sha256).digest()
+        raise ReadbackValidationError(
+            "consumer requires a factory-verified v3 readback"
+        )
+    expected = hmac.new(
+        _PROCESS_SEAL_KEY, value._artifact_json, hashlib.sha256
+    ).digest()
     if not hmac.compare_digest(value._process_seal, expected):
         raise ReadbackValidationError("v3 readback process seal mismatch")
     reparsed = verify_and_seal_readback_artifact(json.loads(value._artifact_json))
@@ -695,29 +823,49 @@ def validate_verified_readback(value: object) -> VerifiedV3Readback:
         "observed_state_root_hash",
     )
     if any(getattr(value, name) != getattr(reparsed, name) for name in public_slots):
-        raise ReadbackValidationError("v3 readback public facts changed after factory verification")
+        raise ReadbackValidationError(
+            "v3 readback public facts changed after factory verification"
+        )
     return value
 
 
 def _node_identity(rpc_url: str) -> str:
     parsed = urlsplit(rpc_url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ReadbackValidationError("RPC URL must be credential-free HTTPS")
     return parsed.hostname
 
 
 def _rpc_transcript(
-    client: httpx.Client,
+    rpc_transport: ReadbackRpc,
     rpc_url: str,
     node_id: str,
     method: str,
     params: Mapping[str, Any],
     sequence: int,
 ) -> dict[str, Any]:
-    request = {"jsonrpc": "2.0", "id": f"concordia-v3-readback-{sequence}", "method": method, "params": dict(params)}
-    response = client.post(rpc_url, json=request)
-    response.raise_for_status()
-    parsed = response.json()
+    request = {
+        "jsonrpc": "2.0",
+        "id": f"concordia-v3-readback-{sequence}",
+        "method": method,
+        "params": dict(params),
+    }
+    if rpc_url not in tuple(rpc_transport.endpoints):
+        raise ReadbackValidationError(
+            "readback endpoint is not in the pinned transport"
+        )
+    parsed = rpc_transport.call(
+        rpc_url,
+        method,
+        dict(params),
+        request["id"],
+        allow_submit=False,
+    )
     if not isinstance(parsed, Mapping) or parsed.get("error") is not None:
         raise ReadbackValidationError(f"Casper RPC {method} failed")
     transcript = {
@@ -735,6 +883,7 @@ def _rpc_transcript(
 
 def capture_v3_checkpoint_state(
     *,
+    rpc_transport: ReadbackRpc,
     rpc_url: str,
     package_hash: str,
     contract_hash: str,
@@ -754,41 +903,38 @@ def capture_v3_checkpoint_state(
     package = _hex32(package_hash, "checkpoint package_hash").hex()
     contract = _hex32(contract_hash, "checkpoint contract_hash").hex()
     action = _hex32(action_id, "checkpoint action_id").hex()
-    with httpx.Client(timeout=60.0) as client:
-        latest = _rpc_transcript(client, rpc_url, node_id, "chain_get_block", {}, 0)
-        latest_block = _unwrap_block_with_signatures(latest["response"])
-        returned_hash = _hex32(
-            latest_block["hash"], "checkpoint returned block_hash"
-        ).hex()
-        block_call = _rpc_transcript(
-            client,
-            rpc_url,
-            node_id,
-            "chain_get_block",
-            {"block_identifier": {"Hash": returned_hash}},
-            1,
+    latest = _rpc_transcript(rpc_transport, rpc_url, node_id, "chain_get_block", {}, 0)
+    latest_block = _unwrap_block_with_signatures(latest["response"])
+    returned_hash = _hex32(latest_block["hash"], "checkpoint returned block_hash").hex()
+    block_call = _rpc_transcript(
+        rpc_transport,
+        rpc_url,
+        node_id,
+        "chain_get_block",
+        {"block_identifier": {"Hash": returned_hash}},
+        1,
+    )
+    pinned = _unwrap_block_with_signatures(block_call["response"])
+    pinned_hash = _hex32(pinned["hash"], "checkpoint pinned block_hash").hex()
+    if pinned_hash != returned_hash:
+        raise ReadbackValidationError(
+            "checkpoint hash-pinned block query returned another block"
         )
-        pinned = _unwrap_block_with_signatures(block_call["response"])
-        pinned_hash = _hex32(pinned["hash"], "checkpoint pinned block_hash").hex()
-        if pinned_hash != returned_hash:
-            raise ReadbackValidationError(
-                "checkpoint hash-pinned block query returned another block"
-            )
-        state_root = _hex32(
-            pinned["header"]["state_root_hash"], "checkpoint pinned state root"
-        ).hex()
-        contract_call = _rpc_transcript(
-            client,
-            rpc_url,
-            node_id,
-            "query_global_state",
-            {
-                "state_identifier": {"StateRootHash": state_root},
-                "key": "hash-" + contract,
-                "path": [],
-            },
-            2,
-        )
+    state_root = _hex32(
+        pinned["header"]["state_root_hash"], "checkpoint pinned state root"
+    ).hex()
+    contract_call = _rpc_transcript(
+        rpc_transport,
+        rpc_url,
+        node_id,
+        "query_global_state",
+        {
+            "state_identifier": {"StateRootHash": state_root},
+            "key": "hash-" + contract,
+            "path": [],
+        },
+        2,
+    )
     return build_checkpoint_state_readback_from_transcripts(
         transcripts=[block_call, contract_call],
         expected_network=NETWORK,
@@ -802,6 +948,7 @@ def capture_v3_checkpoint_state(
 
 def capture_v3_state(
     *,
+    rpc_transport: ReadbackRpc,
     rpc_url: str,
     package_hash: str,
     contract_hash: str,
@@ -811,60 +958,76 @@ def capture_v3_state(
 ) -> dict[str, Any]:
     node_id = _node_identity(rpc_url)
     action = _hex32(action_id, "action_id")
-    block_params: dict[str, Any] = {} if block_hash is None else {"block_identifier": {"Hash": _hex32(block_hash, "block_hash").hex()}}
-    with httpx.Client(timeout=60.0) as client:
-        block_call = _rpc_transcript(client, rpc_url, node_id, "chain_get_block", block_params, 0)
-        block = _unwrap_block_with_signatures(block_call["response"])
-        returned_block = _hex32(block["hash"], "returned block_hash").hex()
-        state_root = _hex32(block["header"]["state_root_hash"], "returned state_root_hash").hex()
-        if block_hash is None:
-            # Persist an explicitly hash-pinned request rather than a moving latest query.
-            block_call = _rpc_transcript(
-                client,
-                rpc_url,
-                node_id,
-                "chain_get_block",
-                {"block_identifier": {"Hash": returned_block}},
-                0,
-            )
-            pinned_block = _unwrap_block_with_signatures(block_call["response"])
-            pinned_hash = _hex32(pinned_block["hash"], "pinned block_hash").hex()
-            if pinned_hash != returned_block:
-                raise ReadbackValidationError("hash-pinned block query returned a different block")
-            state_root = _hex32(
-                pinned_block["header"]["state_root_hash"],
-                "pinned state_root_hash",
-            ).hex()
-        contract_call = _rpc_transcript(
-            client,
+    block_params: dict[str, Any] = (
+        {}
+        if block_hash is None
+        else {"block_identifier": {"Hash": _hex32(block_hash, "block_hash").hex()}}
+    )
+    block_call = _rpc_transcript(
+        rpc_transport, rpc_url, node_id, "chain_get_block", block_params, 0
+    )
+    block = _unwrap_block_with_signatures(block_call["response"])
+    returned_block = _hex32(block["hash"], "returned block_hash").hex()
+    state_root = _hex32(
+        block["header"]["state_root_hash"], "returned state_root_hash"
+    ).hex()
+    if block_hash is None:
+        # Persist an explicitly hash-pinned request rather than a moving latest query.
+        block_call = _rpc_transcript(
+            rpc_transport,
             rpc_url,
             node_id,
-            "query_global_state",
-            {"state_identifier": {"StateRootHash": state_root}, "key": "hash-" + contract_hash, "path": []},
-            1,
+            "chain_get_block",
+            {"block_identifier": {"Hash": returned_block}},
+            0,
         )
-        transcripts = [block_call, contract_call]
-        exact_dictionary = {
-            "ContractNamedKey": {"key": "hash-" + contract_hash, "dictionary_name": "state"}
-        }
-        for sequence, (name, (index, mapping_key)) in enumerate(
-            _expected_state_items(proposal_id, action).items(), start=2
-        ):
-            del name
-            transcripts.append(
-                _rpc_transcript(
-                    client,
-                    rpc_url,
-                    node_id,
-                    "state_get_dictionary_item",
-                    {
-                        "state_root_hash": state_root,
-                        "dictionary_identifier": exact_dictionary,
-                        "dictionary_item_key": state_dictionary_key(index, mapping_key),
-                    },
-                    sequence,
-                )
+        pinned_block = _unwrap_block_with_signatures(block_call["response"])
+        pinned_hash = _hex32(pinned_block["hash"], "pinned block_hash").hex()
+        if pinned_hash != returned_block:
+            raise ReadbackValidationError(
+                "hash-pinned block query returned a different block"
             )
+        state_root = _hex32(
+            pinned_block["header"]["state_root_hash"],
+            "pinned state_root_hash",
+        ).hex()
+    contract_call = _rpc_transcript(
+        rpc_transport,
+        rpc_url,
+        node_id,
+        "query_global_state",
+        {
+            "state_identifier": {"StateRootHash": state_root},
+            "key": "hash-" + contract_hash,
+            "path": [],
+        },
+        1,
+    )
+    transcripts = [block_call, contract_call]
+    exact_dictionary = {
+        "ContractNamedKey": {
+            "key": "hash-" + contract_hash,
+            "dictionary_name": "state",
+        }
+    }
+    for sequence, (name, (index, mapping_key)) in enumerate(
+        _expected_state_items(proposal_id, action).items(), start=2
+    ):
+        del name
+        transcripts.append(
+            _rpc_transcript(
+                rpc_transport,
+                rpc_url,
+                node_id,
+                "state_get_dictionary_item",
+                {
+                    "state_root_hash": state_root,
+                    "dictionary_identifier": exact_dictionary,
+                    "dictionary_item_key": state_dictionary_key(index, mapping_key),
+                },
+                sequence,
+            )
+        )
     return build_readback_artifact_from_transcripts(
         transcripts=transcripts,
         expected_network=NETWORK,
@@ -877,7 +1040,13 @@ def capture_v3_state(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rpc-url", default="https://node.testnet.casper.network/rpc")
+    parser.add_argument("--rpc-url", action="append", dest="rpc_urls", required=True)
+    parser.add_argument(
+        "--rpc-authorization-file",
+        action="append",
+        default=[],
+        help="repeat URL=/absolute/token-file; token values are never accepted",
+    )
     parser.add_argument("--package-hash", required=True)
     parser.add_argument("--contract-hash", required=True)
     parser.add_argument("--proposal-id", required=True)
@@ -886,8 +1055,17 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
+        authorization_files = parse_rpc_authorization_file_args(
+            args.rpc_authorization_file,
+            args.rpc_urls,
+        )
+        transport = PinnedHttpsJsonRpc(
+            args.rpc_urls,
+            authorization_files=authorization_files,
+        )
         artifact = capture_v3_state(
-            rpc_url=args.rpc_url,
+            rpc_transport=transport,
+            rpc_url=transport.endpoints[0],
             package_hash=args.package_hash,
             contract_hash=args.contract_hash,
             proposal_id=args.proposal_id,
@@ -896,10 +1074,27 @@ def main() -> int:
         )
         verify_and_seal_readback_artifact(artifact)
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(json.dumps({"status": "verified", "artifact": str(args.out), "block_height": artifact["facts"]["observed_block_height"]}))
+        args.out.write_text(
+            json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "verified",
+                    "artifact": str(args.out),
+                    "block_height": artifact["facts"]["observed_block_height"],
+                }
+            )
+        )
         return 0
-    except (ReadbackValidationError, httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+    except (
+        ReadbackValidationError,
+        RpcEndpointPolicyError,
+        RpcTransportError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
         parser.error(str(exc))
         return 2
 
