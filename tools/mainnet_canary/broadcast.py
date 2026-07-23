@@ -124,10 +124,21 @@ def run_broadcast_guard(
     """Run every broadcast gate in order.  Never submits in this lane."""
 
     # Gate 1 — durable journal state must exist before any broadcast.
+    #
+    # The journal holds an exclusive lock for as long as it is open. Every
+    # gate below can refuse, so the read is scoped and the lock released
+    # immediately: leaving it held wedged the operator's OWN journal for the
+    # rest of the process, so an attempted broadcast (which always refuses
+    # here) made every later command fail with JOURNAL_LOCK_HELD.
     journal = CanaryJournal.load(journal_path)
+    try:
+        journal_plan_hash = journal.plan_hash
+        in_flight = journal.in_flight_steps()
+    finally:
+        journal.close()
     plan_hash = plan_document_hash(plan_document)
     if plan_document.get("canary_plan_sha256") != plan_hash or (
-        journal.plan_hash != plan_hash
+        journal_plan_hash != plan_hash
     ):
         raise CanaryRefusal(
             RefusalCode.PLAN_HASH_MISMATCH,
@@ -179,7 +190,15 @@ def run_broadcast_guard(
 
     # Gate 5 — reconcile-before-anything: an in-flight step blocks all new
     # economic actions; reconciliation uses the original deploy hash only.
-    journal.require_no_in_flight(context="broadcast")
+    # Uses the snapshot taken under the lock at gate 1, so the lock does not
+    # have to stay held across every gate in between.
+    if in_flight:
+        steps = sorted(status.step_id for status in in_flight)
+        raise CanaryRefusal(
+            RefusalCode.RECONCILIATION_REQUIRED,
+            f"broadcast: steps in flight after restart: {steps}; reconcile "
+            "by original deploy hash before any new action",
+        )
 
     # Gate 6 — per-step interactive confirmation.
     for step in plan_document["steps"]:

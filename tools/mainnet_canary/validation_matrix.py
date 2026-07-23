@@ -90,13 +90,81 @@ def build_matrix() -> list[dict[str, object]]:
             flat += [flag, value]
         return flat
 
-    # An authorization whose ceiling was raised AFTER it was signed.
-    forged = json.loads(Path(gates["authorization_path"]).read_text(encoding="utf-8"))
+    authorization = json.loads(
+        Path(gates["authorization_path"]).read_text(encoding="utf-8")
+    )
+
+    # An authorization whose ceiling was raised AFTER it was signed. NOTE:
+    # this trips the manifest-binding check, so it does NOT by itself prove
+    # the signature is verified — hence the two cases after it.
+    forged = dict(authorization)
     forged["max_total_outlay_motes"] = str(
         int(forged["max_total_outlay_motes"]) * 10
     )
     forged_path = tmp / "authorization-edited-after-signing.json"
     forged_path.write_text(json.dumps(forged), encoding="utf-8")
+
+    # Signature bytes corrupted, every bound field left INTACT. Binding
+    # passes, so only the ed25519 verification can reject this — the case
+    # that actually exercises the crypto path end to end.
+    bad_signature = dict(authorization)
+    flipped = "0" if authorization["signature_hex"][0] != "0" else "1"
+    bad_signature["signature_hex"] = flipped + authorization["signature_hex"][1:]
+    bad_signature_path = tmp / "authorization-signature-corrupted.json"
+    bad_signature_path.write_text(json.dumps(bad_signature), encoding="utf-8")
+
+    unsigned = dict(authorization)
+    unsigned["signature_hex"] = ""
+    unsigned_path = tmp / "authorization-unsigned.json"
+    unsigned_path.write_text(json.dumps(unsigned), encoding="utf-8")
+
+    # Bundle inputs: a real journal bound to this plan, plus a manifest and
+    # a verification report. A second verification report claims a DIFFERENT
+    # plan, to exercise the cross-binding check.
+    from tools.mainnet_canary.economic_manifest import (  # noqa: PLC0415
+        build_economic_manifest,
+    )
+    from tools.mainnet_canary.journal import CanaryJournal  # noqa: PLC0415
+
+    journal_path = tmp / "bundle-journal.jsonl"
+    journal = CanaryJournal.create(
+        journal_path, plan_hash=str(plan["canary_plan_sha256"]), rc_tag="rc"
+    )
+    journal.close()
+    manifest_path = tmp / "bundle-manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            build_economic_manifest(
+                plan,
+                calibration=mc.make_calibration(plan),
+                operator_ceilings={},
+            )
+        ),
+        encoding="utf-8",
+    )
+    verification_path = tmp / "bundle-verification.json"
+    verification_path.write_text(
+        json.dumps(
+            {"mode": "verify", "plan_hash": plan["canary_plan_sha256"], "steps": []}
+        ),
+        encoding="utf-8",
+    )
+    mismatched_path = tmp / "bundle-verification-other-plan.json"
+    mismatched_path.write_text(
+        json.dumps({"mode": "verify", "plan_hash": "0" * 64, "steps": []}),
+        encoding="utf-8",
+    )
+
+    def bundle_argv(label: str, verification: Path, out_dir: Path) -> list[str]:
+        return [
+            "--repo-root", str(repo), "bundle",
+            "--plan", str(plan_path),
+            "--verification", str(verification),
+            "--economic-manifest", str(manifest_path),
+            "--attestation", str(gates["attestation_path"]),
+            "--journal", str(journal_path),
+            "--out-dir", str(out_dir),
+        ]
 
     def observations(count: int, **provider_swap: object) -> Path:
         bundle: list[dict] = []
@@ -108,6 +176,19 @@ def build_matrix() -> list[dict[str, object]]:
                 entry["provider"].update(provider_swap)
             bundle.extend(pair[:count])
         path = tmp / f"observations-{count}-{len(provider_swap)}.json"
+        path.write_text(json.dumps(bundle), encoding="utf-8")
+        return path
+
+    def legacy_observations() -> Path:
+        """v1-shaped bundle: no provider evidence at all."""
+
+        bundle = [
+            mc.make_observation(str(step["step_id"]))
+            for step in plan["steps"]
+            if step["economic"]
+            for _ in (0, 1)
+        ]
+        path = tmp / "observations-legacy-v1.json"
         path.write_text(json.dumps(bundle), encoding="utf-8")
         return path
 
@@ -128,8 +209,37 @@ def build_matrix() -> list[dict[str, object]]:
         ("block shallower than the required depth", "INSUFFICIENT_CONFIRMATIONS",
          ["verify", "--plan", str(plan_path),
           "--observations", str(observations(2, chain_tip_height=121))]),
+        # These two isolate the ed25519 path. The ceiling-edit case above
+        # trips manifest binding first, so without them nothing in this
+        # matrix would prove the signature is actually verified.
+        ("signature corrupted, bound fields intact",
+         "AUTHORIZATION_SIGNATURE_INVALID",
+         stage_argv("f", **{"--authorization": str(bad_signature_path)})),
+        ("authorization carries no signature", "AUTHORIZATION_UNSIGNED",
+         stage_argv("g", **{"--authorization": str(unsigned_path)})),
+        ("calibration receipts absent", "CALIBRATION_RECEIPT_ABSENT",
+         stage_argv("h", **{"--calibration": str(tmp / "absent.json")})),
+        ("observations without provider evidence (v1)", "OBSERVATION_MALFORMED",
+         ["verify", "--plan", str(plan_path),
+          "--observations", str(legacy_observations())]),
+        ("bundle constituents disagree on plan hash",
+         "BUNDLE_CROSS_BINDING_INVALID",
+         bundle_argv("x", mismatched_path, tmp / "bundle-mismatch")),
+        ("bundle written into a protected namespace",
+         "CANONICAL_NAMESPACE_PROTECTED",
+         bundle_argv("y", verification_path, repo / "artifacts" / "live" / "x")),
+        # The guard refuses at the FIRST unmet gate, which here is the absent
+        # live-authorization mount — it never reaches the
+        # not-implemented refusal. Recorded as the code actually produced
+        # rather than the one I first assumed.
+        ("broadcast is disabled (no authorization mount)",
+         "BROADCAST_DISABLED_AUTHORIZATION_ABSENT",
+         ["--repo-root", str(repo), "broadcast", "--plan", str(plan_path),
+          "--journal", str(journal_path)]),
         ("all gates satisfied (positive control)", "<accepted>",
          stage_argv("ok")),
+        ("bundle fully bound (positive control)", "<accepted>",
+         bundle_argv("z", verification_path, tmp / "bundle-ok")),
     ]
 
     results: list[dict[str, object]] = []
@@ -137,13 +247,19 @@ def build_matrix() -> list[dict[str, object]]:
         code, document = _run_cli(argv)
         refusal = document.get("refusal")
         observed = refusal["code"] if refusal else "<accepted>"
+        # The exit code is part of the contract, not decoration: a control
+        # that printed the right refusal while exiting 0 would be a REAL
+        # defect, and an oracle that only compared the code string would
+        # score it PASS. Both must agree.
+        expected_exit = 0 if expected == "<accepted>" else 2
         results.append(
             {
                 "control": control,
                 "expected": expected,
                 "observed": observed,
+                "expected_exit": expected_exit,
                 "exit_code": code,
-                "pass": observed == expected,
+                "pass": observed == expected and code == expected_exit,
             }
         )
     return results
@@ -157,17 +273,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     results = build_matrix()
-    if args.json:
-        print(json.dumps(results, indent=2))
-    else:
-        width = max(len(str(row["control"])) for row in results)
-        for row in results:
-            mark = "PASS" if row["pass"] else "FAIL"
-            print(
-                f"  {mark}  {str(row['control']):<{width}}  "
-                f"exit={row['exit_code']}  {row['observed']}"
-            )
     failed = [row for row in results if not row["pass"]]
+    if args.json:
+        # ONLY JSON on stdout, so the output actually parses. The human
+        # summary would otherwise trail the document as extra data.
+        print(json.dumps({"results": results, "failed": len(failed)}, indent=2))
+        return 1 if failed else 0
+    width = max(len(str(row["control"])) for row in results)
+    for row in results:
+        mark = "PASS" if row["pass"] else "FAIL"
+        print(
+            f"  {mark}  {str(row['control']):<{width}}  "
+            f"exit={row['exit_code']}  {row['observed']}"
+        )
     print(f"\n{len(results) - len(failed)}/{len(results)} controls behaved as recorded")
     return 1 if failed else 0
 

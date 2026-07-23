@@ -294,3 +294,37 @@ def test_cli_broadcast_mode_refuses_end_to_end(
     assert output["refusal"]["code"] == (
         RefusalCode.BROADCAST_DISABLED_AUTHORIZATION_ABSENT
     )
+
+
+def test_broadcast_does_not_wedge_the_operators_own_journal(
+    plan_inputs: dict[str, Path], tmp_path: Path
+) -> None:
+    """Regression: the guard held the journal lock for its whole run.
+
+    Every gate can refuse, and the lock was released only when the process
+    exited — so an attempted broadcast (which ALWAYS refuses in this lane)
+    made every later command on that journal fail JOURNAL_LOCK_HELD. Found
+    by expanding the control matrix, not by this suite.
+    """
+
+    from tools.mainnet_canary.journal import CanaryJournal
+
+    plan = build_valid_plan(plan_inputs)
+    journal_path = tmp_path / "wedge-journal.jsonl"
+    CanaryJournal.create(
+        journal_path, plan_hash=str(plan["canary_plan_sha256"]), rc_tag="rc"
+    ).close()
+
+    with pytest.raises(CanaryRefusal):
+        broadcast_module.run_broadcast_guard(
+            plan_inputs["repo"],
+            plan_document=plan,
+            journal_path=journal_path,
+            ceiling_path=None,
+            measured_costs_path=None,
+        )
+
+    # The journal must still be usable by the next command.
+    reopened = CanaryJournal.load(journal_path)
+    assert reopened.plan_hash == plan["canary_plan_sha256"]
+    reopened.close()
