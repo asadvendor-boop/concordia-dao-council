@@ -1,7 +1,8 @@
 # INTERFACE MANIFEST — WP3 (approval boundary, demo capability, room identity)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `ca975cb` (correction lineage: `d096403` → `73279a1` → `4b60f1c` re-review fixes → `ca975cb` recovery-ordering fix; 125 tests green x3 at `ca975cb`)
+- Producer commit: `ca975cb` (correction lineage: `d096403` → `73279a1` → `4b60f1c` re-review fixes → `ca975cb` recovery-ordering fix)
+- Fresh per-suite counts at branch HEAD `f550c93` (rerun by the coordinator): test_approval_auth 15 · test_demo_capability 65 · test_room_identity 29 · test_g1_freeze_manifest 16 = 125, three consecutive stable runs
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §12 (Approval boundary v1 / Demo capability v1 / Room identity v1), §14
 - Status of my lane: 103 tests green x3 stable (approval + demo + room + freeze), ruff + `git diff --check` clean.
@@ -32,7 +33,7 @@ Currently created lazily + idempotently by `gateway/routes/demo_cleanup.py::ensu
 on the shared routes connection (CREATE TABLE IF NOT EXISTS). Please fold into `init_db()`:
 - `demo_capabilities(capability_id PK, scenario_id, client_binding_hash, nonce_hash, issued_at, expires_at, demo_run_id, consumed_at, response_status, response_json, state)` — `state` added at `73279a1`
 - `demo_runs(demo_run_id, proposal_id, scenario_id, is_demo, created_at, PK(demo_run_id, proposal_id))`
-- `demo_capability_issue_counters(window_start, client_binding_hash, count)` — durable issuance fixed-window admission, added at `73279a1`
+- `demo_capability_issue_counters(scope TEXT, client_key TEXT, window_start INTEGER, count INTEGER, PRIMARY KEY(scope, client_key, window_start))` — durable issuance fixed-window admission, added at `73279a1` (`scope` distinguishes the per-client vs global windows; `client_key` is the client-binding key or the global sentinel)
 - Optional later: `is_demo` / `demo_run_id` columns on `proposals` (today provenance lives in `demo_runs` keyed by proposal_id, which the spec permits).
 
 ## gateway/app.py
