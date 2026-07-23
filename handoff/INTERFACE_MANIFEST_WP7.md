@@ -1,7 +1,7 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `c700fcc` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` re-review predicate fixes; Playwright 65 x3 + contract 17/17 at `c700fcc`)
+- Producer commit: `72f1747` (correction lineage: `dfa3cd2` → `9d623a7` → `c700fcc` → `a78d103` dependency gate → `60ee252` exact-commit-audit predicates → `72f1747` flake fix; Playwright 100 x3 consecutive + contract 17/17 + `npm audit --audit-level=high` exit 0 at `72f1747`, verified from a clean `rm -rf node_modules && npm ci`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §13 (provenance-aware proof registry), §12 (SafePay v2 / official x402)
 - Lane status: production build clean; 40/40 Playwright green x3 consecutive; `tests/test_dashboard_contract.py` 17/17 (fully migrated, nothing deleted); `git diff --check` clean.
@@ -15,6 +15,12 @@
 The dashboard now renders honest **pending** states wherever the new registry
 payload isn't served yet. To light up the verified surfaces, Codex must serve
 the payloads below with the EXACT `G1_CROSS_LANE_SCHEMAS.json` shapes.
+
+## Exact-commit audit pass (at `a78d103` + `60ee252` + `72f1747`)
+- **Dependency gate**: exact `next@16.2.11`; `sharp` cleared via exact `0.35.3` override (next declares `^0.34.5`, no patched 0.34.x exists); `brace-expansion` 1.1.16; deterministic lockfile regeneration; 0 High/Critical (3 Low remain via `casper-js-sdk` — clearing them requires the breaking 5.x major, recorded as out of scope).
+- **All eight semantic blockers fixed** with shared fail-closed predicates (`isApprovalBoundToProposal` / `isApprovalBoundToPlan` / `isAuthorizedApproval` in lib.js) + 35 new tests incl. 8 SOURCE-regression tests banning presence-only truth derivations from returning. DemoModal now speaks only the frozen WP3 `demo-run-v1` contract.
+- **Golden-path decision needed (Codex)**: under the strict sealed-plan binding, the recorded canonical evidence renders fail-CLOSED (Approved step not complete) because the StructuredApproval's `plan_hash` is the gateway CONTENT hash (`compute_plan_hash` over normalized plan JSON, `shared/approval.py:80`), which does not equal the sealed ResponsePlan card hash and is not client-recomputable from the sanitized payload. For the golden path to render authorized, the gateway should serve a client-verifiable binding (e.g. expose the plan content hash on the served ResponsePlan card). No fail-open exists either way.
+- Pre-existing tablet/mobile nav test flake root-caused (hydration-race click loss) and fixed with the standard retry idiom; viewport suite 72/72 under `--repeat-each=8`.
 
 ## Re-review predicate pass (at `c700fcc`) — new Codex-owned observations the fail-closed dashboard consumes
 All ten reproduced fail-open predicates are fixed: affirmative-decision-only approvals (every card type), recovery ≠ verification (including `deriveProposalFacts.receiptVerified`, mandating test deliberately migrated), exact proposal/plan-hash binding (missing = NOT bound), per-check observed fields instead of one recycled `chain_valid`, explicit-predicate-only ProofCenter safety/reputation/live/IPFS panels, and zero static online indicators (including the workspace room header). **Consequence: live runs render the honest non-asserted state until the gateway emits these observations (all Codex-owned):**
