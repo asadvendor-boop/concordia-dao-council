@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import secrets as pysecrets
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1061,6 +1062,249 @@ def test_dm_wp3_6_full_canonical_set_protected(tmp_path):
     for pid in ("DAO-PROP-6CB25C", "DAO-PROP-DYN-002", "DAO-PROP-RWA-001"):
         assert pid in remaining
     assert "DAO-DEMO-REAL02" not in remaining
+
+
+# ---------------------------------------------------------------------------
+# Reviewer fail-closed corrections (Codex review of 73279a1, items 1-4)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "corrupt_json",
+    ["{not json", "[1, 2, 3]", "null", '"started"', "", None],
+)
+def test_dm_rev1_corrupt_response_json_replays_as_503_integrity(
+    client, app_db, stub_executor, corrupt_json
+):
+    """A terminal row whose response_json is missing/corrupt/non-object replays
+    as a terminal 503 integrity error — never an empty {} with HTTP 200."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    first = _activate(client, capability, "treasury", nonce_wire)
+    assert first.status_code == 200
+
+    app_db.execute(
+        "UPDATE demo_capabilities SET response_json=? WHERE capability_id=?",
+        (corrupt_json, capability_id),
+    )
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert not (replay.status_code == 200 and replay.json() == {})
+    assert replay.status_code == 503
+    assert replay.json()["error_code"] == "stored_response_integrity"
+    # The pipeline never re-runs for a corrupt terminal replay.
+    assert len(stub_executor) == 1
+
+
+@pytest.mark.parametrize("corrupt_status", [None, "two-hundred", 99, 1000])
+def test_dm_rev2_corrupt_response_status_replays_as_503_integrity(
+    client, app_db, stub_executor, corrupt_status
+):
+    """A terminal row whose response_status is missing, non-int, or outside the
+    sane HTTP range replays as a terminal 503 integrity error, never {} 200."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    first = _activate(client, capability, "treasury", nonce_wire)
+    assert first.status_code == 200
+
+    app_db.execute(
+        "UPDATE demo_capabilities SET response_status=? WHERE capability_id=?",
+        (corrupt_status, capability_id),
+    )
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert not (replay.status_code == 200 and replay.json() == {})
+    assert replay.status_code == 503
+    assert replay.json()["error_code"] == "stored_response_integrity"
+    assert len(stub_executor) == 1
+
+
+def test_dm_rev3_terminalization_race_durable_failed_state_wins(
+    client, app_db, monkeypatch
+):
+    """Lease expiry + concurrent crash recovery: when the RUNNING claim is
+    terminalized FAILED while the original request's pipeline is still in
+    flight, the original request must return the persisted FAILED state — the
+    durable ledger is the authority, never the in-memory success."""
+    crash_body = {
+        "schema_version": "demo-run-v1",
+        "status": "failed",
+        "error": "Demo run did not finish (crash/expiry recovery)",
+        "scenario_id": "treasury",
+        "is_demo": True,
+    }
+
+    async def _racing(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        # A concurrent retry recovered the expired lease mid-flight: the row
+        # is already terminal FAILED before this result can be recorded.
+        db.execute(
+            "UPDATE demo_capabilities SET state='FAILED', response_status=503, "
+            "response_json=? WHERE demo_run_id=?",
+            (json.dumps({**crash_body, "demo_run_id": demo_run_id}), demo_run_id),
+        )
+        return 200, {
+            "success": True,
+            "scenario_type": scenario_type,
+            "proposal_id": "DAO-DEMO-STUB01",
+            "demo_run_id": demo_run_id,
+            "is_demo": True,
+        }
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _racing)
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 503
+    body = activated.json()
+    assert body["status"] == "failed"
+    assert body.get("status") != "started"
+
+    # The durable ledger keeps the concurrent FAILED terminalization — the
+    # lost in-memory success never clobbers it.
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "FAILED"
+    assert int(row["response_status"]) == 503
+    assert json.loads(row["response_json"])["status"] == "failed"
+
+    # A subsequent terminal retry replays the same persisted FAILED state.
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert replay.status_code == 503
+    assert replay.json()["status"] == "failed"
+
+
+async def test_dm_rev4_preexisting_demo_id_collision_never_adopted(
+    monkeypatch, tmp_path
+):
+    """Pre-existing DAO-DEMO-* rows in proposals AND demo_runs: allocation
+    skips both colliding suffixes and never adopts (or later cleanup-owns)
+    the pre-existing records."""
+    db = init_db(tmp_path / "rev4-collision.db")
+    try:
+        ensure_demo_tables(db)
+        _seed_proposal(db, "DAO-DEMO-AAAAAA")             # collision in proposals
+        _seed_run(db, "demo-run-old", "DAO-DEMO-BBBBBB")  # collision in demo_runs
+
+        fixed = [
+            uuid.UUID("aaaaaa00-0000-4000-8000-000000000001"),
+            uuid.UUID("bbbbbb00-0000-4000-8000-000000000002"),
+            uuid.UUID("cccccc00-0000-4000-8000-000000000003"),
+        ]
+        real_uuid4 = uuid.uuid4
+
+        def _fake_uuid4():
+            return fixed.pop(0) if fixed else real_uuid4()
+
+        monkeypatch.setattr(demo.uuid, "uuid4", _fake_uuid4)
+
+        _install_pipeline_stubs(monkeypatch, db)
+        status, payload = await demo._execute_demo_trigger(
+            db, "treasury", demo_run_id="demo-run-new", enforce_cooldown=False
+        )
+        assert status == 200
+        # Both colliding suffixes were skipped — never silently adopted.
+        assert payload["proposal_id"] == "DAO-DEMO-CCCCCC"
+
+        # The new run owns ONLY its own fresh id.
+        owned = db.execute(
+            "SELECT proposal_id FROM demo_runs WHERE demo_run_id='demo-run-new'"
+        ).fetchall()
+        assert [r[0] for r in owned] == ["DAO-DEMO-CCCCCC"]
+
+        # Cleanup of the new run never touches the pre-existing records.
+        result = remove_demo_proposals(db, "demo-run-new")
+        assert result["cleaned_proposals"] == 1
+        remaining = {
+            r[0] for r in db.execute("SELECT proposal_id FROM proposals").fetchall()
+        }
+        assert "DAO-DEMO-AAAAAA" in remaining      # pre-existing proposal survives
+        assert "DAO-DEMO-CCCCCC" not in remaining  # the run's own proposal removed
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM demo_runs WHERE demo_run_id='demo-run-old' "
+                "AND proposal_id='DAO-DEMO-BBBBBB'"
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        db.close()
+
+
+async def test_dm_rev4_allocation_fails_closed_after_bounded_attempts(
+    monkeypatch, tmp_path
+):
+    """When every candidate suffix collides, allocation fails closed after a
+    bounded number of attempts — the pre-existing record is never adopted and
+    no mutation ever runs."""
+    db = init_db(tmp_path / "rev4-exhausted.db")
+    try:
+        ensure_demo_tables(db)
+        _seed_proposal(db, "DAO-DEMO-AAAAAA")
+        monkeypatch.setattr(
+            demo.uuid,
+            "uuid4",
+            lambda: uuid.UUID("aaaaaa00-0000-4000-8000-000000000001"),
+        )
+        calls = _install_pipeline_stubs(monkeypatch, db)
+        status, payload = await demo._execute_demo_trigger(
+            db, "treasury", demo_run_id="demo-run-exhausted", enforce_cooldown=False
+        )
+        assert status == 500
+        assert payload["success"] is False
+        assert calls == []  # failed closed BEFORE any pipeline mutation
+        # The pre-existing record was never adopted or cleanup-owned.
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM demo_runs WHERE proposal_id='DAO-DEMO-AAAAAA'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM proposals WHERE proposal_id='DAO-DEMO-AAAAAA'"
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        db.close()
+
+
+def test_dm_rev5_issued_at_mismatch_rejected(client, app_db, stub_executor):
+    """A signed token whose issued_at no longer equals the durable row is
+    refused as 401 invalid_capability (ALL signed immutable fields match)."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    app_db.execute(
+        "UPDATE demo_capabilities SET issued_at=issued_at-1 WHERE capability_id=?",
+        (capability_id,),
+    )
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 401
+    assert activated.json()["error_code"] == "invalid_capability"
+    assert stub_executor == []
+
+
+def test_dm_rev5_expires_at_mismatch_rejected(client, app_db, stub_executor):
+    """A signed token whose expires_at no longer equals the durable row is
+    refused as 401 invalid_capability — a widened durable expiry can never be
+    activated by the originally-signed token."""
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    app_db.execute(
+        "UPDATE demo_capabilities SET expires_at=expires_at+1000 "
+        "WHERE capability_id=?",
+        (capability_id,),
+    )
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 401
+    assert activated.json()["error_code"] == "invalid_capability"
+    assert stub_executor == []
 
 
 def test_dm_wp3_4_cleanup_atomic_rollback_on_error(tmp_path, monkeypatch):

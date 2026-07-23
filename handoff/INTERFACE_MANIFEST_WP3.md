@@ -14,6 +14,12 @@
 - **Room identity (SUPERSEDES the old accept-on-match deviation below)**: in PRODUCTION (`APP_ENV=production/prod`, no `CONCORDIA_TEST_MODE`) every caller-supplied `sender_id`/`sender_role`/`sender_type`/participant `role` is rejected 400 even when it exactly matches. Non-production keeps a flagged exact-match compat gate ONLY because Codex-owned `shared/proposal_room.py` still transmits these fields. **Codex: (1) migrate `shared/proposal_room.py` post_message/add_participant call sites to stop sending identity fields so production strictness holds for the recorder pipeline; (2) ensure compose sets `APP_ENV=production` on the gateway or the strict gate never engages.**
 - Duplicate agent-id principals: sorted-order role resolution, collided ids fail closed as `ambiguous_principal`/`ambiguous_participant`. Startup duplicate-key rejection remains Codex-owned in `gateway/auth.py`.
 
+## Re-review addendum (second Codex pass) — four further fail-closed fixes
+- `_stored_capability_response` validates the COMPLETE stored result (int status 100–599, body parses to a dict); corruption replays as terminal 503 `stored_response_integrity`, never `{}` 200.
+- The terminal `UPDATE ... WHERE state='RUNNING'` checks `rowcount == 1`; a lost claim re-reads inside the same `BEGIN IMMEDIATE` and replays the PERSISTED terminal state — the durable ledger is the authority over the in-memory result.
+- `DAO-DEMO-*` allocation collision-checks BOTH `proposals` and `demo_runs` inside the trigger lock (bounded 16 attempts, then fail-closed 500 before any mutation); a pre-existing record is never adopted or cleanup-owned.
+- Activation compares ALL signed immutable fields against the durable row — scenario, client binding, nonce, `issued_at`, `expires_at` — any mismatch → 401 `invalid_capability`.
+
 All items below are changes in **Codex-owned files** that I cannot edit. My lane
 is committed and self-consistent; these are what Codex must apply for full
 integration. Grouped by file.

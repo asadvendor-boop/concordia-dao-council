@@ -113,6 +113,11 @@ _DASHBOARD_TOKEN_HEADER = "X-Concordia-Dashboard-Token"
 _CLIENT_NONCE_HEADER = "X-Concordia-Demo-Client"
 _DEMO_PROPOSAL_PREFIX = "DAO-DEMO-"  # never collides with DAO-PROP-6CB25C
 
+# Bounded loop-allocation attempts for the readable 6-hex demo-proposal suffix:
+# each candidate is collision-checked against BOTH proposals and demo_runs, and
+# allocation fails closed once the attempts are exhausted.
+_DEMO_ID_ALLOCATION_ATTEMPTS = 16
+
 # Frozen abuse controls: 3 activations / client / 10 min, 20 global / 10 min.
 _ACTIVATION_WINDOW_SECONDS = 600
 _PER_CLIENT_ACTIVATION_LIMIT = 3
@@ -357,14 +362,38 @@ def _parse_capability(token: str, secret: bytes) -> dict[str, Any] | None:
     }
 
 
+def _stored_response_integrity_error() -> JSONResponse:
+    """Terminal fail-closed error for a corrupt stored activation result."""
+    return JSONResponse(
+        {
+            "error": "Stored demo activation result failed integrity validation",
+            "error_code": "stored_response_integrity",
+        },
+        status_code=503,
+    )
+
+
 def _stored_capability_response(row) -> JSONResponse:
-    """Replay the stored one-use activation result (idempotent semantics)."""
-    status_code = int(row["response_status"] or 200)
+    """Replay the stored one-use activation result (idempotent semantics).
+
+    The COMPLETE stored-result schema is validated: ``response_status`` must be
+    an int in the sane HTTP range 100-599 and ``response_json`` must parse to a
+    JSON object. A terminal row violating either replays as a terminal 503
+    integrity error — corruption is never turned into an empty 200 success.
+    """
+    status_code = row["response_status"]
+    if not isinstance(status_code, int) or not 100 <= status_code <= 599:
+        return _stored_response_integrity_error()
+    raw_body = row["response_json"]
+    if not isinstance(raw_body, str) or not raw_body:
+        return _stored_response_integrity_error()
     try:
-        body = json.loads(row["response_json"] or "{}")
+        body = json.loads(raw_body)
     except json.JSONDecodeError:
-        body = {}
-    if isinstance(body, dict) and body.get("status") == "started":
+        return _stored_response_integrity_error()
+    if not isinstance(body, dict):
+        return _stored_response_integrity_error()
+    if body.get("status") == "started":
         body = {**body, "status": "idempotent_replay"}
     return JSONResponse(body, status_code=status_code)
 
@@ -531,6 +560,33 @@ def _assert_demo_proposal_id(preallocated: str, observed: str) -> None:
         raise ValueError("observed proposal id is not a strict demo id")
 
 
+def _allocate_demo_proposal_id(db) -> str | None:
+    """Loop-allocate a unique, strict ``DAO-DEMO-*`` proposal id.
+
+    The readable 6-hex suffix format is kept, but every candidate is checked
+    against BOTH ``proposals`` and ``demo_runs``: a collision with ANY existing
+    row is skipped so a pre-existing ``DAO-DEMO-*`` record is never silently
+    adopted (and never becomes cleanup-owned). Returns ``None`` — fail closed —
+    once ``_DEMO_ID_ALLOCATION_ATTEMPTS`` candidates are exhausted. Callers
+    hold ``_trigger_lock``, which serialises the check-then-reserve sequence.
+    """
+    for _ in range(_DEMO_ID_ALLOCATION_ATTEMPTS):
+        candidate = f"{_DEMO_PROPOSAL_PREFIX}{uuid.uuid4().hex[:6].upper()}"
+        if not is_strict_demo_proposal_id(candidate) or is_protected_proposal_id(
+            candidate
+        ):  # pragma: no cover — defensive; a uuid suffix is always strict
+            continue
+        existing_proposal = db.execute(
+            "SELECT 1 FROM proposals WHERE proposal_id=? LIMIT 1", (candidate,)
+        ).fetchone()
+        existing_run = db.execute(
+            "SELECT 1 FROM demo_runs WHERE proposal_id=? LIMIT 1", (candidate,)
+        ).fetchone()
+        if existing_proposal is None and existing_run is None:
+            return candidate
+    return None
+
+
 async def _run_simulator_scenario(
     endpoint: str, requested_proposal_id: str
 ) -> dict[str, Any]:
@@ -665,14 +721,14 @@ async def _execute_demo_trigger(
     async with _trigger_lock:
         # Preallocate the exact, unique demo-proposal identity BEFORE any
         # mutation (WP3-2). The distinct DAO-DEMO- prefix can never collide
-        # with the canonical DAO-PROP-6CB25C namespace, and it is validated
-        # strict + non-protected before use.
-        demo_proposal_id = (
-            f"{_DEMO_PROPOSAL_PREFIX}{uuid.uuid4().hex[:6].upper()}"
-        )
-        if not is_strict_demo_proposal_id(demo_proposal_id) or is_protected_proposal_id(
-            demo_proposal_id
-        ):  # pragma: no cover — defensive; uuid suffix is always strict
+        # with the canonical DAO-PROP-6CB25C namespace; the readable 6-hex
+        # suffix is loop-allocated under the trigger lock with a collision
+        # check against BOTH proposals and demo_runs, so a pre-existing
+        # DAO-DEMO-* record is never silently adopted (and never becomes
+        # cleanup-owned). Fails closed after bounded attempts.
+        ensure_demo_tables(db)
+        demo_proposal_id = _allocate_demo_proposal_id(db)
+        if demo_proposal_id is None:
             return 500, {
                 "success": False,
                 "error": "Failed to allocate a demo proposal id",
@@ -681,7 +737,6 @@ async def _execute_demo_trigger(
         # Reserve run provenance BEFORE the first durable mutation (WP3-3).
         # Kept on EVERY partial failure so the run stays discoverable and
         # exactly cleanable via remove_demo_proposals(db, demo_run_id).
-        ensure_demo_tables(db)
         db.execute(
             "INSERT OR IGNORE INTO demo_runs "
             "(demo_run_id, proposal_id, scenario_id, is_demo, created_at) "
@@ -941,8 +996,12 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
             or row["scenario_id"] != payload["scenario_id"]
             or row["client_binding_hash"] != client_hash_hex
             or row["nonce_hash"] != payload["nonce_hash"]
+            or row["issued_at"] != payload["issued_at"]
+            or row["expires_at"] != payload["expires_at"]
         ):
             # Signed but not present/consistent in the durable ledger — refuse.
+            # ALL signed immutable fields must equal the durable row, including
+            # issued_at/expires_at.
             db.execute("COMMIT")
             return JSONResponse(
                 {"error": "Invalid capability", "error_code": "invalid_capability"},
@@ -1057,10 +1116,13 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
     )
 
     # Record the terminal state + stored response atomically so terminal
-    # retries replay the exact status/body.
+    # retries replay the exact status/body. Exactly one row must be updated:
+    # zero rows means the RUNNING claim was terminalized concurrently (lease
+    # expiry + crash recovery), and the durable ledger — not the in-memory
+    # result — is the authority for what this request returns.
     db.execute("BEGIN IMMEDIATE")
     try:
-        db.execute(
+        cursor = db.execute(
             "UPDATE demo_capabilities SET state=?, response_status=?, "
             "response_json=? WHERE capability_id=? AND state=?",
             (
@@ -1071,6 +1133,20 @@ async def activate_demo_capability(body: CapabilityActivateRequest, request: Req
                 _STATE_RUNNING,
             ),
         )
+        if cursor.rowcount != 1:
+            # Lost claim: re-read INSIDE the same BEGIN IMMEDIATE and replay
+            # the persisted terminal state via the validated stored-response
+            # path — never the in-memory result.
+            row = db.execute(
+                "SELECT * FROM demo_capabilities WHERE capability_id=?",
+                (payload["capability_id"],),
+            ).fetchone()
+            db.execute("COMMIT")
+            if row is None or (row["state"] or "") not in _TERMINAL_STATES:
+                # A missing/non-terminal ledger row after a lost claim is
+                # corruption — fail closed, never fabricate success.
+                return _stored_response_integrity_error()
+            return _stored_capability_response(row)
         db.execute("COMMIT")
     except Exception:
         db.execute("ROLLBACK")
