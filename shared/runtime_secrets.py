@@ -92,3 +92,10 @@ def read_secret(name: str, *, allow_env: bool = True) -> str:
     if file_path:
         return _read_file_secret(file_path)
     return os.getenv(name, "").strip() if allow_env else ""
+
+
+def read_secret_file_only(name: str) -> str:
+    """Return a secret only through NAME_FILE, ignoring direct env values."""
+
+    file_path = os.getenv(f"{name}_FILE", "").strip()
+    return _read_file_secret(file_path) if file_path else ""

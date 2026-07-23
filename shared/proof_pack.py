@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from shared.proof_runtime import (
     canonical_manifest,
     redact_public_payload,
 )
+from shared.proof_registry import ProofRegistryRepository
 
 
 DEFAULT_REQUESTED_BPS = 3000
@@ -242,7 +244,7 @@ def _format_stored_adversarial_attempt(attempt: dict[str, Any]) -> dict[str, Any
         "status": "blocked",
         "title": "Adversarial Safety Demo",
         "proof_mode": attempt.get("proof_mode") or "stored_gateway_attempt",
-        "live_gateway_validation": bool(attempt.get("live_gateway_validation", True)),
+        "live_gateway_validation": bool(attempt.get("live_gateway_validation", False)),
         "live_exploit_execution": bool(attempt.get("live_exploit_execution", False)),
         "network_broadcast_attempted": bool(attempt.get("network_broadcast_attempted", False)),
         "execution_attempted": bool(attempt.get("execution_attempted", False)),
@@ -517,17 +519,30 @@ def build_audit_packet(evidence: dict[str, Any]) -> dict[str, Any]:
             "acceptance_criteria": quorum_proof.get("acceptance_criteria"),
             "live_deploys": quorum_proof.get("live_deploys"),
         }
-        final_hash = (quorum_proof.get("live_deploys") or {}).get("final_store_governance_receipt")
-        if final_hash:
-            proof["compact_proof_table"].append(
-                {
-                    "claim": "2-of-3 Odra quorum receipt executed",
-                    "status": "verified",
-                    "evidence": f"https://testnet.cspr.live/deploy/{final_hash}",
-                }
-            )
+        quorum_status = (
+            quorum_proof.get("current_quorum_verification_status")
+            or "unavailable"
+        )
+        registry_proof = quorum_proof.get("registry_proof") or {}
+        proof["compact_proof_table"].append(
+            {
+                "claim": (
+                    "Typed exact-envelope v3 quorum sequence independently verified"
+                    if quorum_status == "verified"
+                    else "Historical v2 quorum artifact awaits independent registry verification"
+                ),
+                "status": quorum_status,
+                "evidence": (
+                    registry_proof.get("artifact_path")
+                    or "artifacts/live/odra-quorum-exercise-plan.json"
+                ),
+            }
+        )
+        if quorum_status == "verified":
             proof["locke_execution_firewall"]["on_chain_quorum_enforced"] = True
-            proof["locke_execution_firewall"]["quorum_final_receipt"] = final_hash
+            proof["locke_execution_firewall"]["quorum_proof_id"] = registry_proof.get(
+                "proof_id"
+            )
     if topology_proof:
         packet["odra_topology_genesis"] = topology_proof
         proof["odra_topology_genesis"] = {
@@ -548,8 +563,12 @@ def build_audit_packet(evidence: dict[str, Any]) -> dict[str, Any]:
         }
         proof["compact_proof_table"].append(
             {
-                "claim": "Auxiliary Odra topology modules exercised on Testnet",
-                "status": topology_proof.get("status"),
+                "claim": (
+                    "Auxiliary Odra topology artifact captured"
+                    if topology_proof.get("status") == "verified"
+                    else "Auxiliary Odra topology artifact awaits independent verification"
+                ),
+                "status": topology_proof.get("status") or "unavailable",
                 "evidence": (
                     "CouncilRegistry representative register_agent call, TreasuryPolicy validation call, "
                     "and CardIndexLedger seal_card_root call are recorded in "
@@ -561,7 +580,7 @@ def build_audit_packet(evidence: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_odra_quorum_proof() -> dict[str, Any] | None:
-    """Load the live Odra quorum exercise artifact when packaged for judges."""
+    """Load legacy quorum details without trusting their asserted status."""
 
     path = Path("artifacts/live/odra-quorum-exercise-plan.json")
     if not path.exists():
@@ -570,15 +589,30 @@ def load_odra_quorum_proof() -> dict[str, Any] | None:
         data = json.loads(path.read_text())
     except Exception:
         return None
-    if data.get("proposal_id") != "DAO-PROP-6CB25C":
+    if (
+        data.get("proposal_id") != "DAO-PROP-6CB25C"
+        or data.get("schema") != "concordia.odra-quorum-exercise-proof.v1"
+    ):
         return None
-    if data.get("status") not in {"live_complete", "verified", "complete"}:
-        return None
-    return data
+    reported_status = data.get("status")
+    registry_item = _green_registry_item(
+        data["proposal_id"],
+        "exact_envelope_v3",
+        temporal_scope="current",
+    )
+    result = dict(data)
+    result["artifact_reported_status"] = reported_status
+    result["status"] = "unavailable"
+    result["verification_status"] = "unavailable"
+    result["current_quorum_verification_status"] = (
+        "verified" if registry_item is not None else "unavailable"
+    )
+    result["registry_proof"] = registry_item
+    return result
 
 
 def load_odra_topology_genesis_proof() -> dict[str, Any] | None:
-    """Load supplemental live auxiliary Odra module proof when available."""
+    """Load topology details while deriving status from a matching registry item."""
 
     path = Path("artifacts/live/odra-topology-genesis-proof.json")
     if not path.exists():
@@ -587,10 +621,51 @@ def load_odra_topology_genesis_proof() -> dict[str, Any] | None:
         data = json.loads(path.read_text())
     except Exception:
         return None
-    if data.get("status") != "live_complete":
-        return None
     modules = data.get("modules") or {}
     required = {"CouncilRegistry", "TreasuryPolicy", "CardIndexLedger"}
     if set(modules) < required:
         return None
-    return data
+    reported_status = data.get("status")
+    artifact_path = "artifacts/live/odra-topology-genesis-proof.json"
+    registry_item = _green_registry_item(
+        data.get("proposal_id") or "DAO-PROP-6CB25C",
+        "snapshot",
+        artifact_path=artifact_path,
+    )
+    try:
+        artifact_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        artifact_sha256 = None
+    if (
+        registry_item is not None
+        and registry_item.get("artifact_sha256") != artifact_sha256
+    ):
+        registry_item = None
+    result = dict(data)
+    result["artifact_reported_status"] = reported_status
+    result["status"] = "verified" if registry_item is not None else "unavailable"
+    result["verification_status"] = result["status"]
+    result["registry_proof"] = registry_item
+    return result
+
+
+def _green_registry_item(
+    proposal_id: str,
+    proof_type: str,
+    *,
+    temporal_scope: str | None = None,
+    artifact_path: str | None = None,
+) -> dict[str, Any] | None:
+    root = os.getenv(
+        "CONCORDIA_PROOF_REGISTRY_DIR",
+        "artifacts/live/proof-registry",
+    )
+    try:
+        return ProofRegistryRepository(root).unique_green_public_item(
+            proposal_id,
+            proof_type,
+            temporal_scope=temporal_scope,
+            artifact_path=artifact_path,
+        )
+    except (OSError, ValueError):
+        return None

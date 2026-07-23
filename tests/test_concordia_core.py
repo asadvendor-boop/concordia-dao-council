@@ -455,7 +455,7 @@ def test_invariant_runner_covers_required_checks_without_trusting_caller_success
 
     assert invariants["status"] == "failed"
     assert checks["allocation_cap"]["passed"]
-    assert checks["quorum_required"]["passed"]
+    assert checks["quorum_required"]["passed"] is False
     assert checks["tampered_envelope_rejected"]["passed"]
     assert checks["duplicate_x402_proof_rejected"]["passed"] is False
     assert checks["old_nonce_rejected"]["passed"]
