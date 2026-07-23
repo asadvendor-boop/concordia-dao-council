@@ -67,9 +67,55 @@ def _repository(tmp_path: Path) -> tuple[Path, bytes, bytes, bytes]:
 
     lock = b"# locked dependencies\n"
     wasm = b"\0asm" + b"verified-wasm" * 8
-    schema = _canonical({"contract": "GovernanceReceiptV3", "entry_points": []})
-    _write(repository, f"{CRATE_PATH}/Cargo.toml", b"[package]\nname='test'\n")
+    lib_rs = b"pub struct GovernanceReceiptV3;\n"
+    encoding_rs = b"pub const SCHEMA_VERSION: u32 = 3;\n"
+    schema = _canonical(
+        {
+            "authors": [],
+            "call": {
+                "arguments": [],
+                "description": "",
+                "wasm_file_name": "GovernanceReceiptV3.wasm",
+            },
+            "casper_contract_schema_version": 1,
+            "contract_name": "GovernanceReceiptV3",
+            "contract_version": "0.1.0",
+            "entry_points": [
+                {
+                    "access": "public",
+                    "arguments": [],
+                    "description": "",
+                    "is_contract_context": True,
+                    "is_mutable": True,
+                    "name": "write",
+                    "return_ty": "Unit",
+                },
+                {
+                    "access": "public",
+                    "arguments": [],
+                    "description": "",
+                    "is_contract_context": True,
+                    "is_mutable": False,
+                    "name": "read",
+                    "return_ty": "Bool",
+                },
+            ],
+            "errors": [{"description": "", "discriminant": 1, "name": "Rejected"}],
+            "events": [{"name": "Changed", "ty": "Changed"}],
+            "homepage": None,
+            "repository": None,
+            "toolchain": ("rustc 1.86.0-nightly (854f22563 2025-01-31)"),
+            "types": [],
+        }
+    )
+    _write(
+        repository,
+        f"{CRATE_PATH}/Cargo.toml",
+        b"[package]\nname='test'\nversion='0.1.0'\n",
+    )
     _write(repository, f"{CRATE_PATH}/Cargo.lock", lock)
+    _write(repository, f"{CRATE_PATH}/src/lib.rs", lib_rs)
+    _write(repository, f"{CRATE_PATH}/src/encoding.rs", encoding_rs)
     _write(repository, f"{CRATE_PATH}/{WASM_PATH}", wasm)
     _write(repository, f"{CRATE_PATH}/{SCHEMA_PATH}", schema)
 
@@ -116,6 +162,23 @@ def _repository(tmp_path: Path) -> tuple[Path, bytes, bytes, bytes]:
         f"{CRATE_PATH}/deployment.manifest.json",
         _canonical(
             {
+                "schema_id": "concordia.v3-deployment-manifest.v1",
+                "status": "built_uninstalled",
+                "network": "casper-test",
+                "package_key_name": "concordia_governance_receipt_v3",
+                "contract_name": "GovernanceReceiptV3",
+                "contract_version": None,
+                "package_hash": None,
+                "contract_hash": None,
+                "install_deploy_hash": None,
+                "install_block_hash": None,
+                "install_block_height": None,
+                "install_state_root_hash": None,
+                "locked_install": {
+                    "odra_cfg_allow_key_override": False,
+                    "odra_cfg_is_upgradable": False,
+                    "odra_cfg_is_upgrade": False,
+                },
                 "build": {
                     "command": ("cargo --locked odra build -c GovernanceReceiptV3"),
                     "schema_command": (
@@ -128,12 +191,28 @@ def _repository(tmp_path: Path) -> tuple[Path, bytes, bytes, bytes]:
                     "schema_sha256": hashlib.sha256(schema).hexdigest(),
                 },
                 "source": {
+                    "lib_rs_sha256": hashlib.sha256(lib_rs).hexdigest(),
+                    "encoding_rs_sha256": hashlib.sha256(encoding_rs).hexdigest(),
                     "cargo_lock_sha256": hashlib.sha256(lock).hexdigest(),
                 },
                 "historical_isolation": {
                     "tracked_file_count": len(historical_files),
+                    "pre_post_diff": "empty",
                     "manifest_sha256": hashlib.sha256(historical_manifest).hexdigest(),
                 },
+                "abi": {
+                    "entry_point_count": 2,
+                    "mutable_entry_point_count": 1,
+                    "query_entry_point_count": 1,
+                    "event_count": 1,
+                    "error_count": 1,
+                },
+                "deployment_domain": None,
+                "installation_nonce": None,
+                "roles": None,
+                "source_commit": None,
+                "deployment_commit": None,
+                "note": "test build",
                 "toolchain": {
                     "cargo_odra": "0.1.7",
                     "odra": "2.8.2",
@@ -255,6 +334,14 @@ class _BuildExecutor:
                 )
             elif self.mode == "fatal":
                 stderr = b"fatal: cargo-odra could not produce the contract\n"
+            elif self.mode == "title_error":
+                stderr = b"Error: contract generation failed\n"
+            elif self.mode == "title_fatal":
+                stderr = b"Fatal: contract generation failed\n"
+            elif self.mode == "cr_error":
+                stderr = b"progress\rerror: contract generation failed\n"
+            elif self.mode == "tool_error":
+                stderr = b"cargo-odra: error: contract generation failed\n"
             elif self.mode == "routine_error_crate_names":
                 stderr = (
                     b"   Compiling proc-macro-error-attr v1.0.4\n"
@@ -279,11 +366,14 @@ class _BuildExecutor:
         (cwd / SCHEMA_PATH).write_bytes(self.schema)
         if self.mode == "schema_lock_mutation":
             (cwd / "Cargo.lock").write_bytes(self.lock + b"schema mutated\n")
-        stdout = (
-            b"ERROR schema failed but cargo-odra returned zero\n"
-            if self.mode == "schema_error"
-            else b"schema generated\n"
-        )
+        schema_diagnostics = {
+            "schema_error": b"ERROR schema failed but cargo-odra returned zero\n",
+            "schema_title_error": b"Error: schema generation failed\n",
+            "schema_title_fatal": b"Fatal: schema generation failed\n",
+            "schema_cr_error": b"progress\rerror: schema generation failed\n",
+            "schema_tool_error": b"cargo-odra: error: schema generation failed\n",
+        }
+        stdout = schema_diagnostics.get(self.mode, b"schema generated\n")
         return subprocess.CompletedProcess(argv, 0, stdout, b"")
 
 
@@ -375,7 +465,15 @@ def test_locked_odra_git_ignores_repository_fsmonitor_configuration(
         ("c1_dcs_error", "ERROR"),
         ("long_prefixed_error", "ERROR"),
         ("fatal", "fatal"),
+        ("title_error", "Error"),
+        ("title_fatal", "Fatal"),
+        ("cr_error", "error"),
+        ("tool_error", "error"),
         ("schema_error", "ERROR"),
+        ("schema_title_error", "Error"),
+        ("schema_title_fatal", "Fatal"),
+        ("schema_cr_error", "error"),
+        ("schema_tool_error", "error"),
         ("wrong_hash", "Wasm|digest|hash"),
         ("lock_mutation", "Cargo.lock"),
         ("schema_lock_mutation", "Cargo.lock"),
@@ -460,6 +558,77 @@ def test_locked_odra_build_rejects_manifest_command_mismatch(
         verify_locked_odra_build(repository, executor=executor)
 
     assert executor.calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("unknown_key", "schema|field"),
+        ("missing_key", "schema|field"),
+        ("source_hash", "source|lib.rs"),
+        ("abi_count", "ABI|entry"),
+    ],
+)
+def test_locked_odra_build_rejects_manifest_claim_drift(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    repository, lock, wasm, schema = _repository(tmp_path)
+    manifest_path = repository / f"{CRATE_PATH}/deployment.manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    if mutation == "unknown_key":
+        manifest["unreviewed_release_claim"] = True
+    elif mutation == "missing_key":
+        del manifest["deployment_commit"]
+    elif mutation == "source_hash":
+        manifest["source"]["lib_rs_sha256"] = "0" * 64
+    else:
+        manifest["abi"]["entry_point_count"] = 999
+    manifest_path.write_bytes(_canonical(manifest))
+    _git(repository, "add", str(manifest_path.relative_to(repository)))
+    _git(repository, "commit", "-m", f"forge manifest {mutation}")
+    executor = _BuildExecutor(lock=lock, wasm=wasm, schema=schema)
+
+    with pytest.raises(LockedOdraBuildError, match=message):
+        verify_locked_odra_build(repository, executor=executor)
+
+    assert executor.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["unknown_key", "wrong_contract", "invalid_mutability"],
+)
+def test_locked_odra_build_rejects_semantically_invalid_generated_schema(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    repository, lock, wasm, schema = _repository(tmp_path)
+    schema_path = repository / f"{CRATE_PATH}/{SCHEMA_PATH}"
+    document = json.loads(schema)
+    if mutation == "unknown_key":
+        document["unreviewed_schema_claim"] = True
+    elif mutation == "wrong_contract":
+        document["contract_name"] = "OtherContract"
+    else:
+        document["entry_points"][0]["is_mutable"] = "true"
+    mutated_schema = _canonical(document)
+    schema_path.write_bytes(mutated_schema)
+    manifest_path = repository / f"{CRATE_PATH}/deployment.manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["build"]["schema_sha256"] = hashlib.sha256(mutated_schema).hexdigest()
+    manifest_path.write_bytes(_canonical(manifest))
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", f"forge generated schema {mutation}")
+    executor = _BuildExecutor(
+        lock=lock,
+        wasm=wasm,
+        schema=mutated_schema,
+    )
+
+    with pytest.raises(LockedOdraBuildError, match="schema|contract|mutable"):
+        verify_locked_odra_build(repository, executor=executor)
 
 
 def test_locked_odra_build_rejects_observed_toolchain_mismatch(
