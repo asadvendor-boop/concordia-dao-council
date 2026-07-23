@@ -1126,7 +1126,13 @@ def test_dm_rev3_terminalization_race_durable_failed_state_wins(
     """Lease expiry + concurrent crash recovery: when the RUNNING claim is
     terminalized FAILED while the original request's pipeline is still in
     flight, the original request must return the persisted FAILED state — the
-    durable ledger is the authority, never the in-memory success."""
+    durable ledger is the authority, never the in-memory success. Mutation
+    probe (re-audit item 2): once the durable FAILED response is served, the
+    discarded run performs NO further side effects — nothing keeps executing
+    in the background and no replay ever re-runs it."""
+    import asyncio as _asyncio
+    import time as _time
+
     crash_body = {
         "schema_version": "demo-run-v1",
         "status": "failed",
@@ -1134,8 +1140,10 @@ def test_dm_rev3_terminalization_race_durable_failed_state_wins(
         "scenario_id": "treasury",
         "is_demo": True,
     }
+    probe: list[str] = []
 
     async def _racing(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        probe.append("pipeline-mutation-before-failed")
         # A concurrent retry recovered the expired lease mid-flight: the row
         # is already terminal FAILED before this result can be recorded.
         db.execute(
@@ -1143,6 +1151,10 @@ def test_dm_rev3_terminalization_race_durable_failed_state_wins(
             "response_json=? WHERE demo_run_id=?",
             (json.dumps({**crash_body, "demo_run_id": demo_run_id}), demo_run_id),
         )
+        # A slow tail after the durable FAILED: any side effect the losing run
+        # still performs before returning is visible to the probe.
+        await _asyncio.sleep(0.01)
+        probe.append("pipeline-mutation-after-failed")
         return 200, {
             "success": True,
             "scenario_type": scenario_type,
@@ -1169,10 +1181,133 @@ def test_dm_rev3_terminalization_race_durable_failed_state_wins(
     assert int(row["response_status"]) == 503
     assert json.loads(row["response_json"])["status"] == "failed"
 
-    # A subsequent terminal retry replays the same persisted FAILED state.
+    # Mutation probe: the losing run finished BEFORE the durable FAILED
+    # response was served, and nothing of it keeps mutating afterwards.
+    probe_at_response = list(probe)
+    _time.sleep(0.15)
+    assert probe == probe_at_response
+
+    # A subsequent terminal retry replays the same persisted FAILED state and
+    # never re-runs the pipeline (probe unchanged, durable row unchanged).
     replay = _activate(client, capability, "treasury", nonce_wire)
     assert replay.status_code == 503
     assert replay.json()["status"] == "failed"
+    assert probe == probe_at_response
+    after = _capability_row(app_db, capability_id)
+    assert after["state"] == "FAILED"
+    assert json.loads(after["response_json"])["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Re-audit item 2 — hard execution timeout strictly below the RUNNING lease
+# ---------------------------------------------------------------------------
+
+
+def test_dm_execution_timeout_strictly_below_running_lease():
+    """The hard execution bound must sit strictly below the 180s recovery
+    lease: a legitimate slow run is cancelled (side effects stop) BEFORE any
+    crash-recovery path may terminalize its RUNNING claim to FAILED."""
+    assert demo._EXECUTION_TIMEOUT_SECONDS < demo._RUNNING_LEASE_SECONDS
+
+
+def test_dm_execution_timeout_cancels_slow_run_terminal_failed_no_late_mutations(
+    client, app_db, monkeypatch
+):
+    """A pipeline exceeding the execution timeout is CANCELLED: the mutation
+    probe stops advancing after cancellation, the row goes terminal FAILED
+    with an honest body, and retries replay that stored terminal without ever
+    re-running the pipeline."""
+    import asyncio as _asyncio
+    import time as _time
+
+    probe: list[object] = []
+
+    async def _slow(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        try:
+            for step in range(10_000):
+                probe.append(step)
+                await _asyncio.sleep(0.02)
+        except _asyncio.CancelledError:
+            probe.append("cancelled")
+            raise
+        return 200, {  # pragma: no cover — must never be reached
+            "success": True,
+            "scenario_type": scenario_type,
+            "proposal_id": "DAO-DEMO-STUB01",
+            "demo_run_id": demo_run_id,
+            "is_demo": True,
+        }
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _slow)
+    monkeypatch.setattr(demo, "_EXECUTION_TIMEOUT_SECONDS", 0.2)
+
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 503
+    body = activated.json()
+    assert body["success"] is False
+    assert body["error_code"] == "execution_timeout"
+    assert body["scenario_id"] == "treasury"
+    assert body["is_demo"] is True
+    assert body["demo_run_id"].startswith("demo-run-")
+
+    # The pipeline observed its own cancellation and performed some work first.
+    assert probe[-1] == "cancelled"
+    assert len(probe) > 1
+
+    # Side-effect probe: NO further mutations after the durable FAILED.
+    probe_at_response = list(probe)
+    _time.sleep(0.3)
+    assert probe == probe_at_response
+
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "FAILED"
+    assert int(row["response_status"]) == 503
+    assert json.loads(row["response_json"]) == body
+
+    # A retry replays the stored honest terminal; the pipeline never re-runs.
+    replay = _activate(client, capability, "treasury", nonce_wire)
+    assert replay.status_code == 503
+    assert replay.json() == body
+    assert probe == probe_at_response
+
+
+def test_dm_execution_timeout_normal_speed_run_unaffected(client, app_db, monkeypatch):
+    """Positive control: a normal-speed pipeline (well under the 150s bound)
+    is unaffected by the execution timeout — the activation succeeds and the
+    row goes terminal SUCCEEDED exactly as before."""
+    import asyncio as _asyncio
+
+    calls: list[str] = []
+
+    async def _normal(db, scenario_type, *, demo_run_id, enforce_cooldown):
+        await _asyncio.sleep(0.05)
+        calls.append(scenario_type)
+        return 200, {
+            "success": True,
+            "scenario_type": scenario_type,
+            "proposal_id": "DAO-DEMO-STUB01",
+            "demo_run_id": demo_run_id,
+            "is_demo": True,
+        }
+
+    monkeypatch.setattr(demo, "_execute_demo_trigger", _normal)
+
+    response, nonce_wire = _issue(client)
+    capability = response.json()["capability"]
+    capability_id = _capability_id_of(capability)
+
+    activated = _activate(client, capability, "treasury", nonce_wire)
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "started"
+    assert calls == ["treasury"]
+
+    row = _capability_row(app_db, capability_id)
+    assert row["state"] == "SUCCEEDED"
+    assert int(row["response_status"]) == 200
 
 
 async def test_dm_rev4_preexisting_demo_id_collision_never_adopted(

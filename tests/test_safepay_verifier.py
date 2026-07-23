@@ -1205,6 +1205,114 @@ def test_summary_false_when_409_precedes_consumption(tmp_path, monkeypatch):
     assert summary["duplicate_proof_rejected"] is False
 
 
+@pytest.mark.parametrize(
+    "forged_field, forged_row",
+    [
+        # (http_status, payment_hash, quote_id, resource_id, observed_at,
+        #  response_digest, consumed_response_hash) — one binding broken each.
+        # quote_id/payment_hash placeholders "SAME"/"HASH" are substituted with
+        # the genuine consumption values inside the test.
+        ("http_status", (409, "HASH", "SAME", "resource-a", 50, "RH", "RH")),
+        ("payment_hash", (200, "ff" * 32, "SAME", "resource-a", 50, "RH", "RH")),
+        (
+            "quote_id",
+            (200, "HASH", "7f000000-0000-4000-8000-00000000ab01", "resource-a", 50, "RH", "RH"),
+        ),
+        ("resource_id", (200, "HASH", "SAME", "resource-b", 50, "RH", "RH")),
+        ("chronology", (200, "HASH", "SAME", "resource-a", -100, "RH", "RH")),
+        ("response_digest", (200, "HASH", "SAME", "resource-a", 50, "ab" * 32, "RH")),
+        ("consumed_response_hash", (200, "HASH", "SAME", "resource-a", 50, "RH", "cd" * 32)),
+    ],
+)
+def test_summary_idempotent_replay_forged_direct_insert_insufficient(
+    tmp_path, monkeypatch, forged_field, forged_row
+):
+    """Re-audit item 1: a directly inserted kind='idempotent_replay' row must
+    NOT set ``idempotent_replay_observed``. The observation must prove HTTP
+    200, the same (network, payment_hash) as the canonical consumption, the
+    summarized quote and consumed resource, post-consumption chronology, and
+    BOTH stored digests equal to the canonical consumption response hash —
+    never bare kind presence. Each forged variant breaks exactly one binding.
+    """
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
+    status, forged_payment, forged_quote, forged_resource, offset, digest, consumed = forged_row
+    substitutions = {"HASH": payment_hash, "SAME": quote["quote_id"], "RH": response_hash}
+    forged_payment = substitutions.get(forged_payment, forged_payment)
+    forged_quote = substitutions.get(forged_quote, forged_quote)
+    digest = substitutions.get(digest, digest)
+    consumed = substitutions.get(consumed, consumed)
+    conn = sqlite3.connect(str(tmp_path / "safepay.db"))
+    try:
+        conn.execute(
+            "INSERT INTO safepay_redemption_observations("
+            "kind, http_status, network, payment_hash, quote_id, resource_id, observed_at, "
+            "response_digest, consumed_response_hash) "
+            "VALUES('idempotent_replay', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                status,
+                SAFEPAY_V2_NETWORK,
+                forged_payment,
+                forged_quote,
+                forged_resource,
+                START + offset,
+                digest,
+                consumed,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    summary = ledger.summarize_quote_evidence(quote["quote_id"])
+    assert summary["consumption_recorded"] is True, forged_field
+    assert summary["idempotent_replay_observed"] is False, forged_field
+
+
+def test_summary_idempotent_replay_true_only_via_fully_bound_row(tmp_path, monkeypatch):
+    """Positive control for the bound-row rule: a fully bound observation —
+    exactly what the provider records for a genuine stored-fulfillment replay —
+    still sets the flag."""
+    ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
+    assert ledger.summarize_quote_evidence(quote["quote_id"])[
+        "idempotent_replay_observed"
+    ] is False
+    ledger.record_redemption_observation(
+        kind="idempotent_replay",
+        http_status=200,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash=payment_hash,
+        quote_id=quote["quote_id"],
+        resource_id="resource-a",
+        now=START + 50,
+        response_digest=response_hash,
+        consumed_response_hash=response_hash,
+    )
+    assert ledger.summarize_quote_evidence(quote["quote_id"])[
+        "idempotent_replay_observed"
+    ] is True
+
+
+def test_summary_idempotent_replay_false_without_canonical_consumption(tmp_path, monkeypatch):
+    """A replay observation with NO canonical consumption for the quote can
+    never set the flag: there is nothing whose replay it could evidence."""
+    install_secret_files(monkeypatch, tmp_path)
+    ledger = SafePayLedger(str(tmp_path / "no-consumption.db"), SafePayCaps())
+    quote_id = str(uuid.uuid4())
+    ledger.record_redemption_observation(
+        kind="idempotent_replay",
+        http_status=200,
+        network=SAFEPAY_V2_NETWORK,
+        payment_hash="ee" * 32,
+        quote_id=quote_id,
+        resource_id="resource-a",
+        now=START + 50,
+        response_digest="ab" * 32,
+        consumed_response_hash="ab" * 32,
+    )
+    summary = ledger.summarize_quote_evidence(quote_id)
+    assert summary["consumption_recorded"] is False
+    assert summary["idempotent_replay_observed"] is False
+
+
 def test_summary_idempotent_replay_does_not_imply_duplicate_rejected(tmp_path, monkeypatch):
     ledger, quote, payment_hash, response_hash = _consumed_quote(tmp_path, monkeypatch)
     ledger.record_redemption_observation(
