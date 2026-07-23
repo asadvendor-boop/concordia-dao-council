@@ -1,4 +1,4 @@
-{$CONCORDIA_HOSTNAME} {
+(concordia_app) {
 	encode zstd gzip
 
 	handle /health {
@@ -46,7 +46,13 @@
 	}
 
 	handle /approve* {
-		reverse_proxy concordia-gateway:8000
+		basic_auth {
+			{file./run/secrets/approval_ui_user} {file./run/secrets/approval_ui_bcrypt_hash}
+		}
+		reverse_proxy concordia-gateway:8000 {
+			# Setting without +/- overwrites every caller-supplied value.
+			header_up X-Proxy-Secret {file./run/secrets/approval_proxy_secret}
+		}
 	}
 
 	handle /x402/* {
@@ -58,10 +64,6 @@
 	}
 
 	handle /cspr-click/* {
-		reverse_proxy concordia-gateway:8000
-	}
-
-	handle /demo/* {
 		reverse_proxy concordia-gateway:8000
 	}
 
@@ -90,6 +92,20 @@
 	}
 }
 
+# Preserve every submitted sslip.io route while the purchased apex becomes a
+# first-class alias of the same application.
+{$CONCORDIA_HOSTNAME} {
+	import concordia_app
+}
+
+{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz} {
+	import concordia_app
+}
+
+{$CONCORDIA_WWW_HOSTNAME:www.concordiadao.xyz} {
+	redir https://{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz}{uri} 308
+}
+
 {$X402_PROVIDER_HOSTNAME} {
 	encode zstd gzip
 
@@ -103,5 +119,33 @@
 
 	handle {
 		respond "Concordia x402 Risk Oracle Provider" 200
+	}
+}
+
+{$CONCORDIA_X402_HOSTNAME:x402.concordiadao.xyz} {
+	encode zstd gzip
+
+	handle / {
+		redir * /supported 308
+	}
+
+	@x402_get {
+		method GET
+		path /health /supported /resource/*
+	}
+	handle @x402_get {
+		reverse_proxy concordia-x402-official:8787
+	}
+
+	@x402_post {
+		method POST
+		path /verify /settle
+	}
+	handle @x402_post {
+		reverse_proxy concordia-x402-official:8787
+	}
+
+	handle {
+		respond "route_not_found" 404
 	}
 }
