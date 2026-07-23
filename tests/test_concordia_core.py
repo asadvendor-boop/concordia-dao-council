@@ -1678,20 +1678,26 @@ def test_x402_demo_payment_proof_round_trip(monkeypatch):
     assert verify_demo_payment_proof("/reports/dao-prop-test", proof)
 
 
-def test_x402_transfer_proof_parser_requires_processed_transfer(monkeypatch):
+def test_x402_transfer_proof_parser_requires_exact_processed_transfer(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_AMOUNT", "1000000")
     monkeypatch.setenv("X402_PAYMENT_ADDRESS", "account-hash-" + ("a" * 64))
-    payload = {
+    exact = {
         "status": "processed",
         "error_message": None,
         "transfers": [
             {
                 "target_account_hash": "account-hash-" + ("a" * 64),
-                "amount": "1200000",
+                "amount": "1000000",
             }
         ],
     }
-    assert _extract_transfer_proof_status(payload)["valid"] is True
+    assert _extract_transfer_proof_status(exact)["valid"] is True
+
+    overpayment = {
+        **exact,
+        "transfers": [{**exact["transfers"][0], "amount": "1200000"}],
+    }
+    assert _extract_transfer_proof_status(overpayment)["valid"] is False
 
 
 def test_x402_payment_correlation_id_is_stable():
@@ -1830,16 +1836,31 @@ def test_revised_capped_policy_assessment_can_reach_human_plan():
 
 def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_path):
     db = init_db(tmp_path / "concordia.db")
+    demo_run_id = "run-reset-test"
+    proposal_id = "DAO-DEMO-RESET"
     db.execute(
         "INSERT INTO proposals (proposal_id, state, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        ("DAO-PROP-RESET", "CHALLENGED", "2026-06-29T00:00:00Z", "2026-06-29T00:00:00Z"),
+        (proposal_id, "CHALLENGED", "2026-06-29T00:00:00Z", "2026-06-29T00:00:00Z"),
+    )
+    db.execute(
+        """
+        INSERT INTO demo_runs (
+            demo_run_id, proposal_id, scenario_id, is_demo, created_at
+        ) VALUES (?, ?, ?, 1, ?)
+        """,
+        (
+            demo_run_id,
+            proposal_id,
+            "treasury-cap",
+            "2026-06-29T00:00:00Z",
+        ),
     )
     db.execute(
         "INSERT INTO proposal_rooms (room_id, proposal_id, title, created_by, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (
             "room-reset",
-            "DAO-PROP-RESET",
+            proposal_id,
             "Reset Test",
             "recorder",
             "2026-06-29T00:00:00Z",
@@ -1853,7 +1874,7 @@ def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_pat
         (
             "msg-reset",
             "room-reset",
-            "DAO-PROP-RESET",
+            proposal_id,
             "recorder",
             "demo message",
             "2026-06-29T00:00:00Z",
@@ -1861,7 +1882,7 @@ def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_pat
         ),
     )
 
-    result = remove_demo_proposals(db)
+    result = remove_demo_proposals(db, demo_run_id)
 
     assert result["cleaned_proposals"] == 1
     assert db.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
