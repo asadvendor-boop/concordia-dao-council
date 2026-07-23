@@ -189,6 +189,36 @@ class TestExclusiveLock:
             )
         assert refusal.value.code == RefusalCode.JOURNAL_PATH_UNSAFE
 
+    def test_a_symlinked_system_ancestor_does_not_block_a_real_journal(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: the guard used to walk to the filesystem root.
+
+        On macOS `/var -> private/var` and `/tmp -> private/tmp`, so every
+        journal in a normal scratch location was refused JOURNAL_PATH_UNSAFE.
+        The suite missed it because pytest's tmp_path is already resolved;
+        the real CLI failed. Reproduced portably here: the journal's own
+        directory is a REAL directory that merely happens to be reached
+        THROUGH a symlinked ancestor — which must be accepted.
+        """
+
+        real = tmp_path / "real-root"
+        (real / "nested").mkdir(parents=True)
+        link = tmp_path / "linked-root"
+        os.symlink(real, link)
+        journal_path = link / "nested" / "journal.jsonl"
+        assert link.is_symlink() and not journal_path.parent.is_symlink()
+
+        journal = CanaryJournal.create(
+            journal_path, plan_hash=PLAN_HASH, rc_tag="rc"
+        )
+        journal.transition(STEP, "PLANNED", plan_hash=PLAN_HASH)
+        journal.close()
+        reloaded = CanaryJournal.load(journal_path)
+        status = reloaded.step_status(STEP)
+        assert status is not None and status.state == "PLANNED"
+        reloaded.close()
+
     def test_symlinked_journal_file_refuses_on_load(self, tmp_path: Path) -> None:
         journal = _fresh(tmp_path)
         journal.close()

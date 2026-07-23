@@ -92,23 +92,33 @@ class StepStatus:
 
 
 def _require_safe_journal_path(path: Path, *, must_exist: bool) -> None:
-    """Symlink-safe journal placement: no symlinked file or ancestors."""
+    """Symlink-safe journal placement.
+
+    The threat is a symlink swapped in AT the journal — the file itself, or
+    the directory it is opened relative to — redirecting appends somewhere
+    else. That is what is checked here, and ``O_NOFOLLOW`` enforces it again
+    at open time.
+
+    Deliberately NOT walked to the filesystem root: an earlier version did,
+    and refused every journal under a path with a symlinked SYSTEM ancestor.
+    On macOS ``/var -> private/var`` and ``/tmp -> private/tmp``, so a
+    journal in any normal scratch location was rejected with
+    JOURNAL_PATH_UNSAFE. The suite missed it because pytest's ``tmp_path``
+    is already resolved; running the real CLI exposed it. The deep walk also
+    bought nothing: an attacker who controls a grandparent of the journal
+    directory already controls the journal directory.
+    """
 
     if path.is_symlink():
         raise CanaryRefusal(
             RefusalCode.JOURNAL_PATH_UNSAFE,
             "journal file may not be a symlink",
         )
-    ancestor = path.parent
-    while True:
-        if ancestor.is_symlink():
-            raise CanaryRefusal(
-                RefusalCode.JOURNAL_PATH_UNSAFE,
-                "journal directory chain may not contain symlinks",
-            )
-        if ancestor == ancestor.parent:
-            break
-        ancestor = ancestor.parent
+    if path.parent.is_symlink():
+        raise CanaryRefusal(
+            RefusalCode.JOURNAL_PATH_UNSAFE,
+            "journal directory may not be a symlink",
+        )
     if must_exist and not path.is_file():
         raise CanaryRefusal(
             RefusalCode.JOURNAL_ABSENT, "journal file does not exist"
