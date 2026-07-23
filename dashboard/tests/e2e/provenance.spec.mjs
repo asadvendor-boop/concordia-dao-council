@@ -113,10 +113,13 @@ test.describe("provenance-aware rendering (FE-07)", () => {
     // historical payment constant must be explicitly historical.
     expect(all).not.toContain("DEFAULT_X402_PAYMENT_HASH");
     expect(all).toContain("HISTORICAL_SAFEPAY_PAYMENT_HASH");
-    // receiptVerified must require positive verification (=== true), never the
-    // old fail-open `!== false`.
+    // DELIBERATE MIGRATION (WP7 re-review item 2): receiptVerified must derive
+    // from the explicit receipt-verification predicate — recovery is NOT
+    // verification, so the old `verification?.recovered === true` expression is
+    // now banned alongside the original fail-open `!== false`.
     const lib = sources.find((entry) => entry.file.endsWith("lib.js"));
-    expect(lib.source).toMatch(/receiptVerified:\s*Boolean\(receipt\)\s*&&\s*verification\?\.recovered\s*===\s*true/);
+    expect(lib.source).toMatch(/receiptVerified:\s*isReceiptVerified\(receipt\)/);
+    expect(lib.source).not.toMatch(/receiptVerified:\s*Boolean\(receipt\)\s*&&\s*verification\?\.recovered/);
     expect(all).not.toMatch(/recovered\s*!==\s*false/);
   });
 });

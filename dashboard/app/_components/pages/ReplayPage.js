@@ -112,7 +112,9 @@ export function ReplayPage({ data }) {
           {cards.map((item, cardIndex) => <button key={`${item.sequence}-${item.card_type}`} type="button" className={cx(cardIndex === index && "active", cardIndex < index && "complete")} onClick={() => { setPlaying(false); setIndex(cardIndex); }}>{cardIndex < index ? <Icon name="check" size={13} /> : cardIndex + 1}</button>)}
         </div>
         <Panel className="recording-step-panel" eyebrow={`Sealed card ${card.sequence || index + 1}`} title={replayEventTitle(card)}>
-          <div className="replay-recording-agent"><Avatar profile={profile} size="xl" status="online" /><div><strong>{profile.name}</strong><span>{profile.role}</span></div><StatusPill tone={cardTone(card)} compact>{cardBadge(card)}</StatusPill></div>
+          {/* Historical replay card: the persona authored a recorded sealed card;
+              that is not live presence, so no online dot is shown. */}
+          <div className="replay-recording-agent"><Avatar profile={profile} size="xl" /><div><strong>{profile.name}</strong><span>{profile.role}</span></div><StatusPill tone={cardTone(card)} compact>{cardBadge(card)}</StatusPill></div>
           <p>{cardSummary(card)}</p>
           {rows.length ? <div className="replay-detail-list">{rows.slice(0, 3).map((row) => <div key={row.label}><span>{row.label}</span><strong>{Array.isArray(row.value) ? row.value.join(" · ") : typeof row.value === "object" ? publicJson(row.value, 0) : sanitizeDisplayText(String(row.value))}</strong></div>)}</div> : null}
           <div className="recording-proof-chips"><HashChip label="Evidence chain" value={card.hash || DEFAULT_CASPER_DEPLOY_HASH} /><HashChip label="Canonical receipt" value={DEFAULT_CASPER_DEPLOY_HASH} href={DEFAULT_CASPER_EXPLORER_URL} tone="success" /></div>

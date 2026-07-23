@@ -348,10 +348,11 @@ export function deriveProposalFacts(proposal, evidence) {
     casperBlockHeight: firstDefined(casperAction.block_height, evidenceReceipt.block_height),
     preMetrics: { errorRate, volatility, uptime },
     postMetrics: { errorRate: successfulDetail?.error_rate, uptime: firstDefined(successfulDetail?.uptime_pct, successfulDetail?.uptime_percentage), volatility: firstDefined(successfulDetail?.volatility_bps, successfulDetail?.latency_p99) },
-    // Truth rule: a receipt only counts as verified when the recorded
-    // verification event positively confirms recovery. Absent or unknown
+    // Truth rule: a receipt only counts as verified via the explicit
+    // receipt-verification predicate (isReceiptVerified). A timeline event
+    // reporting recovery is recovery, NOT verification; absent or unknown
     // verification is NOT verified (no fail-open green).
-    receiptVerified: Boolean(receipt) && verification?.recovered === true,
+    receiptVerified: isReceiptVerified(receipt),
   };
 }
 
@@ -437,7 +438,11 @@ export function isAffirmativeApproval(card) {
   if (!card) return false;
   const data = getCardData(card);
   const decision = String(data.decision || "").trim().toUpperCase();
-  if (card.card_type === "PolicyAuthorization") return data.denied !== true && !DENIED_DECISIONS.has(decision);
+  // Explicit affirmative predicate only, for EVERY card type (including
+  // PolicyAuthorization): the decision field must exactly match an affirmative
+  // value. A missing or unknown decision is NOT affirmative, and an explicit
+  // denial always wins. Card presence proves nothing.
+  if (data.denied === true || DENIED_DECISIONS.has(decision)) return false;
   return AFFIRMATIVE_DECISIONS.has(decision);
 }
 export function isDeniedApproval(card) {
@@ -449,9 +454,12 @@ export function isReceiptVerified(card) {
   if (!card || card.card_type !== "CasperExecutionReceipt") return false;
   const data = getCardData(card);
   if (data.receipt_verified === true) return true;
-  const events = (data.timeline || []).filter((event) => /receipt_verification|casper_transaction/i.test(String(event.event || "")));
-  const last = events[events.length - 1];
-  return last?.recovered === true;
+  // Only an explicit receipt_verified observation counts as verification. A
+  // timeline event reporting recovery (`recovered: true`) is recovery, NOT
+  // verification — that fallback is intentionally removed.
+  const observations = (data.timeline || []).filter((event) => typeof event?.receipt_verified === "boolean");
+  const last = observations[observations.length - 1];
+  return last?.receipt_verified === true;
 }
 
 export function cardSummary(card) {

@@ -52,7 +52,9 @@ export function ProposalSelector({ proposals, selectedId, onSelect, terminalOnly
   return <label className="proposal-select"><span>Proposal</span><select value={selectedId || ""} onChange={(event) => onSelect(event.target.value)}>{options.map((proposal) => <option key={proposal.proposal_id} value={proposal.proposal_id}>{proposal.proposal_id} · {stateLabel(proposal.state)}</option>)}</select></label>;
 }
 
-export function AgentMiniRow({ role, status, detail, tone }) { const profile = getProfile(role); return <div className="agent-mini-row"><Avatar profile={profile} size="sm" status={tone === "success" ? "online" : tone === "warning" ? "waiting" : undefined} /><div className="agent-mini-copy"><strong>{profile.name}</strong><span>{profile.role}</span></div><StatusPill tone={tone || "muted"} compact>{status}</StatusPill>{detail && <small>{detail}</small>}</div>; }
+// A completed workflow card is history, not presence: the tone never maps to
+// an "online" dot. Only the real agent-status payload may show online.
+export function AgentMiniRow({ role, status, detail, tone }) { const profile = getProfile(role); return <div className="agent-mini-row"><Avatar profile={profile} size="sm" status={tone === "warning" ? "waiting" : undefined} /><div className="agent-mini-copy"><strong>{profile.name}</strong><span>{profile.role}</span></div><StatusPill tone={tone || "muted"} compact>{status}</StatusPill>{detail && <small>{detail}</small>}</div>; }
 
 export function CollaborationEvent({ card, compact = false, onClick }) {
   const profile = getProfile(CARD_ROLE[card?.card_type] || "system");
@@ -101,7 +103,9 @@ export function CouncilPersonaStrip() {
       <p>Each persona has a bounded authority: no agent can widen the DAO leash or execute outside the approved mandate.</p>
     </div>
     <div className="council-persona-list">{roles.map(({ role, trait }) => { const profile = getProfile(role); return <article key={role} className="council-persona-card" style={{ "--agent-accent": profile.color }}>
-      <Avatar profile={profile} size="persona" status={role === "wells" ? "platform" : "online"} />
+      {/* Persona cards describe recorded roles, never live presence — no
+          static online dot. Wells keeps the platform (non-agent) marker. */}
+      <Avatar profile={profile} size="persona" status={role === "wells" ? "platform" : undefined} />
       <div>
         <strong>{profile.name}</strong>
         <span>{profile.role}</span>
@@ -124,7 +128,7 @@ export function CouncilAvatarStrip() {
       const profile = getProfile(role);
       const proofRole = proofRoles[role];
       return <div key={role} className="council-avatar-chip" style={{ "--agent-accent": profile.color }}>
-        <Avatar profile={profile} size="sm" status={role === "wells" ? "platform" : "online"} />
+        <Avatar profile={profile} size="sm" status={role === "wells" ? "platform" : undefined} />
         <span>
           <strong>{profile.name}</strong>
           <small>{profile.role}</small>
