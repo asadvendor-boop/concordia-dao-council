@@ -1438,7 +1438,7 @@ def _caddy_raw() -> dict[str, object]:
         "active_config": active_config,
         "approval_material": {
             "username_sha256": hashlib.sha256(username.encode()).hexdigest(),
-            "bcrypt_sha256": hashlib.sha256(bcrypt_hash.encode()).hexdigest(),
+            "bcrypt_value": bcrypt_hash,
             "proxy_secret_sha256": hashlib.sha256(proxy_secret.encode()).hexdigest(),
         },
         "unauthenticated_probes": [
@@ -4688,6 +4688,55 @@ def test_caddy_rejects_active_material_that_differs_from_secret_files(
     with pytest.raises(ReleaseManifestError, match=message) as caught:
         capture_release_observations_once(repository)
     assert secret_value not in str(caught.value)
+
+
+def test_caddy_password_is_bound_without_fast_hashing_active_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caddy = _caddy_raw()
+    test_cohost_route = {
+        "hosts": [_TEST_COHOST_HOST],
+        "paths": ["/mcp"],
+        "matchers": [
+            {
+                "hosts": [_TEST_COHOST_HOST],
+                "paths": ["/mcp"],
+                "methods": [],
+                "unknown_keys": [],
+            }
+        ],
+        "handlers": [
+            {
+                "handler": "reverse_proxy",
+                "upstreams": [_TEST_COHOST_UPSTREAM],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        release_manifest,
+        "_SHARED_COHOST_MCP_ROUTE_SHA256",
+        hashlib.sha256(
+            release_manifest._canonical_json(test_cohost_route)
+        ).hexdigest(),
+    )
+    original = release_manifest._observation_text_sha256
+    labels: list[str] = []
+
+    def recording_hash(value, label, *, required=True):
+        labels.append(label)
+        return original(value, label, required=required)
+
+    monkeypatch.setattr(
+        release_manifest,
+        "_observation_text_sha256",
+        recording_hash,
+    )
+
+    projection = release_manifest._caddy_projection(caddy, ())
+
+    assert projection["approval_material"]["bcrypt_secret_file_match"] is True
+    assert "bcrypt_sha256" not in projection["approval_material"]
+    assert "Caddy basic-auth hash" not in labels
 
 
 @pytest.mark.parametrize("mutation", ["method", "unknown", "nonterminal"])

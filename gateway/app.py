@@ -1293,18 +1293,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 response = await client.post(rpc_url, json=rpc_payload)
             response.raise_for_status()
             rpc_response = response.json()
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 {
                     "status": "failed",
                     "deploy_hash": deploy_hash,
-                    "error": f"Casper JSON-RPC broadcast failed: {type(exc).__name__}: {exc}",
+                    "error": "casper_rpc_broadcast_failed",
                 },
                 status_code=502,
             )
         if rpc_response.get("error"):
             return JSONResponse(
-                {"status": "failed", "deploy_hash": deploy_hash, "rpc_response": rpc_response},
+                {
+                    "status": "failed",
+                    "deploy_hash": deploy_hash,
+                    "error": "casper_rpc_rejected",
+                },
                 status_code=400,
             )
         finality = await await_casper_finality(deploy_hash, rpc_url=rpc_url, max_attempts=3)
@@ -1384,12 +1388,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "yield_ms": int((time.perf_counter() - started) * 1000),
                 "usage": _usage_dict(response),
             }
-        except Exception as exc:
+        except Exception:
             probe = {
                 "ok": False,
                 "provider": "llm",
                 "requested_model": model,
-                "error_type": type(exc).__name__,
+                "error": "llm_probe_failed",
                 "yield_ms": int((time.perf_counter() - started) * 1000),
             }
 
@@ -2027,10 +2031,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Read-only public gateway for Concordia-pinned evidence CIDs."""
         try:
             body, content_type = await fetch_ipfs_cid(cid)
-        except ValueError as exc:
-            return JSONResponse({"status": "invalid_cid", "error": str(exc)}, status_code=400)
-        except httpx.HTTPError as exc:
-            return JSONResponse({"status": "unavailable", "error": f"IPFS fetch failed: {exc}"}, status_code=502)
+        except ValueError:
+            return JSONResponse(
+                {"status": "invalid_cid", "error": "invalid_ipfs_cid"},
+                status_code=400,
+            )
+        except httpx.HTTPError:
+            return JSONResponse(
+                {"status": "unavailable", "error": "ipfs_fetch_unavailable"},
+                status_code=502,
+            )
         return Response(body, media_type=content_type or "application/json")
 
     @new_app.get("/api/ipfs/{cid}")
@@ -2440,12 +2450,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         try:
             evidence = await get_evidence_public(proposal_id)
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 {
                     "status": "evidence_not_ready",
                     "proposal_id": proposal_id,
-                    "message": f"Canonical quorum receipt requires sealed evidence cards ({type(exc).__name__}).",
+                    "message": "Canonical quorum receipt requires sealed evidence cards.",
                 },
                 status_code=422,
             )

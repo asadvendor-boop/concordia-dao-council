@@ -492,7 +492,7 @@ _SAFE_SEMANTIC_KEYS = frozenset(
         "authentication_mode",
         "auth_algorithm",
         "auth_account_count",
-        "bcrypt_sha256",
+        "bcrypt_secret_file_match",
         "payment_secret_target_names",
         "proxy_secret_sha256",
         "repository_root_token",
@@ -4304,11 +4304,41 @@ def _runtime_projection(
     return projection
 
 
-def _caddy_handlers(value: object) -> list[dict[str, object]]:
+def _same_caddy_secret_observation(left: object, right: object) -> bool:
+    if type(left) is str and type(right) is str:
+        return secrets.compare_digest(left, right)
+    if (
+        type(left) is dict
+        and set(left) == {_NORMALIZED_SECRET_KEY}
+        and type(right) is dict
+        and set(right) == {_NORMALIZED_SECRET_KEY}
+    ):
+        left_digest = _hash32(
+            left[_NORMALIZED_SECRET_KEY],
+            "active Caddy secret digest",
+        )
+        right_digest = _hash32(
+            right[_NORMALIZED_SECRET_KEY],
+            "expected Caddy secret digest",
+        )
+        return secrets.compare_digest(left_digest, right_digest)
+    return False
+
+
+def _caddy_handlers(
+    value: object,
+    *,
+    expected_bcrypt_value: object,
+) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     if type(value) is list:
         for nested in value:
-            result.extend(_caddy_handlers(nested))
+            result.extend(
+                _caddy_handlers(
+                    nested,
+                    expected_bcrypt_value=expected_bcrypt_value,
+                )
+            )
         return result
     if type(value) is not dict:
         return result
@@ -4327,7 +4357,7 @@ def _caddy_handlers(value: object) -> list[dict[str, object]]:
             accounts = (
                 basic.get("accounts") if type(basic.get("accounts")) is list else []
             )
-            account_projection: list[dict[str, str]] = []
+            account_projection: list[dict[str, object]] = []
             for raw_account in accounts:
                 account = _mapping(raw_account, "Caddy basic-auth account")
                 if set(account) != {"username", "password"}:
@@ -4335,13 +4365,17 @@ def _caddy_handlers(value: object) -> list[dict[str, object]]:
                 username_sha256 = _observation_text_sha256(
                     account.get("username"), "Caddy basic-auth username"
                 )
-                password_sha256 = _observation_text_sha256(
-                    account.get("password"), "Caddy basic-auth hash"
-                )
+                if not _same_caddy_secret_observation(
+                    account.get("password"),
+                    expected_bcrypt_value,
+                ):
+                    raise ReleaseManifestError(
+                        "Caddy authentication password differs from approval material"
+                    )
                 account_projection.append(
                     {
                         "username_sha256": username_sha256,
-                        "bcrypt_sha256": password_sha256,
+                        "bcrypt_secret_file_match": True,
                     }
                 )
             result.append(
@@ -4437,7 +4471,12 @@ def _caddy_handlers(value: object) -> list[dict[str, object]]:
             result.append({"handler": handler})
     for key in ("handle", "routes"):
         if key in value:
-            result.extend(_caddy_handlers(value[key]))
+            result.extend(
+                _caddy_handlers(
+                    value[key],
+                    expected_bcrypt_value=expected_bcrypt_value,
+                )
+            )
     return result
 
 
@@ -4473,13 +4512,34 @@ def _caddy_projection(
     )
     if set(approval_material) != {
         "username_sha256",
-        "bcrypt_sha256",
+        "bcrypt_value",
         "proxy_secret_sha256",
     }:
         raise ReleaseManifestError("Caddy approval material schema is not exact")
     expected_material = {
-        key: _hash32(value, f"Caddy {key}") for key, value in approval_material.items()
+        key: _hash32(approval_material.get(key), f"Caddy {key}")
+        for key in ("username_sha256", "proxy_secret_sha256")
     }
+    expected_bcrypt_value = approval_material.get("bcrypt_value")
+    if not (
+        (
+            type(expected_bcrypt_value) is str
+            and re.fullmatch(
+                r"\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}",
+                expected_bcrypt_value,
+            )
+            is not None
+        )
+        or (
+            type(expected_bcrypt_value) is dict
+            and set(expected_bcrypt_value) == {_NORMALIZED_SECRET_KEY}
+            and _hash32(
+                expected_bcrypt_value[_NORMALIZED_SECRET_KEY],
+                "Caddy bcrypt normalized digest",
+            )
+        )
+    ):
+        raise ReleaseManifestError("Caddy approval bcrypt material is malformed")
     apps = _mapping(active.get("apps"), "Caddy apps")
     http = _mapping(apps.get("http"), "Caddy HTTP app")
     servers = _mapping(http.get("servers"), "Caddy servers")
@@ -4548,7 +4608,12 @@ def _caddy_projection(
                 if handle.get("handler") == "subroute" and "routes" in handle:
                     nested.append(handle)
                 else:
-                    direct_handlers.extend(_caddy_handlers(handle))
+                    direct_handlers.extend(
+                        _caddy_handlers(
+                            handle,
+                            expected_bcrypt_value=expected_bcrypt_value,
+                        )
+                    )
             order = order_prefix + (index,)
             if direct_handlers:
                 routes.append(
@@ -4658,7 +4723,7 @@ def _caddy_projection(
             != [
                 {
                     "username_sha256": expected_material["username_sha256"],
-                    "bcrypt_sha256": expected_material["bcrypt_sha256"],
+                    "bcrypt_secret_file_match": True,
                 }
             ]
         ):
@@ -4757,9 +4822,13 @@ def _caddy_projection(
     if authenticated != expected_authenticated:
         raise ReleaseManifestError("Caddy authenticated approval probes differ")
 
+    projection_material = {
+        **expected_material,
+        "bcrypt_secret_file_match": True,
+    }
     projection: dict[str, object] = {
         "routes": routes,
-        "approval_material": expected_material,
+        "approval_material": projection_material,
         "unauthenticated_probes": unauthenticated,
         "authenticated_probes": authenticated,
     }
@@ -10829,7 +10898,7 @@ class _DefaultCollector:
             "active_config": active_config,
             "approval_material": {
                 "username_sha256": hashlib.sha256(username).hexdigest(),
-                "bcrypt_sha256": hashlib.sha256(bcrypt_hash).hexdigest(),
+                "bcrypt_value": bcrypt_hash.decode("ascii"),
                 "proxy_secret_sha256": hashlib.sha256(proxy_secret).hexdigest(),
             },
             "unauthenticated_probes": unauthenticated,
