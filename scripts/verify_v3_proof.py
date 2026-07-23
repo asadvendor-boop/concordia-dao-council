@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -52,16 +52,22 @@ def _canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
-def _utc_timestamp(value: object, field: str) -> datetime:
+def _utc_timestamp(value: object, field: str) -> tuple[int, int]:
     if not isinstance(value, str) or _RFC3339_UTC.fullmatch(value) is None:
         raise ProofVerificationError(f"{field} must be exact RFC3339 UTC")
+    body = value[:-1]
+    if "." in body:
+        body, fraction = body.split(".", 1)
+    else:
+        fraction = ""
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(body + "+00:00")
     except ValueError as exc:
         raise ProofVerificationError(f"{field} must be exact RFC3339 UTC") from exc
-    if parsed.tzinfo != timezone.utc:
+    if parsed.tzinfo != UTC:
         raise ProofVerificationError(f"{field} must be exact RFC3339 UTC")
-    return parsed
+    fractional_nanoseconds = int(fraction.ljust(9, "0")) if fraction else 0
+    return int(parsed.timestamp()), fractional_nanoseconds
 
 
 def _verified_transcript(value: object, *, method: str) -> Mapping[str, Any]:
@@ -205,7 +211,9 @@ def _verify_release_files(manifest: Mapping[str, Any]) -> None:
         raise ProofVerificationError("deployment historical-isolation evidence is invalid")
 
 
-def _verify_deployment_manifest(value: object) -> dict[str, Any]:
+def verify_v3_deployment_manifest(value: object) -> dict[str, Any]:
+    """Verify a finalized deployment against the frozen local v3 release."""
+
     template = json.loads(
         (V3_ROOT / "deployment.manifest.json").read_text(encoding="utf-8")
     )
@@ -714,7 +722,7 @@ def _verify_live_run(
     outcomes: dict[str, Any] = {}
     previous_block_height = install_block_height
     previous_block_hash: str | None = None
-    previous_observed_time: datetime | None = None
+    previous_observed_time: tuple[int, int] | None = None
     for record, expected in zip(steps, expected_steps, strict=True):
         name, role, entry_point, success_label, error_code, expected_args = expected
         required = {
@@ -897,7 +905,7 @@ def verify_v3_proof_document(value: object) -> dict[str, Any]:
         raise ProofVerificationError("proof must be an object")
     if value.get("schema_id") != "concordia.v3-proof.v1":
         raise ProofVerificationError("unsupported proof schema")
-    deployment = _verify_deployment_manifest(value["deployment"])
+    deployment = verify_v3_deployment_manifest(value["deployment"])
     try:
         recomputed = prepare_v3_envelope(value["input"])
     except (ValueError, KeyError, TypeError) as exc:

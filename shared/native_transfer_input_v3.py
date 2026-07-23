@@ -26,6 +26,10 @@ from scripts.install_governance_receipt_v3 import (
     validate_finalized_install_deploy,
     verify_two_node_deploy_finality,
 )
+from scripts.verify_v3_proof import (
+    ProofVerificationError,
+    verify_v3_deployment_manifest,
+)
 from shared.actions_v3 import build_native_material
 from shared.envelope_v3 import MACHINE_NAME_RE, blake2b256, length_prefix
 from shared.evidence_manifest_v3 import encode_evidence_manifest
@@ -147,6 +151,12 @@ class NativeTransferInputBuild:
     derivation_manifest: dict[str, Any]
 
 
+@dataclass(frozen=True, order=True)
+class _Timestamp:
+    unix_seconds: int
+    fractional_nanoseconds: int
+
+
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -229,7 +239,7 @@ def _u64(value: object, label: str) -> int:
     return value
 
 
-def _timestamp(value: object, label: str) -> tuple[str, int]:
+def _timestamp(value: object, label: str) -> tuple[str, _Timestamp]:
     if type(value) is not str:
         raise NativeTransferInputError(f"{label} must be RFC3339 UTC")
     match = _RFC3339_UTC_RE.fullmatch(value)
@@ -247,7 +257,14 @@ def _timestamp(value: object, label: str) -> tuple[str, int]:
         )
     except ValueError as exc:
         raise NativeTransferInputError(f"{label} must be RFC3339 UTC") from exc
-    return value, int(instant.timestamp())
+    fraction = match.group("fraction")
+    fractional_nanoseconds = (
+        int(fraction.ljust(9, "0")) if fraction is not None else 0
+    )
+    return value, _Timestamp(
+        unix_seconds=int(instant.timestamp()),
+        fractional_nanoseconds=fractional_nanoseconds,
+    )
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:
@@ -331,7 +348,7 @@ def _verify_canonical_decision(
     historical_bytes: bytes,
     inventory_bytes: bytes,
     receipt_bytes: bytes,
-) -> tuple[dict[str, object], dict[str, object], str, int]:
+) -> tuple[dict[str, object], dict[str, object], str, _Timestamp]:
     historical = _strict_json(historical_bytes, "historical Odra receipt")
     receipt = _strict_json(receipt_bytes, "canonical receipt")
     if set(receipt) != _CANONICAL_RECEIPT_FIELDS:
@@ -422,11 +439,11 @@ def _verify_canonical_decision(
         raise NativeTransferInputError(
             "canonical receipt contract or final_card_hash is inconsistent"
         )
-    verified_at, verified_seconds = _timestamp(
+    verified_at, verified_time = _timestamp(
         receipt.get("verified_at_utc"),
         "canonical receipt verified_at_utc",
     )
-    return facts, values, verified_at, verified_seconds
+    return facts, values, verified_at, verified_time
 
 
 def _find_named_keys(value: object, name: str) -> list[str]:
@@ -596,7 +613,7 @@ def _verify_deployment_state(
 
 def _verify_v3_deployment(
     raw: bytes,
-) -> tuple[dict[str, object], str, int]:
+) -> tuple[dict[str, object], str, _Timestamp]:
     document = _strict_json(raw, "v3 deployment manifest")
     if (
         document.get("schema_id") != "concordia.v3-deployment-manifest.v1"
@@ -654,11 +671,16 @@ def _verify_v3_deployment(
     finality_summary = _mapping(document.get("finality"), "v3 install finality summary")
     block_hash = _strip_hash(finality.get("block_hash"), "v3 install block hash")
     block_height = _u64(finality.get("block_height"), "v3 install block height")
+    state_root = _hash32(
+        document.get("install_state_root_hash"),
+        "v3 install state root",
+    )
     if (
         finality.get("success") is not True
         or finality.get("user_error") is not None
         or finality.get("corroboration_count") != 2
         or finality.get("deploy_hash") != install_hash
+        or finality.get("state_root_hash") != state_root
         or document.get("install_block_hash") != block_hash
         or document.get("install_block_height") != block_height
         or finality_summary
@@ -674,10 +696,6 @@ def _verify_v3_deployment(
         raise NativeTransferInputError(
             "v3 deployment summary disagrees with raw finalized observations"
         )
-    state_root = _hash32(
-        document.get("install_state_root_hash"),
-        "v3 install state root",
-    )
     _verify_deployment_state(
         document,
         package_hash=package_hash,
@@ -685,7 +703,25 @@ def _verify_v3_deployment(
         block_hash=block_hash,
         state_root=state_root,
     )
-    observed_at, observed_seconds = _timestamp(
+    try:
+        verified_release = verify_v3_deployment_manifest(document)
+    except (ProofVerificationError, OSError) as exc:
+        raise NativeTransferInputError(
+            "v3 deployment differs from the frozen local release"
+        ) from exc
+    if (
+        verified_release["package_hash"] != package_hash
+        or verified_release["contract_hash"] != contract_hash
+        or verified_release["deployment_domain"] != deployment_domain
+        or verified_release["install_deploy_hash"] != install_hash
+        or verified_release["install_block_hash"] != block_hash
+        or verified_release["install_block_height"] != block_height
+        or verified_release["install_observed_at"] != two_node.get("observed_at")
+    ):
+        raise NativeTransferInputError(
+            "v3 deployment release identity disagrees with verified facts"
+        )
+    observed_at, observed_time = _timestamp(
         two_node.get("observed_at"),
         "v3 deployment observed_at",
     )
@@ -700,7 +736,7 @@ def _verify_v3_deployment(
             "install_state_root_hash": state_root,
         },
         observed_at,
-        observed_seconds,
+        observed_time,
     )
 
 
@@ -747,7 +783,7 @@ def _status_tip(response: object) -> tuple[str, int, str]:
 
 def _verify_snapshot(
     raw: bytes,
-) -> tuple[object, str, int]:
+) -> tuple[object, str, _Timestamp]:
     document = _strict_json(raw, "treasury snapshot")
     if (
         set(document)
@@ -785,7 +821,7 @@ def _verify_snapshot(
         )
     except TreasurySnapshotError as exc:
         raise NativeTransferInputError("treasury snapshot did not verify") from exc
-    capture_times: list[tuple[str, int]] = []
+    capture_times: list[tuple[str, _Timestamp]] = []
     for index, (observation, proof) in enumerate(
         zip(observations, snapshot.observations, strict=True)
     ):
@@ -810,8 +846,8 @@ def _verify_snapshot(
                 f"treasury snapshot observation {index} captured_at",
             )
         )
-    captured_at, captured_seconds = max(capture_times, key=lambda item: item[1])
-    return snapshot, captured_at, captured_seconds
+    captured_at, captured_time = max(capture_times, key=lambda item: item[1])
+    return snapshot, captured_at, captured_time
 
 
 def _verify_intent(
@@ -819,7 +855,7 @@ def _verify_intent(
     *,
     canonical_proposal_id: str,
     source_account: bytes,
-) -> tuple[dict[str, object], str, int]:
+) -> tuple[dict[str, object], str, _Timestamp]:
     intent = _strict_json(raw, "native transfer intent")
     if set(intent) != _INTENT_FIELDS or intent.get("schema_id") != INTENT_SCHEMA_ID:
         raise NativeTransferInputError(
@@ -856,7 +892,7 @@ def _verify_intent(
         raise NativeTransferInputError(
             "native transfer requested allocation must be exactly 3000 bps"
         )
-    captured_at, captured_seconds = _timestamp(
+    captured_at, captured_time = _timestamp(
         intent.get("captured_at"),
         "native transfer intent captured_at",
     )
@@ -866,7 +902,7 @@ def _verify_intent(
             "recipient_account_hash": recipient,
         },
         captured_at,
-        captured_seconds,
+        captured_time,
     )
 
 
@@ -918,35 +954,35 @@ def build_native_transfer_input(
 
     if type(historical_inventory_bytes) is not bytes or not historical_inventory_bytes:
         raise NativeTransferInputError("historical inventory bytes are unavailable")
-    facts, receipt, receipt_captured_at, receipt_captured_seconds = (
+    facts, receipt, receipt_captured_at, receipt_captured_time = (
         _verify_canonical_decision(
             historical_bytes=historical_receipt_bytes,
             inventory_bytes=historical_inventory_bytes,
             receipt_bytes=canonical_receipt_bytes,
         )
     )
-    deployment, deployment_captured_at, deployment_captured_seconds = (
+    deployment, deployment_captured_at, deployment_captured_time = (
         _verify_v3_deployment(deployment_manifest_bytes)
     )
-    snapshot, snapshot_captured_at, snapshot_captured_seconds = _verify_snapshot(
+    snapshot, snapshot_captured_at, snapshot_captured_time = _verify_snapshot(
         treasury_snapshot_bytes
     )
-    intent, intent_captured_at, intent_captured_seconds = _verify_intent(
+    intent, intent_captured_at, intent_captured_time = _verify_intent(
         intent_bytes,
         canonical_proposal_id=str(receipt["proposal_id"]),
         source_account=snapshot.account_hash,
     )
-    historical_captured_at, historical_captured_seconds = _timestamp(
+    historical_captured_at, historical_captured_time = _timestamp(
         facts["capturedAt"],
         "historical receipt captured_at",
     )
     source_times = (
-        historical_captured_seconds,
-        receipt_captured_seconds,
-        deployment_captured_seconds,
-        snapshot_captured_seconds,
+        historical_captured_time,
+        receipt_captured_time,
+        deployment_captured_time,
+        snapshot_captured_time,
     )
-    if intent_captured_seconds < max(source_times):
+    if intent_captured_time < max(source_times):
         raise NativeTransferInputError(
             "native transfer intent predates a required evidence artifact"
         )
@@ -956,35 +992,35 @@ def build_native_transfer_input(
             raw=historical_receipt_bytes,
             artifact_kind=7,
             provenance_class=0,
-            captured_at_unix_seconds=historical_captured_seconds,
+            captured_at_unix_seconds=historical_captured_time.unix_seconds,
         ),
         _evidence_entry(
             artifact_id="canonical_receipt",
             raw=canonical_receipt_bytes,
             artifact_kind=5,
             provenance_class=0,
-            captured_at_unix_seconds=receipt_captured_seconds,
+            captured_at_unix_seconds=receipt_captured_time.unix_seconds,
         ),
         _evidence_entry(
             artifact_id="v3_deployment",
             raw=deployment_manifest_bytes,
             artifact_kind=7,
             provenance_class=1,
-            captured_at_unix_seconds=deployment_captured_seconds,
+            captured_at_unix_seconds=deployment_captured_time.unix_seconds,
         ),
         _evidence_entry(
             artifact_id="treasury_snapshot",
             raw=treasury_snapshot_bytes,
             artifact_kind=7,
             provenance_class=7,
-            captured_at_unix_seconds=snapshot_captured_seconds,
+            captured_at_unix_seconds=snapshot_captured_time.unix_seconds,
         ),
         _evidence_entry(
             artifact_id="native_transfer_intent",
             raw=intent_bytes,
             artifact_kind=5,
             provenance_class=1,
-            captured_at_unix_seconds=intent_captured_seconds,
+            captured_at_unix_seconds=intent_captured_time.unix_seconds,
         ),
     ]
     try:

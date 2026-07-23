@@ -241,6 +241,69 @@ def test_builder_rejects_v3_deployment_provider_disagreement(monkeypatch) -> Non
         _build(sources)
 
 
+def test_builder_rejects_provider_agreed_state_root_outside_install_state(
+    monkeypatch,
+) -> None:
+    sources = source_documents(monkeypatch)
+    deployment = _document(sources, "deployment")
+    observations = deployment["two_node_finality"]["node_observations"]
+    for observation in observations:
+        block = observation["block_response"]["result"]["block_with_signatures"][
+            "block"
+        ]["Version2"]
+        block["header"]["state_root_hash"] = "ee" * 32
+    sources["deployment"] = canonical_bytes(deployment)
+
+    with pytest.raises(NativeTransferInputError, match="deployment|state root"):
+        _build(sources)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "build_command",
+        "schema_hash",
+        "source_hash",
+        "source_commit",
+    ),
+)
+def test_builder_rejects_deployment_outside_frozen_local_release(
+    monkeypatch,
+    tamper: str,
+) -> None:
+    sources = source_documents(monkeypatch)
+    deployment = _document(sources, "deployment")
+    if tamper == "build_command":
+        deployment["build"]["command"] = "cargo build"
+    elif tamper == "schema_hash":
+        deployment["build"]["schema_sha256"] = "fe" * 32
+    elif tamper == "source_hash":
+        deployment["source"]["lib_rs_sha256"] = "fd" * 32
+    else:
+        deployment["source_commit"] = "not-a-commit"
+    sources["deployment"] = canonical_bytes(deployment)
+
+    with pytest.raises(NativeTransferInputError, match="deployment|release"):
+        _build(sources)
+
+
+def test_builder_rejects_deployment_observation_before_fractional_finalization(
+    monkeypatch,
+) -> None:
+    sources = source_documents(monkeypatch)
+    deployment = _document(sources, "deployment")
+    deployment["two_node_finality"][
+        "finalized_at"
+    ] = "2026-01-23T12:34:59.000000009Z"
+    deployment["two_node_finality"][
+        "observed_at"
+    ] = "2026-01-23T12:34:59.000000008Z"
+    sources["deployment"] = canonical_bytes(deployment)
+
+    with pytest.raises(NativeTransferInputError, match="deployment|final"):
+        _build(sources)
+
+
 def test_builder_rejects_v3_state_root_query_not_pinned_to_install_block(
     monkeypatch,
 ) -> None:
@@ -352,6 +415,44 @@ def test_builder_rejects_intent_that_predates_verified_evidence(monkeypatch) -> 
 
     with pytest.raises(NativeTransferInputError, match="predates"):
         _build(sources)
+
+
+def test_builder_rejects_intent_earlier_within_the_same_fractional_second(
+    monkeypatch,
+) -> None:
+    sources = source_documents(monkeypatch)
+    receipt = _document(sources, "canonical_receipt")
+    receipt["verified_at_utc"] = "2026-07-24T00:00:00.000000009Z"
+    sources["canonical_receipt"] = canonical_bytes(receipt)
+    intent = _document(sources, "intent")
+    intent["captured_at"] = "2026-07-24T00:00:00.000000008Z"
+    sources["intent"] = canonical_bytes(intent)
+
+    with pytest.raises(NativeTransferInputError, match="predates"):
+        _build(sources)
+
+
+def test_builder_accepts_intent_later_within_the_same_fractional_second(
+    monkeypatch,
+) -> None:
+    sources = source_documents(monkeypatch)
+    receipt = _document(sources, "canonical_receipt")
+    receipt["verified_at_utc"] = "2026-07-24T00:00:00.000000008Z"
+    sources["canonical_receipt"] = canonical_bytes(receipt)
+    intent = _document(sources, "intent")
+    intent["captured_at"] = "2026-07-24T00:00:00.000000009Z"
+    sources["intent"] = canonical_bytes(intent)
+
+    built = _build(sources)
+
+    assert (
+        built.derivation_manifest["derived"]["canonical_receipt_captured_at"]
+        == "2026-07-24T00:00:00.000000008Z"
+    )
+    assert (
+        built.derivation_manifest["derived"]["intent_captured_at"]
+        == "2026-07-24T00:00:00.000000009Z"
+    )
 
 
 def test_builder_rejects_operator_supplied_derived_hashes(monkeypatch) -> None:

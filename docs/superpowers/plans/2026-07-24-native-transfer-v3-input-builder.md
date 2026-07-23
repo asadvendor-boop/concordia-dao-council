@@ -149,3 +149,67 @@ git add \
   tests/test_build_native_transfer_v3_input.py
 git commit -m "feat(release): build exact native transfer input"
 ```
+
+### Task 4: Independent QA Corrections
+
+**Files:**
+- Modify: `shared/native_transfer_input_v3.py`
+- Modify: `scripts/verify_v3_proof.py`
+- Modify: `tests/test_native_transfer_input_v3.py`
+- Modify: `docs/superpowers/plans/2026-07-24-native-transfer-v3-input-builder.md`
+
+**Interfaces:**
+- Preserves the existing intent, typed-input, and derivation-manifest schemas.
+- Reuses `verify_v3_deployment_manifest(...)` as the local frozen release
+  authority for deployment files, source hashes, commands, and commit fields.
+
+- [x] **Step 1: Add failing QA regression tests**
+
+Cover two providers agreeing on a state root that differs from the install
+query, frozen build/source/commit mutations, an observation that fractionally
+predates deployment finalization, and intent/evidence ordering within one
+second at the full accepted nine-digit precision.
+
+- [x] **Step 2: Verify the regressions fail before production changes**
+
+Run:
+
+```bash
+python -m pytest -q tests/test_native_transfer_input_v3.py
+```
+
+Expected: the new rejection cases fail because the original builder accepts
+the inconsistent inputs.
+
+- [x] **Step 3: Bind deployment and timestamp authorities**
+
+Require the state root derived from both finalized provider observations to
+equal the install/query state root. Verify the complete deployment manifest
+against the frozen local v3 release through `scripts/verify_v3_proof.py`.
+Represent timestamps as exact whole-second plus nanosecond pairs before any
+chronology comparison.
+
+- [x] **Step 4: Run focused, verifier, and documented regression gates**
+
+```bash
+python -m pytest -q \
+  tests/test_native_transfer_input_v3.py \
+  tests/test_build_native_transfer_v3_input.py \
+  tests/test_envelope_v3_encoder.py \
+  tests/test_actions_v3_encoder.py \
+  tests/test_verified_authorization_v3.py \
+  tests/test_treasury_execution_operator.py
+python -m pytest -q tests/test_clvalue_roundtrip.py
+git diff --check
+```
+
+- [x] **Step 5: Commit one bounded correction**
+
+```bash
+git add \
+  docs/superpowers/plans/2026-07-24-native-transfer-v3-input-builder.md \
+  scripts/verify_v3_proof.py \
+  shared/native_transfer_input_v3.py \
+  tests/test_native_transfer_input_v3.py
+git commit -m "fix(release): bind native transfer input authority"
+```
