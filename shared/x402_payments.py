@@ -8,6 +8,8 @@ indexer-lag retries.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import datetime as _datetime
 import hashlib
 import hmac
@@ -33,11 +35,23 @@ SAFEPAY_V2_REPORT_VERSION = "safepay-report-v2"
 SAFEPAY_V2_REPORT_MEDIA_TYPE = "application/json"
 SAFEPAY_V2_QUOTE_REQUEST_SCHEMA = "safepay-quote-request-v2"
 SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA = "safepay-redemption-v2"
+SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA = "safepay-wallet-intent-request-v2"
+SAFEPAY_V2_WALLET_INTENT_SCHEMA = "safepay-wallet-intent-v2"
 SAFEPAY_V2_QUOTE_SEPARATOR = b"CONCORDIA_SAFEPAY_QUOTE_V2\x00"
 SAFEPAY_V2_QUOTE_HASH_SEPARATOR = b"CONCORDIA_SAFEPAY_QUOTE_HASH_V2\x00"
 SAFEPAY_V2_FULFILLMENT_SEPARATOR = b"CONCORDIA_SAFEPAY_FULFILLMENT_V2\x00"
 SAFEPAY_V2_QUOTE_TTL_SECONDS = 900
 SAFEPAY_V2_MAX_REPORT_DECODED_BYTES = 262144
+SAFEPAY_V2_PROVIDER_ORIGIN = "http://concordia-x402-provider:8000"
+SAFEPAY_V2_MAX_PROVIDER_RESPONSE_BYTES = 1_048_576
+SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES = 65_536
+SAFEPAY_V2_MAX_JSON_DEPTH = 32
+SAFEPAY_V2_MAX_JSON_NODES = 4096
+SAFEPAY_V2_QUOTE_CAPABILITY_SEPARATOR = (
+    b"CONCORDIA_SAFEPAY_QUOTE_CAPABILITY_V1\x00"
+)
+SAFEPAY_V2_QUOTE_CAPABILITY_PREFIX = "sqc1"
+SAFEPAY_V2_QUOTE_CAPABILITY_HEADER = "X-Concordia-SafePay-Quote-Capability"
 
 SAFEPAY_V2_QUOTE_FIELDS = (
     "schema_version",
@@ -98,6 +112,235 @@ _U512_MAX = 2**512 - 1
 
 class SafePayObserverUnavailable(Exception):
     """The Casper payment observer could not produce an observation."""
+
+
+@dataclass(frozen=True)
+class SafePayV2GatewayResponse:
+    """Validated provider response safe for the Gateway to return verbatim."""
+
+    status_code: int
+    content: bytes
+    body: dict[str, Any]
+    headers: dict[str, str]
+
+
+def _safepay_v2_wire_content(body: Mapping[str, Any]) -> bytes:
+    return json.dumps(body, separators=(",", ":"), sort_keys=False).encode("utf-8")
+
+
+class _SafePayDuplicateKey(ValueError):
+    """A duplicate JSON object key was observed at any nesting level."""
+
+
+def parse_safepay_v2_strict_json(raw: bytes) -> Any:
+    """Parse bounded-shape JSON with duplicate and non-finite values rejected."""
+
+    if not isinstance(raw, bytes):
+        raise ValueError("JSON input must be bytes")
+
+    def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise _SafePayDuplicateKey("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(_value: str) -> None:
+        raise ValueError("non-finite JSON number")
+
+    def reject_float(_value: str) -> None:
+        # SafePay's frozen wire schema contains only strings, booleans, null,
+        # and bounded integers. Reject every JSON float token at the parser
+        # boundary, including exponent overflow such as ``1e9999`` which
+        # CPython would otherwise silently decode as positive infinity.
+        raise ValueError("SafePay JSON floats are forbidden")
+
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=object_pairs,
+            parse_constant=reject_constant,
+            parse_float=reject_float,
+        )
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        RecursionError,
+    ) as exc:
+        raise ValueError("invalid SafePay JSON") from exc
+
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    nodes = 0
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if depth > SAFEPAY_V2_MAX_JSON_DEPTH or nodes > SAFEPAY_V2_MAX_JSON_NODES:
+            raise ValueError("SafePay JSON shape limit exceeded")
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
+    return value
+
+
+def _safepay_capability_payload(quote: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": SAFEPAY_V2_SCHEMA_VERSION,
+        "quote_id": quote["quote_id"],
+        "proposal_id": quote["proposal_id"],
+        "resource_id": quote["resource_id"],
+        "quote_hash": quote["quote_hash"],
+        "expires_at": quote["expires_at"],
+    }
+
+
+def issue_safepay_v2_quote_capability(
+    quote: Mapping[str, Any],
+    secret: bytes,
+) -> str:
+    """Issue a stateless issuer-authentication token for a validated quote."""
+
+    if not isinstance(secret, bytes) or len(secret) < 32:
+        raise ValueError("SafePay quote capability secret is unavailable")
+    payload = json.dumps(
+        _safepay_capability_payload(quote),
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    mac = hmac.new(
+        secret,
+        SAFEPAY_V2_QUOTE_CAPABILITY_SEPARATOR + payload,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{SAFEPAY_V2_QUOTE_CAPABILITY_PREFIX}.{encoded}.{mac}"
+
+
+def verify_safepay_v2_quote_capability(
+    quote: Mapping[str, Any],
+    token: Any,
+    secret: bytes,
+    *,
+    now: int | None = None,
+) -> bool:
+    """Verify quote issuance, exact binding, and expiry without server state."""
+
+    if (
+        not isinstance(token, str)
+        or len(token) > 4096
+        or not isinstance(secret, bytes)
+        or len(secret) < 32
+    ):
+        return False
+    try:
+        prefix, encoded, supplied_mac = token.split(".")
+        if (
+            prefix != SAFEPAY_V2_QUOTE_CAPABILITY_PREFIX
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded)
+            or not _HEX64_RE.fullmatch(supplied_mac)
+        ):
+            return False
+        padding = "=" * ((4 - len(encoded) % 4) % 4)
+        payload = base64.b64decode(
+            encoded + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        if (
+            base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+            != encoded
+        ):
+            return False
+        parsed = parse_safepay_v2_strict_json(payload)
+        expected_payload = _safepay_capability_payload(quote)
+        if parsed != expected_payload:
+            return False
+        canonical = json.dumps(
+            expected_payload,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if canonical != payload:
+            return False
+        expected_mac = hmac.new(
+            secret,
+            SAFEPAY_V2_QUOTE_CAPABILITY_SEPARATOR + canonical,
+            hashlib.sha256,
+        ).hexdigest()
+        current_time = int(time.time()) if now is None else now
+        return bool(
+            hmac.compare_digest(expected_mac, supplied_mac)
+            and isinstance(quote["expires_at"], int)
+            and quote["expires_at"] > current_time
+        )
+    except (KeyError, TypeError, ValueError, binascii.Error, RecursionError):
+        return False
+
+
+def _safepay_v2_gateway_result(
+    status_code: int,
+    body: dict[str, Any],
+    *,
+    content: bytes | None = None,
+) -> SafePayV2GatewayResponse:
+    return SafePayV2GatewayResponse(
+        status_code=status_code,
+        content=content if content is not None else _safepay_v2_wire_content(body),
+        body=body,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Concordia-SafePay-Version": SAFEPAY_V2_SCHEMA_VERSION,
+        },
+    )
+
+
+def _safepay_v2_gateway_error(
+    status_code: int,
+    code: str,
+    *,
+    retryable: bool,
+    replay_disposition: str,
+) -> SafePayV2GatewayResponse:
+    return _safepay_v2_gateway_result(
+        status_code,
+        safepay_v2_error_body(code, retryable, replay_disposition),
+    )
+
+
+def safepay_v2_provider_origin() -> str:
+    """Return the one production provider origin, rejecting origin overrides.
+
+    SafePay v2 is an app-internal service hop. The historical
+    ``X402_PROVIDER_URL`` remains available to the legacy v1 flow but is never
+    consulted here. Tests inject an ``httpx`` transport instead of changing
+    the destination URL.
+    """
+
+    configured = os.getenv("SAFEPAY_V2_PROVIDER_ORIGIN", "").strip().rstrip("/")
+    if configured and configured != SAFEPAY_V2_PROVIDER_ORIGIN:
+        raise ValueError("SafePay v2 provider origin override is forbidden")
+    return SAFEPAY_V2_PROVIDER_ORIGIN
+
+
+def safepay_v2_account_hash_from_public_key(public_key: str) -> str:
+    """Derive Casper's semantic account hash from a canonical public key."""
+
+    if not isinstance(public_key, str):
+        raise ValueError("public key must be a string")
+    canonical = public_key.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]+", canonical or ""):
+        raise ValueError("public key must be hexadecimal")
+    raw = bytes.fromhex(canonical)
+    if len(raw) == 33 and raw[0] == 1:
+        algorithm = b"ed25519"
+    elif len(raw) == 34 and raw[0] == 2:
+        algorithm = b"secp256k1"
+    else:
+        raise ValueError("public key must be tagged Ed25519 or secp256k1")
+    return hashlib.blake2b(algorithm + b"\x00" + raw[1:], digest_size=32).hexdigest()
 
 
 def _safepay_lp(value: str) -> bytes:
@@ -290,6 +533,582 @@ def validate_safepay_v2_quote(quote: Any) -> str | None:
     if not isinstance(quote["quote_hash"], str) or not _HEX64_RE.match(quote["quote_hash"]):
         return "quote_hash_invalid"
     return None
+
+
+def validate_safepay_v2_quote_integrity(
+    quote: Any,
+    *,
+    proposal_id: str | None = None,
+    resource_id: str | None = None,
+    require_unexpired: bool = False,
+) -> str | None:
+    """Validate frozen quote shape, derivations, and optional request binding."""
+
+    reason = validate_safepay_v2_quote(quote)
+    if reason is not None:
+        return reason
+    assert isinstance(quote, dict)
+    if proposal_id is not None and quote["proposal_id"] != proposal_id:
+        return "proposal_id_mismatch"
+    if resource_id is not None and quote["resource_id"] != resource_id:
+        return "resource_id_mismatch"
+    if require_unexpired and quote["expires_at"] <= int(time.time()):
+        return "quote_expired"
+
+    try:
+        nonce = bytes.fromhex(quote["quote_nonce"])
+        expected_correlation = safepay_v2_correlation_id(
+            quote["quote_id"],
+            quote["proposal_id"],
+            quote["resource_id"],
+            nonce,
+        )
+    except (TypeError, ValueError):
+        return "correlation_id_derivation_failed"
+    if quote["correlation_id"] != str(expected_correlation):
+        return "correlation_id_derivation_mismatch"
+
+    try:
+        recomputed = safepay_v2_quote_hash(
+            quote_id=quote["quote_id"],
+            proposal_id=quote["proposal_id"],
+            resource_id=quote["resource_id"],
+            network=quote["network"],
+            payee_account_hash=quote["payee_account_hash"],
+            amount_motes=quote["amount_motes"],
+            correlation_id=expected_correlation,
+            report_version=quote["report_version"],
+            report_hash=quote["report_hash"],
+            expires_at=quote["expires_at"],
+            quote_nonce=nonce,
+        )
+    except (TypeError, ValueError):
+        return "quote_hash_recompute_failed"
+    if not hmac.compare_digest(recomputed, quote["quote_hash"]):
+        return "quote_hash_mismatch"
+    return None
+
+
+def validate_safepay_v2_gateway_quote(
+    quote: Any,
+    *,
+    proposal_id: str | None = None,
+    resource_id: str | None = None,
+    receiver_public_key: str | None = None,
+    expected_amount_motes: str | None = None,
+    require_unexpired: bool = False,
+) -> str | None:
+    """Validate a newly issued quote against frozen Gateway payment terms."""
+
+    reason = validate_safepay_v2_quote_integrity(
+        quote,
+        proposal_id=proposal_id,
+        resource_id=resource_id,
+        require_unexpired=require_unexpired,
+    )
+    if reason is not None:
+        return reason
+    assert isinstance(quote, dict)
+
+    configured_receiver = (
+        receiver_public_key
+        if receiver_public_key is not None
+        else os.getenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", "").strip()
+    )
+    if not configured_receiver:
+        return "receiver_public_key_missing"
+    try:
+        account_hash = safepay_v2_account_hash_from_public_key(configured_receiver)
+    except (TypeError, ValueError):
+        return "receiver_public_key_invalid"
+    if not hmac.compare_digest(account_hash, quote["payee_account_hash"]):
+        return "payee_account_hash_mismatch"
+
+    expected_amount = (
+        expected_amount_motes
+        if expected_amount_motes is not None
+        else os.getenv("SAFEPAY_AMOUNT_MOTES", "").strip()
+    )
+    if (
+        not isinstance(expected_amount, str)
+        or not _CANONICAL_DECIMAL_RE.match(expected_amount)
+        or int(expected_amount) < 1
+        or int(expected_amount) > _U512_MAX
+    ):
+        return "expected_amount_motes_invalid"
+    if quote["amount_motes"] != expected_amount:
+        return "amount_motes_mismatch"
+    return None
+
+
+def _valid_safepay_v2_quote_request(
+    proposal_id: Any,
+    resource_id: Any,
+) -> bool:
+    return bool(
+        isinstance(proposal_id, str)
+        and _PROPOSAL_ID_RE.fullmatch(proposal_id)
+        and isinstance(resource_id, str)
+        and resource_id.isascii()
+        and 1 <= len(resource_id.encode("ascii")) <= 200
+        and _is_printable_ascii(resource_id)
+    )
+
+
+_SAFEPAY_V2_PROVIDER_ERROR_CONTRACTS: dict[
+    str, dict[tuple[int, str], tuple[bool, str]]
+] = {
+    "quotes": {
+        (400, "invalid_request"): (False, "not_attempted"),
+        (429, "quote_rate_limited"): (True, "not_attempted"),
+        (503, "quote_capacity_exhausted"): (True, "not_attempted"),
+        (503, "report_source_unavailable"): (True, "not_attempted"),
+        (503, "provider_unavailable"): (True, "not_attempted"),
+    },
+    "redemptions": {
+        (400, "invalid_request"): (False, "not_attempted"),
+        (404, "quote_not_issued"): (False, "not_attempted"),
+        (409, "payment_already_consumed_for_other_binding"): (
+            False,
+            "cross_binding_rejected",
+        ),
+        (410, "quote_expired"): (False, "not_attempted"),
+        (422, "quote_binding_invalid"): (False, "not_attempted"),
+        (422, "payment_binding_invalid"): (False, "verification_rejected"),
+        (425, "payment_not_finalized"): (True, "verification_pending"),
+        (503, "payment_observer_unavailable"): (True, "verification_pending"),
+        (503, "provider_unavailable"): (True, "verification_pending"),
+    },
+}
+
+
+def _validate_safepay_v2_error_response(
+    endpoint: str,
+    status_code: int,
+    body: Any,
+) -> bool:
+    if not isinstance(body, dict) or set(body) != {
+        "schema_version",
+        "error",
+        "delivery",
+    }:
+        return False
+    if body["schema_version"] != SAFEPAY_V2_SCHEMA_VERSION:
+        return False
+    error = body["error"]
+    delivery = body["delivery"]
+    if (
+        not isinstance(error, dict)
+        or set(error) != {"code", "retryable"}
+        or not isinstance(error["code"], str)
+        or type(error["retryable"]) is not bool
+        or not isinstance(delivery, dict)
+        or set(delivery) != {"replay_disposition"}
+        or not isinstance(delivery["replay_disposition"], str)
+    ):
+        return False
+    contract = _SAFEPAY_V2_PROVIDER_ERROR_CONTRACTS.get(endpoint, {}).get(
+        (status_code, error["code"])
+    )
+    return contract == (error["retryable"], delivery["replay_disposition"])
+
+
+def _validate_safepay_v2_quote_issue_response(
+    body: Any,
+    *,
+    proposal_id: str,
+    resource_id: str,
+) -> bool:
+    if not isinstance(body, dict) or set(body) != {
+        "schema_version",
+        "error",
+        "quote",
+        "payment_requirements",
+    }:
+        return False
+    if body["schema_version"] != SAFEPAY_V2_SCHEMA_VERSION or body["error"] != {
+        "code": "payment_required",
+        "retryable": False,
+    }:
+        return False
+    quote = body["quote"]
+    if (
+        validate_safepay_v2_gateway_quote(
+            quote,
+            proposal_id=proposal_id,
+            resource_id=resource_id,
+            require_unexpired=True,
+        )
+        is not None
+    ):
+        return False
+    requirements = body["payment_requirements"]
+    required_fields = {
+        "network",
+        "payee_account_hash",
+        "amount_motes",
+        "correlation_id",
+        "expires_at",
+    }
+    return bool(
+        isinstance(requirements, dict)
+        and set(requirements) == required_fields
+        and all(requirements[field] == quote[field] for field in required_fields)
+    )
+
+
+def _validate_safepay_v2_success_response(
+    body: Any,
+    *,
+    submitted_quote: Mapping[str, Any],
+    payment_hash: str,
+) -> bool:
+    if not isinstance(body, dict) or set(body) != {
+        "schema_version",
+        "fulfillment",
+        "delivery",
+    }:
+        return False
+    if body["schema_version"] != SAFEPAY_V2_SCHEMA_VERSION:
+        return False
+    delivery = body["delivery"]
+    if (
+        not isinstance(delivery, dict)
+        or set(delivery) != {"replay_disposition"}
+        or not isinstance(delivery["replay_disposition"], str)
+        or delivery["replay_disposition"]
+        not in {"first_consumption", "idempotent_replay"}
+    ):
+        return False
+    fulfillment = body["fulfillment"]
+    if not isinstance(fulfillment, dict) or set(fulfillment) != {
+        "quote",
+        "payment_observation",
+        "consumption",
+        "report",
+        "binding_checks",
+        "observed_at",
+        "response_hash",
+    }:
+        return False
+    quote = fulfillment["quote"]
+    if quote != dict(submitted_quote):
+        return False
+    if validate_safepay_v2_quote_integrity(quote) is not None:
+        return False
+
+    observation = fulfillment["payment_observation"]
+    if (
+        validate_safepay_v2_observation(observation) is not None
+        or observation["network"] != quote["network"]
+        or observation["payment_hash"] != payment_hash
+        or observation["to_account_hash"] != quote["payee_account_hash"]
+        or observation["amount_motes"] != quote["amount_motes"]
+        or observation["transfer_id"] != quote["correlation_id"]
+        or observation["execution_status"] != "processed"
+        or observation["finality_status"] != "finalized"
+        or observation["execution_error"] is not None
+    ):
+        return False
+
+    checks = fulfillment["binding_checks"]
+    if (
+        not isinstance(checks, dict)
+        or set(checks) != set(SAFEPAY_V2_BINDING_CHECK_FIELDS)
+        or any(value is not True for value in checks.values())
+    ):
+        return False
+
+    consumption = fulfillment["consumption"]
+    if (
+        not isinstance(consumption, dict)
+        or set(consumption)
+        != {
+            "network",
+            "payment_hash",
+            "quote_id",
+            "resource_id",
+            "quote_hash",
+            "response_hash",
+            "consumed_at",
+        }
+        or consumption["network"] != quote["network"]
+        or consumption["payment_hash"] != payment_hash
+        or consumption["quote_id"] != quote["quote_id"]
+        or consumption["resource_id"] != quote["resource_id"]
+        or consumption["quote_hash"] != quote["quote_hash"]
+        or not isinstance(consumption["consumed_at"], int)
+        or isinstance(consumption["consumed_at"], bool)
+    ):
+        return False
+
+    report = fulfillment["report"]
+    if not isinstance(report, dict) or set(report) != {
+        "report_version",
+        "proposal_id",
+        "resource_id",
+        "correlation_id",
+        "media_type",
+        "content_base64",
+        "report_hash",
+    }:
+        return False
+    try:
+        report_bytes = base64.b64decode(report["content_base64"], validate=True)
+    except (TypeError, ValueError):
+        return False
+    if (
+        len(report_bytes) > SAFEPAY_V2_MAX_REPORT_DECODED_BYTES
+        or base64.b64encode(report_bytes).decode("ascii") != report["content_base64"]
+        or report["report_version"] != quote["report_version"]
+        or report["proposal_id"] != quote["proposal_id"]
+        or report["resource_id"] != quote["resource_id"]
+        or report["correlation_id"] != quote["correlation_id"]
+        or report["media_type"] != SAFEPAY_V2_REPORT_MEDIA_TYPE
+        or report["report_hash"] != quote["report_hash"]
+        or hashlib.sha256(report_bytes).hexdigest() != quote["report_hash"]
+    ):
+        return False
+
+    response_hash = fulfillment["response_hash"]
+    if (
+        not isinstance(response_hash, str)
+        or not _HEX64_RE.fullmatch(response_hash)
+        or consumption["response_hash"] != response_hash
+    ):
+        return False
+    try:
+        recomputed_response_hash = safepay_v2_response_hash(
+            quote_hash=quote["quote_hash"],
+            payment_hash=payment_hash,
+            block_hash=observation["block_hash"],
+            block_height=observation["block_height"],
+            report_hash=quote["report_hash"],
+            consumed_at=consumption["consumed_at"],
+        )
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        hmac.compare_digest(recomputed_response_hash, response_hash)
+        and fulfillment["observed_at"] == observation["observed_at"]
+    )
+
+
+def _safepay_v2_retry_settings() -> tuple[int, float]:
+    try:
+        attempts = int(os.getenv("X402_MAX_ATTEMPTS", "4"))
+    except ValueError:
+        attempts = 4
+    try:
+        delay = float(os.getenv("X402_RETRY_DELAY_SECONDS", "5"))
+    except ValueError:
+        delay = 5.0
+    return max(1, min(attempts, 12)), max(0.0, min(delay, 60.0))
+
+
+def _safepay_v2_provider_headers_valid(response: httpx.Response) -> bool:
+    content_type = (
+        response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    return bool(
+        content_type == "application/json"
+        and response.headers.get("cache-control", "").strip().lower() == "no-store"
+        and response.headers.get("x-concordia-safepay-version", "")
+        == SAFEPAY_V2_SCHEMA_VERSION
+    )
+
+
+async def _call_safepay_v2_provider(
+    *,
+    endpoint: str,
+    path: str,
+    request_body: dict[str, Any],
+    validate_response: Any,
+    transport: httpx.AsyncBaseTransport | None,
+    proxy_headers: Mapping[str, str] | None = None,
+) -> SafePayV2GatewayResponse:
+    replay_disposition = (
+        "not_attempted" if endpoint == "quotes" else "verification_pending"
+    )
+    try:
+        origin = safepay_v2_provider_origin()
+    except ValueError:
+        return _safepay_v2_gateway_error(
+            503,
+            "provider_unavailable",
+            retryable=True,
+            replay_disposition=replay_disposition,
+        )
+
+    attempts, delay = _safepay_v2_retry_settings()
+    async with httpx.AsyncClient(
+        base_url=origin,
+        timeout=20.0,
+        transport=transport,
+        trust_env=False,
+        follow_redirects=False,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            **dict(proxy_headers or {}),
+        },
+    ) as client:
+        for attempt in range(1, attempts + 1):
+            try:
+                async with client.stream("POST", path, json=request_body) as response:
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > SAFEPAY_V2_MAX_PROVIDER_RESPONSE_BYTES:
+                            return _safepay_v2_gateway_error(
+                                503,
+                                "provider_unavailable",
+                                retryable=True,
+                                replay_disposition=replay_disposition,
+                            )
+                        chunks.append(chunk)
+                    content = b"".join(chunks)
+            except Exception:
+                return _safepay_v2_gateway_error(
+                    503,
+                    "provider_unavailable",
+                    retryable=True,
+                    replay_disposition=replay_disposition,
+                )
+            if not _safepay_v2_provider_headers_valid(response):
+                return _safepay_v2_gateway_error(
+                    503,
+                    "provider_unavailable",
+                    retryable=True,
+                    replay_disposition=replay_disposition,
+                )
+            try:
+                body = parse_safepay_v2_strict_json(content)
+            except (TypeError, ValueError, RecursionError):
+                return _safepay_v2_gateway_error(
+                    503,
+                    "provider_unavailable",
+                    retryable=True,
+                    replay_disposition=replay_disposition,
+                )
+
+            try:
+                response_is_valid = bool(validate_response(response.status_code, body))
+            except Exception:
+                # Treat every unexpected upstream type/value as an invalid
+                # provider response. Never surface its value or exception text.
+                response_is_valid = False
+            if response_is_valid:
+                is_retryable = bool(
+                    response.status_code in {425, 429, 503}
+                    and isinstance(body, dict)
+                    and isinstance(body.get("error"), dict)
+                    and body["error"].get("retryable") is True
+                )
+                if is_retryable and attempt < attempts:
+                    if delay:
+                        await asyncio.sleep(delay)
+                    continue
+                return _safepay_v2_gateway_result(
+                    response.status_code,
+                    body,
+                    content=content,
+                )
+            return _safepay_v2_gateway_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition=replay_disposition,
+            )
+
+    raise AssertionError("unreachable SafePay provider loop")
+
+
+async def request_safepay_v2_quote(
+    *,
+    proposal_id: str,
+    resource_id: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+    proxy_headers: Mapping[str, str] | None = None,
+) -> SafePayV2GatewayResponse:
+    """Issue and validate a provider-owned quote without rebuilding its fields."""
+
+    if not _valid_safepay_v2_quote_request(proposal_id, resource_id):
+        return _safepay_v2_gateway_error(
+            400,
+            "invalid_request",
+            retryable=False,
+            replay_disposition="not_attempted",
+        )
+    request_body = {
+        "schema_version": SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+        "proposal_id": proposal_id,
+        "resource_id": resource_id,
+    }
+
+    def validate(status_code: int, body: Any) -> bool:
+        if status_code == 402:
+            return _validate_safepay_v2_quote_issue_response(
+                body,
+                proposal_id=proposal_id,
+                resource_id=resource_id,
+            )
+        return _validate_safepay_v2_error_response("quotes", status_code, body)
+
+    return await _call_safepay_v2_provider(
+        endpoint="quotes",
+        path="/x402/v2/quotes",
+        request_body=request_body,
+        validate_response=validate,
+        transport=transport,
+        proxy_headers=proxy_headers,
+    )
+
+
+async def redeem_safepay_v2_quote(
+    *,
+    quote: Any,
+    payment_hash: Any,
+    transport: httpx.AsyncBaseTransport | None = None,
+    proxy_headers: Mapping[str, str] | None = None,
+) -> SafePayV2GatewayResponse:
+    """Redeem the exact provider quote; the Gateway keeps no consumption state."""
+
+    if (
+        validate_safepay_v2_quote_integrity(quote) is not None
+        or not isinstance(payment_hash, str)
+        or not _HEX64_RE.fullmatch(payment_hash)
+    ):
+        return _safepay_v2_gateway_error(
+            400,
+            "invalid_request",
+            retryable=False,
+            replay_disposition="not_attempted",
+        )
+    request_body = {
+        "schema_version": SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
+        "quote": quote,
+        "payment_hash": payment_hash,
+    }
+
+    def validate(status_code: int, body: Any) -> bool:
+        if status_code == 200:
+            return _validate_safepay_v2_success_response(
+                body,
+                submitted_quote=quote,
+                payment_hash=payment_hash,
+            )
+        return _validate_safepay_v2_error_response("redemptions", status_code, body)
+
+    return await _call_safepay_v2_provider(
+        endpoint="redemptions",
+        path="/x402/v2/redemptions",
+        request_body=request_body,
+        validate_response=validate,
+        transport=transport,
+        proxy_headers=proxy_headers,
+    )
 
 
 def validate_safepay_v2_observation(observation: Any) -> str | None:

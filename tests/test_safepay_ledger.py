@@ -19,15 +19,24 @@ import uuid
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+import x402_provider.app as provider_app
 from shared.x402_payments import (
+    SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
     SAFEPAY_V2_NETWORK,
     SAFEPAY_V2_QUOTE_FIELDS,
     redeem_provider_x402_with_retry,
     safepay_v2_correlation_id,
     safepay_v2_quote_hash,
 )
-from x402_provider.app import _normalize_ip_text, create_app, resolve_safepay_client_ip
+from x402_provider.app import (
+    SafePayRedemptionAdmission,
+    SafePayRedemptionAdmissionCaps,
+    _normalize_ip_text,
+    create_app,
+    resolve_safepay_client_ip,
+)
 from x402_provider.ledger import (
     QuoteCapacityExhausted,
     QuoteRateLimited,
@@ -106,6 +115,7 @@ def build_app(
     report_source=None,
     simulated_lag_attempts: int = 0,
     ledger_path: str | None = None,
+    redemption_admission: SafePayRedemptionAdmission | None = None,
 ):
     install_secret_files(monkeypatch, tmp_path)
     return create_app(
@@ -117,6 +127,7 @@ def build_app(
         payee_account_hash=PAYEE,
         amount_motes=AMOUNT,
         simulated_lag_attempts=simulated_lag_attempts,
+        redemption_admission=redemption_admission,
     )
 
 
@@ -810,6 +821,43 @@ def test_invalid_trusted_proxy_cidrs_fail_startup(tmp_path, monkeypatch):
     monkeypatch.delenv("SAFEPAY_TRUSTED_PROXY_CIDRS", raising=False)
 
 
+@pytest.mark.parametrize("raw", [None, "", " ", ",", " , "])
+def test_provider_requires_nonempty_proxy_cidrs_outside_explicit_test_mode(
+    tmp_path,
+    monkeypatch,
+    raw,
+):
+    install_secret_files(monkeypatch, tmp_path)
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    if raw is None:
+        monkeypatch.delenv("SAFEPAY_TRUSTED_PROXY_CIDRS", raising=False)
+    else:
+        monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", raw)
+    with pytest.raises(
+        RuntimeError,
+        match="SAFEPAY_TRUSTED_PROXY_CIDRS requires at least one valid CIDR",
+    ):
+        create_app(ledger_path=str(tmp_path / "db.sqlite"))
+
+
+def test_provider_accepts_multiple_proxy_cidrs_outside_test_mode(
+    tmp_path,
+    monkeypatch,
+):
+    install_secret_files(monkeypatch, tmp_path)
+    monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv(
+        "SAFEPAY_TRUSTED_PROXY_CIDRS",
+        "10.1.2.3/8, 2001:db8::1/64",
+    )
+    app = create_app(
+        ledger_path=str(tmp_path / "db.sqlite"),
+        payee_account_hash=PAYEE,
+        amount_motes=AMOUNT,
+    )
+    assert app.title == "Concordia Risk Oracle Provider"
+
+
 def test_proxy_identity_trust_and_normalization():
     import ipaddress
 
@@ -843,6 +891,515 @@ def test_proxy_identity_trust_and_normalization():
     assert (
         resolve_safepay_client_ip("testclient", "198.51.100.7", "s" * 32, cidrs, secret)
         == "testclient"
+    )
+
+
+@pytest.mark.parametrize("raw", [b'{"value":1.0}', b'{"value":1e9999}'])
+def test_provider_v2_rejects_float_json_before_business_logic(
+    tmp_path,
+    monkeypatch,
+    raw,
+):
+    app = build_app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        response = client.post(
+            "/x402/v2/quotes",
+            content=raw,
+            headers={"Content-Type": "application/json"},
+        )
+    assert_error_body(response, 400, "invalid_request", False, "not_attempted")
+
+
+@pytest.mark.parametrize("path", ["/x402/v2/quotes", "/x402/v2/redemptions"])
+def test_provider_v2_rejects_oversized_public_request_before_business_logic(
+    tmp_path,
+    monkeypatch,
+    path,
+):
+    observer = FakeObserver()
+    app = build_app(tmp_path, monkeypatch, observer=observer)
+    with TestClient(app) as client:
+        response = client.post(
+            path,
+            content=b"{" + b"x" * SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
+            headers={"Content-Type": "application/json"},
+        )
+    assert_error_body(response, 400, "invalid_request", False, "not_attempted")
+    assert observer.calls == 0
+
+
+def _provider_request_with_messages(
+    *,
+    content_length: int | None,
+    chunks: list[bytes],
+) -> tuple[Request, list[int]]:
+    headers = []
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode("ascii")))
+    messages = [
+        {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": index < len(chunks) - 1,
+        }
+        for index, chunk in enumerate(chunks)
+    ]
+    receive_calls: list[int] = []
+
+    async def receive() -> dict:
+        receive_calls.append(1)
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/x402/v2/redemptions",
+        "raw_path": b"/x402/v2/redemptions",
+        "query_string": b"",
+        "headers": headers,
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 443),
+    }
+    return Request(scope, receive), receive_calls
+
+
+async def test_provider_content_length_over_limit_rejects_without_receiving_body() -> None:
+    request, receive_calls = _provider_request_with_messages(
+        content_length=SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES + 1,
+        chunks=[b"must-not-be-read"],
+    )
+
+    assert await provider_app._read_safepay_v2_request_body(request) is None
+    assert receive_calls == []
+
+
+@pytest.mark.parametrize(
+    "content_length",
+    [None, 8],
+    ids=["chunked-without-length", "lying-content-length"],
+)
+async def test_provider_streaming_body_cap_stops_at_first_oversized_chunk(
+    content_length: int | None,
+) -> None:
+    request, receive_calls = _provider_request_with_messages(
+        content_length=content_length,
+        chunks=[b"a" * 40_000, b"b" * 30_000, b"must-not-be-read"],
+    )
+
+    assert await provider_app._read_safepay_v2_request_body(request) is None
+    assert len(receive_calls) == 2
+
+
+def _provider_proxy_headers(client_ip: str, **extra: str) -> dict[str, str]:
+    return {
+        "X-Concordia-Client-IP": client_ip,
+        "X-Concordia-SafePay-Proxy": "p" * 48,
+        **extra,
+    }
+
+
+def _issue_quote_with_headers(
+    client: TestClient,
+    *,
+    resource_id: str,
+    headers: dict[str, str],
+) -> dict:
+    response = client.post(
+        "/x402/v2/quotes",
+        json={
+            "schema_version": "safepay-quote-request-v2",
+            "proposal_id": "DAO-PROP-6CB25C",
+            "resource_id": resource_id,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 402, response.text
+    return response.json()["quote"]
+
+
+def _redeem_with_headers(
+    client: TestClient,
+    quote: dict,
+    payment_hash: str,
+    headers: dict[str, str],
+):
+    return client.post(
+        "/x402/v2/redemptions",
+        json={
+            "schema_version": "safepay-redemption-v2",
+            "quote": quote,
+            "payment_hash": payment_hash,
+        },
+        headers=headers,
+    )
+
+
+def _redemption_admission(
+    clock: FakeClock,
+    *,
+    per_client_limit: int,
+    global_limit: int,
+) -> SafePayRedemptionAdmission:
+    return SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=per_client_limit,
+            global_limit=global_limit,
+            window_seconds=60,
+            max_client_buckets=16,
+        ),
+        clock=clock,
+    )
+
+
+def test_provider_redemption_admission_isolates_clients_and_preserves_idempotent_replay(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+    clock = FakeClock()
+    observer = FakeObserver()
+    admission = _redemption_admission(clock, per_client_limit=1, global_limit=10)
+    app = build_app(
+        tmp_path,
+        monkeypatch,
+        clock=clock,
+        observer=observer,
+        redemption_admission=admission,
+    )
+    client = TestClient(app, client=("10.1.2.3", 40001))
+    headers_a = _provider_proxy_headers("198.51.100.10")
+    headers_b = _provider_proxy_headers("198.51.100.20")
+
+    quote_a1 = _issue_quote_with_headers(client, resource_id="resource-a1", headers=headers_a)
+    quote_a2 = _issue_quote_with_headers(client, resource_id="resource-a2", headers=headers_a)
+    quote_b = _issue_quote_with_headers(client, resource_id="resource-b", headers=headers_b)
+    hash_a1, hash_a2, hash_b = "a1" * 32, "a2" * 32, "b1" * 32
+    observer.by_hash[hash_a1] = make_observation(quote_a1, hash_a1)
+    observer.by_hash[hash_a2] = make_observation(quote_a2, hash_a2)
+    observer.by_hash[hash_b] = make_observation(quote_b, hash_b)
+
+    first = _redeem_with_headers(client, quote_a1, hash_a1, headers_a)
+    assert first.status_code == 200
+    assert observer.calls == 1
+
+    # Stored exact retries remain cheap and available even after this client's
+    # slow-path budget is exhausted.
+    replay = _redeem_with_headers(client, quote_a1, hash_a1, headers_a)
+    assert replay.status_code == 200
+    assert replay.json()["delivery"]["replay_disposition"] == "idempotent_replay"
+    assert observer.calls == 1
+
+    limited = _redeem_with_headers(client, quote_a2, hash_a2, headers_a)
+    assert_error_body(
+        limited, 503, "provider_unavailable", True, "verification_pending"
+    )
+    assert observer.calls == 1
+
+    # A distinct attested client retains its own allowance.
+    accepted_b = _redeem_with_headers(client, quote_b, hash_b, headers_b)
+    assert accepted_b.status_code == 200
+    assert observer.calls == 2
+
+
+def test_provider_redemption_admission_global_limit_blocks_without_observation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+    clock = FakeClock()
+    observer = FakeObserver()
+    admission = _redemption_admission(clock, per_client_limit=10, global_limit=1)
+    app = build_app(
+        tmp_path,
+        monkeypatch,
+        clock=clock,
+        observer=observer,
+        redemption_admission=admission,
+    )
+    client = TestClient(app, client=("10.1.2.3", 40001))
+    headers_a = _provider_proxy_headers("198.51.100.10")
+    headers_b = _provider_proxy_headers("198.51.100.20")
+    quote_a = _issue_quote_with_headers(client, resource_id="global-a", headers=headers_a)
+    quote_b = _issue_quote_with_headers(client, resource_id="global-b", headers=headers_b)
+    hash_a, hash_b = "c1" * 32, "c2" * 32
+    observer.by_hash[hash_a] = make_observation(quote_a, hash_a)
+    observer.by_hash[hash_b] = make_observation(quote_b, hash_b)
+
+    assert _redeem_with_headers(client, quote_a, hash_a, headers_a).status_code == 200
+    assert observer.calls == 1
+    limited = _redeem_with_headers(client, quote_b, hash_b, headers_b)
+    assert_error_body(
+        limited, 503, "provider_unavailable", True, "verification_pending"
+    )
+    assert observer.calls == 1
+
+
+def test_provider_redemption_admission_cannot_be_bypassed_by_caller_headers(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+    clock = FakeClock()
+    observer = FakeObserver()
+    admission = _redemption_admission(clock, per_client_limit=1, global_limit=10)
+    app = build_app(
+        tmp_path,
+        monkeypatch,
+        clock=clock,
+        observer=observer,
+        redemption_admission=admission,
+    )
+    client = TestClient(app, client=("10.1.2.3", 40001))
+    identity = "198.51.100.10"
+    first_headers = _provider_proxy_headers(
+        identity,
+        Authorization="Bearer caller-one",
+        **{"X-Forwarded-For": "203.0.113.1"},
+    )
+    second_headers = _provider_proxy_headers(
+        identity,
+        Authorization="Basic caller-two",
+        **{"X-Forwarded-For": "203.0.113.99"},
+    )
+    quote_a = _issue_quote_with_headers(client, resource_id="headers-a", headers=first_headers)
+    quote_b = _issue_quote_with_headers(client, resource_id="headers-b", headers=second_headers)
+    hash_a, hash_b = "d1" * 32, "d2" * 32
+    observer.by_hash[hash_a] = make_observation(quote_a, hash_a)
+    observer.by_hash[hash_b] = make_observation(quote_b, hash_b)
+
+    assert _redeem_with_headers(client, quote_a, hash_a, first_headers).status_code == 200
+    assert observer.calls == 1
+    limited = _redeem_with_headers(client, quote_b, hash_b, second_headers)
+    assert_error_body(
+        limited, 503, "provider_unavailable", True, "verification_pending"
+    )
+    assert observer.calls == 1
+
+    # Without the Caddy attestation, caller-supplied client-IP values are
+    # ignored. Varying those values cannot mint new admission identities.
+    bad_attestation_a = {
+        "X-Concordia-Client-IP": "192.0.2.11",
+        "X-Concordia-SafePay-Proxy": "wrong",
+        "Authorization": "Bearer caller-three",
+    }
+    bad_attestation_b = {
+        "X-Concordia-Client-IP": "192.0.2.99",
+        "Authorization": "Bearer caller-four",
+    }
+    quote_c = _issue_quote_with_headers(
+        client, resource_id="headers-c", headers=bad_attestation_a
+    )
+    quote_d = _issue_quote_with_headers(
+        client, resource_id="headers-d", headers=bad_attestation_b
+    )
+    hash_c, hash_d = "d3" * 32, "d4" * 32
+    observer.by_hash[hash_c] = make_observation(quote_c, hash_c)
+    observer.by_hash[hash_d] = make_observation(quote_d, hash_d)
+    assert (
+        _redeem_with_headers(
+            client, quote_c, hash_c, bad_attestation_a
+        ).status_code
+        == 200
+    )
+    assert observer.calls == 2
+    limited_spoof = _redeem_with_headers(
+        client, quote_d, hash_d, bad_attestation_b
+    )
+    assert_error_body(
+        limited_spoof, 503, "provider_unavailable", True, "verification_pending"
+    )
+    assert observer.calls == 2
+
+
+def test_provider_redemption_admission_bucket_table_is_bounded_and_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+    clock = FakeClock()
+    observer = FakeObserver()
+    admission = SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=10,
+            global_limit=10,
+            window_seconds=60,
+            max_client_buckets=1,
+        ),
+        clock=clock,
+    )
+    app = build_app(
+        tmp_path,
+        monkeypatch,
+        clock=clock,
+        observer=observer,
+        redemption_admission=admission,
+    )
+    client = TestClient(app, client=("10.1.2.3", 40001))
+    headers_a = _provider_proxy_headers("198.51.100.10")
+    headers_b = _provider_proxy_headers("198.51.100.20")
+    quote_a = _issue_quote_with_headers(client, resource_id="bounded-a", headers=headers_a)
+    quote_b = _issue_quote_with_headers(client, resource_id="bounded-b", headers=headers_b)
+    hash_a, hash_b = "e1" * 32, "e2" * 32
+    observer.by_hash[hash_a] = make_observation(quote_a, hash_a)
+    observer.by_hash[hash_b] = make_observation(quote_b, hash_b)
+
+    assert _redeem_with_headers(client, quote_a, hash_a, headers_a).status_code == 200
+    limited = _redeem_with_headers(client, quote_b, hash_b, headers_b)
+    assert_error_body(
+        limited, 503, "provider_unavailable", True, "verification_pending"
+    )
+    assert observer.calls == 1
+
+
+class _ProviderForcedWindowInterleavingLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.stale_waiting = threading.Event()
+        self.release_stale = threading.Event()
+
+    def __enter__(self):
+        if threading.current_thread().name == "provider-stale-window":
+            self.stale_waiting.set()
+            if not self.release_stale.wait(timeout=5):
+                raise TimeoutError("forced provider interleaving timed out")
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._lock.release()
+
+
+def test_provider_admission_cannot_rewind_under_forced_window_interleaving() -> None:
+    thread_windows = {
+        "provider-stale-window": 0.0,
+        "provider-fresh-window": 60.0,
+        "provider-followup-window": 60.0,
+    }
+    admission = SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=10,
+            global_limit=1,
+            window_seconds=60,
+            max_client_buckets=10,
+        ),
+        clock=lambda: thread_windows[threading.current_thread().name],
+    )
+    forced_lock = _ProviderForcedWindowInterleavingLock()
+    admission._lock = forced_lock
+    results: dict[str, bool] = {}
+
+    def attempt(name: str, identity: str) -> None:
+        results[name] = admission.admit(identity)
+
+    stale = threading.Thread(
+        target=attempt,
+        args=("stale", "client-stale"),
+        name="provider-stale-window",
+    )
+    fresh = threading.Thread(
+        target=attempt,
+        args=("fresh", "client-fresh"),
+        name="provider-fresh-window",
+    )
+    followup = threading.Thread(
+        target=attempt,
+        args=("followup", "client-followup"),
+        name="provider-followup-window",
+    )
+
+    stale.start()
+    assert forced_lock.stale_waiting.wait(timeout=5)
+    fresh.start()
+    fresh.join(timeout=5)
+    assert not fresh.is_alive()
+    forced_lock.release_stale.set()
+    stale.join(timeout=5)
+    assert not stale.is_alive()
+    followup.start()
+    followup.join(timeout=5)
+    assert not followup.is_alive()
+
+    assert results == {"fresh": True, "stale": False, "followup": False}
+    assert admission._global_window == 1
+    assert admission._global_count == 1
+
+
+def test_provider_admission_rollover_and_global_limit_are_atomic() -> None:
+    clock = FakeClock(start=120)
+    limit = 5
+    workers = 24
+    admission = SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=workers,
+            global_limit=limit,
+            window_seconds=60,
+            max_client_buckets=workers,
+        ),
+        clock=clock,
+    )
+    barrier = threading.Barrier(workers)
+    results: list[bool] = []
+    results_lock = threading.Lock()
+
+    def attempt(index: int) -> None:
+        barrier.wait()
+        admitted = admission.admit(f"client-{index}")
+        with results_lock:
+            results.append(admitted)
+
+    threads = [
+        threading.Thread(target=attempt, args=(index,))
+        for index in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert results.count(True) == limit
+    assert results.count(False) == workers - limit
+    assert admission._global_window == 2
+    assert admission._global_count == limit
+
+    clock.advance(59.999)
+    assert not admission.admit("before-boundary")
+    clock.advance(0.001)
+    assert admission.admit("at-boundary")
+    assert admission._global_window == 3
+    assert admission._global_count == 1
+
+
+def test_provider_v2_amount_never_falls_back_to_legacy_payment_amount(
+    tmp_path,
+    monkeypatch,
+):
+    install_secret_files(monkeypatch, tmp_path)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
+    monkeypatch.setenv("SAFEPAY_PAYEE_ACCOUNT_HASH", PAYEE)
+    monkeypatch.delenv("SAFEPAY_AMOUNT_MOTES", raising=False)
+    monkeypatch.setenv("X402_PAYMENT_AMOUNT", AMOUNT)
+    app = create_app(
+        ledger_path=str(tmp_path / "db.sqlite"),
+        clock=FakeClock(),
+        chain_observer=FakeObserver(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/x402/v2/quotes",
+            json={
+                "schema_version": "safepay-quote-request-v2",
+                "proposal_id": "DAO-PROP-AMOUNT",
+                "resource_id": "report:DAO-PROP-AMOUNT",
+            },
+        )
+    assert_error_body(
+        response, 503, "provider_unavailable", True, "not_attempted"
     )
 
 

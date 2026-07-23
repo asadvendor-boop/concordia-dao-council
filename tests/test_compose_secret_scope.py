@@ -129,7 +129,8 @@ def test_finals_boundary_secrets_are_file_scoped_to_exact_consumers() -> None:
         "approval_ui_approver_id": {"gateway"},
         "demo_capability_hmac_secret": {"gateway"},
         "dashboard_demo_gateway_token": {"gateway", "dashboard"},
-        "safepay_proxy_secret": {"x402-provider"},
+        "safepay_proxy_secret": {"gateway", "x402-provider"},
+        "safepay_quote_token_secret": {"gateway"},
         "safepay_client_key_hmac_secret": {"x402-provider"},
         "x402_official_cspr_cloud_token": {"x402-official"},
         "x402_official_signer": {"x402-official"},
@@ -141,6 +142,7 @@ def test_finals_boundary_secrets_are_file_scoped_to_exact_consumers() -> None:
         "demo_capability_hmac_secret": "DEMO_CAPABILITY_HMAC_SECRET_FILE",
         "dashboard_demo_gateway_token": "DASHBOARD_DEMO_GATEWAY_TOKEN_FILE",
         "safepay_proxy_secret": "SAFEPAY_PROXY_SECRET_FILE",
+        "safepay_quote_token_secret": "SAFEPAY_QUOTE_TOKEN_SECRET_FILE",
         "safepay_client_key_hmac_secret": "SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE",
         "x402_official_cspr_cloud_token": "X402_CSPR_CLOUD_TOKEN_FILE",
         "x402_official_signer": "X402_SIGNER_FILE",
@@ -175,6 +177,7 @@ def test_finals_boundary_secret_definitions_are_file_backed() -> None:
         "demo_capability_hmac_secret",
         "dashboard_demo_gateway_token",
         "safepay_proxy_secret",
+        "safepay_quote_token_secret",
         "safepay_client_key_hmac_secret",
         "x402_official_cspr_cloud_token",
         "x402_official_signer",
@@ -202,12 +205,33 @@ def test_safepay_v2_provider_has_durable_ledger_and_frozen_runtime_terms() -> No
     assert environment["SAFEPAY_PAYEE_ACCOUNT_HASH"] == (
         "${SAFEPAY_PAYEE_ACCOUNT_HASH:?Set SAFEPAY_PAYEE_ACCOUNT_HASH}"
     )
-    assert environment["SAFEPAY_AMOUNT_MOTES"] == (
-        "${SAFEPAY_AMOUNT_MOTES:?Set SAFEPAY_AMOUNT_MOTES}"
-    )
+    assert environment["SAFEPAY_AMOUNT_MOTES"] == "1000000"
     assert provider["volumes"] == ["x402_provider_data:/data"]
     assert "x402_provider_data" in document["volumes"]
     assert "ports" not in provider
+
+
+def test_gateway_has_safepay_proxy_identity_and_quote_capability_configuration() -> None:
+    document = _compose()
+    gateway = document["services"]["gateway"]
+    environment = gateway["environment"]
+
+    assert environment["SAFEPAY_TRUSTED_PROXY_CIDRS"] == (
+        "${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}"
+    )
+    assert environment["SAFEPAY_PROXY_SECRET_FILE"] == (
+        "/run/secrets/safepay_proxy_secret"
+    )
+    assert environment["SAFEPAY_QUOTE_TOKEN_SECRET_FILE"] == (
+        "/run/secrets/safepay_quote_token_secret"
+    )
+    assert environment["SAFEPAY_AMOUNT_MOTES"] == "1000000"
+    assert (
+        environment["SAFEPAY_AMOUNT_MOTES"]
+        == document["services"]["x402-provider"]["environment"][
+            "SAFEPAY_AMOUNT_MOTES"
+        ]
+    )
 
 
 def test_official_x402_service_is_frozen_internal_and_persistent() -> None:

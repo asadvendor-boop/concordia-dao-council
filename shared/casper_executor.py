@@ -941,6 +941,7 @@ def build_unsigned_casper_transfer_deploy(
     target_public_key: str,
     amount_motes: int,
     correlation_id: int | None = None,
+    chain_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a wallet-ready unsigned native CSPR transfer deploy.
 
@@ -956,10 +957,16 @@ def build_unsigned_casper_transfer_deploy(
     try:
         payer = _public_key_from_account_hex(signer_public_key)
         target = _public_key_from_account_hex(target_public_key)
-        chain_name = os.getenv("CASPER_CHAIN_NAME", "casper-test")
+        resolved_chain_name = (
+            os.getenv("CASPER_CHAIN_NAME", "casper-test")
+            if chain_name is None
+            else chain_name
+        )
+        if not isinstance(resolved_chain_name, str) or not resolved_chain_name:
+            raise ValueError("chain_name must be a non-empty string")
         payment_amount = int(os.getenv("X402_TRANSFER_PAYMENT_AMOUNT", "100000000"))
         ttl = os.getenv("CASPER_DEPLOY_TTL", "30minutes")
-        params = create_deploy_parameters(payer, chain_name, ttl=ttl)
+        params = create_deploy_parameters(payer, resolved_chain_name, ttl=ttl)
         deploy = create_transfer(
             params,
             amount=amount_motes,
@@ -979,7 +986,7 @@ def build_unsigned_casper_transfer_deploy(
         "status": "ready",
         "driver": "pycspr",
         "payload_kind": "deploy",
-        "chain_name": chain_name,
+        "chain_name": resolved_chain_name,
         "payment_amount": payment_amount,
         "transfer_amount_motes": amount_motes,
         "correlation_id": correlation_id,

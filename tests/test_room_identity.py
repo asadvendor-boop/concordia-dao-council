@@ -53,6 +53,7 @@ def room_env(monkeypatch):
     monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     gateway_auth._reset_for_testing()
     yield
     gateway_auth._reset_for_testing()
@@ -518,6 +519,7 @@ def test_rm_wp3_8_duplicate_agent_ids_fail_fast_contract(monkeypatch, tmp_path):
     monkeypatch.setenv("GATEWAY_SECRET", GATEWAY_SECRET)
     monkeypatch.delenv("APP_ENV", raising=False)
     monkeypatch.delenv("CONCORDIA_TEST_MODE", raising=False)
+    monkeypatch.setenv("SAFEPAY_TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
     gateway_auth._reset_for_testing()
     exc_class = getattr(gateway_auth, "AgentIdentityConfigurationError", None)
     try:
