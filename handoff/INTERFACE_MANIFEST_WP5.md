@@ -1,10 +1,18 @@
 # INTERFACE MANIFEST — WP5 (official CSPR.cloud x402 settlement service)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `f5cf748`
+- Producer commit: `929f4a2` (corrections for CODEX_REVIEW_CLAUDE_WP5, on top of `f5cf748`)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §6, §11, §12 "Official x402 local service v1", §13
-- Lane status: `npm ci` + typecheck clean; 128/128 vitest green (offline, all upstreams mocked/loopback). Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference (I re-verified two anchor vectors myself).
+- Lane status: `npm ci` + typecheck clean; 233/233 vitest green x3 consecutive; `npm audit --audit-level=high` clean. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference.
+
+## Correction pass (post NO-GO review) — what changed at `929f4a2`
+- Readback fail-closed: `TransactionReadback.args` is mandatory; all EIGHT `transfer_with_authorization` args verified (exact CL type/ABI order, account-only Key variant, U256 value, validity window, nonce, public key, signature) + exact package/contract/transaction identity; `finalized:false` = resumable PENDING; lockStatus must be `Unlocked`.
+- Lost `/settle` recovery with zero second settlement via **NEW ChainTransport method `locateSettlementByAuthorization(payer, package, contract, nonce)`** — **Codex: the live ChainTransport you inject must implement this third method** (in addition to `resolveActivePackage` / `getFinalizedTransaction`, and `getFinalizedTransaction` must return all 8 typed args + `transactionHash`).
+- Production config frozen (any env differing from a G1 constant is rejected at startup); credentialed fetches: exact HTTPS origins, raw Authorization, `redirect:"error"`, bounded timeout/body.
+- Exact terminal/idempotent retries resolve from the ledger BEFORE volatile registry/expiry/liveness gates.
+- `src/settlement-item.ts` is a pure builder for the official §13 registry item — **Codex emits it at canary time with operator-supplied trusted RPC endpoints** (the service never chooses verifier observation URLs).
+- Ledger schema gained `valid_after`/`valid_before`/`public_key`/`signature` columns (restart reconciliation); state machine + unique keys unchanged.
 
 Greenfield, isolated in `services/x402-official/`. It starts and remains
 `blocked_fail_closed` until Codex injects live chain access — exactly §11's
