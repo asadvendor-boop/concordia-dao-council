@@ -1,7 +1,46 @@
 # INTERFACE MANIFEST — WP7 (dashboard truth-first redesign)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `651f90a` — truth pass #2 (reviewer NO-GO on `f7c6f18`), on top of `0ce907d` (five truth-contract fixes: replay binding, policy summary, live-read strictness, display fallbacks, pinned test authority) → `f7c6f18` (WP2/WP3 manifests). At `651f90a` from a fresh production build: **Playwright 155/155 x3 consecutive**, dashboard contract **17/17**, `npm audit --audit-level=high` exit 0, `git diff --check` clean.
+- Producer commit: `cc73c8a` — truth pass #3 (reviewer REJECT of `7137674`), on top of `651f90a` truth pass #2 (reviewer NO-GO on `f7c6f18`), itself on `0ce907d` (five truth-contract fixes: replay binding, policy summary, live-read strictness, display fallbacks, pinned test authority) → `f7c6f18` (WP2/WP3 manifests) → `7137674` (WP5/WP7 manifests). At `cc73c8a` from a fresh production build: **Playwright 155/155 x3 consecutive**, dashboard contract **17/17**, `git diff --check` clean.
+
+## Truth pass #3 (reviewer REJECT of `7137674`) — exact timestamp chronology
+
+One dashboard change, in the shared pure validator
+`dashboard/app/_components/provenance-pure.js`:
+
+**`parseRfc3339Utc` now returns an exact `BigInt` of microseconds since the
+epoch** (it returned a `number` of microseconds). Microseconds-since-epoch
+exceed `Number.MAX_SAFE_INTEGER` roughly 285 years either side of 1970, so
+two adjacent microseconds landed on the SAME double in any year before ~1684
+or after ~2255 — `itemGreenVerified` could therefore render green while
+Python reported a `check_observed_after_capture` violation. Reproduced at
+year 9999 AND at year 0001 before the fix.
+
+**Consumer impact is nil by construction.** Both call sites use the value
+only in ordering comparisons (`registryItemErrors`'s observed-vs-captured
+check, and `provenance.js normalizeRegistryItem`'s captured-vs-generated and
+generated-vs-reference checks). JavaScript permits relational comparison
+between BigInt and number, so even a mixed comparison cannot throw; only
+arithmetic would, and none is performed. `parseRfc3339Utc` is itself an
+export and returns the BigInt by design, but **no ordinal is returned by a
+validator, stored on an item, spread into props, or rendered** — the other
+four exports yield only arrays, string maps, and booleans — so nothing
+reaches a JSON/serialization boundary. Confirmed by a clean Next.js **production build** (which prerenders
+through these validators) plus explicit `JSON.stringify` assertions on every
+validator output.
+
+Cross-validator proof lives in the WP5 suite (it imports this module AS-IS):
+four boundary years — 9999, 2256, 2255, and 0001 — each asserting that an
+observation one microsecond AFTER capture is rejected by Python AND the
+dashboard, and that one microsecond BEFORE stays green on both, so the
+comparison cannot pass by over-rejecting. See INTERFACE_MANIFEST_WP5.md
+truth pass #3 for the parser contract, the shared vector table, and the
+471-candidate differential fuzz.
+
+- Dashboard gates at this pass, from a fresh production build:
+  **Playwright 155/155 x3 consecutive**, dashboard contract **17/17**,
+  `git diff --check` clean.
+- No dashboard renderer, page, or component changed in this pass.
 
 ## Truth pass #2 (at `651f90a`) — six same-class gaps closed
 1. **PolicyAuthorization detail rows** (`lib.js` cardDetailRows) no longer

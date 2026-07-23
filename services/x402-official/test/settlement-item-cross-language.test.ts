@@ -63,6 +63,7 @@ import { validChecks, validInput } from "./settlement-item-fixture.js";
 // the dashboard executes.
 import {
   itemGreenVerified,
+  normalizeRegistryItem,
   registryItemErrors,
   PUBLIC_ITEM_REQUIRED_FIELDS as DASHBOARD_PUBLIC_ITEM_REQUIRED_FIELDS,
   REQUIRED_CHECKS_BY_PROOF_TYPE as DASHBOARD_REQUIRED_CHECKS_BY_PROOF_TYPE,
@@ -666,6 +667,59 @@ describe("validator boundary agreement: Python and the dashboard draw the SAME l
       expect(itemGreenVerified(ordered)).toBe(true);
     });
   }
+
+  // A registry-boundary fail-open: `parseRfc3339Utc` returns null for BOTH
+  // "absent" and "malformed", and normalizeRegistryItem used that single null
+  // to skip its two cross-field chronology guards. So a registry whose
+  // generated_at this UTC-Z-only grammar cannot read — e.g. the "+00:00" form
+  // that `datetime.now(UTC).isoformat()` produces, which six producers in
+  // this repo emit for generated_at — disabled the checks entirely and an
+  // item captured long AFTER its registry still rendered green.
+  const UNREADABLE_GENERATED_AT = [
+    ["2026-07-23T00:00:00.123456+00:00", "Python's isoformat() offset form"],
+    ["2026-07-23T00:00:00.1234567Z", "seven fractional digits"],
+    ["2026-07-23t00:00:00Z", "lowercase separator"],
+    ["not-a-timestamp", "outright garbage"],
+  ] as const;
+
+  for (const [generatedAt, why] of UNREADABLE_GENERATED_AT) {
+    it(`an unreadable registry generated_at fails CLOSED — ${why}`, () => {
+      const item = realEmittedItem();
+      // Captured centuries after the registry claims to have been generated.
+      (item as { captured_at: string }).captured_at = "2999-01-01T00:00:00Z";
+      for (const check of item.checks) check.observed_at = "2026-07-22T20:05:00Z";
+      const registry = { generated_at: generatedAt, items: [item] };
+      const normalized = normalizeRegistryItem(item, registry, "2026-07-23T00:00:00Z");
+      expect(
+        normalized.verification_status,
+        `unreadable generated_at (${why}) must not leave the item verified`,
+      ).toBe("invalid");
+      expect(itemGreenVerified(normalized)).toBe(false);
+    });
+  }
+
+  it("a readable generated_at still catches captured-after-generated", () => {
+    const item = realEmittedItem();
+    (item as { captured_at: string }).captured_at = "2999-01-01T00:00:00Z";
+    for (const check of item.checks) check.observed_at = "2026-07-22T20:05:00Z";
+    const registry = { generated_at: "2026-07-23T00:00:00Z", items: [item] };
+    const normalized = normalizeRegistryItem(item, registry, "2026-07-23T00:00:00Z");
+    expect(normalized.verification_status).toBe("invalid");
+  });
+
+  it("a well-formed registry and item are left verified (no over-rejection)", () => {
+    const item = realEmittedItem();
+    const registry = { generated_at: "2026-07-23T00:00:00Z", items: [item] };
+    const normalized = normalizeRegistryItem(item, registry, "2026-07-23T00:00:00Z");
+    expect(normalized.verification_status).toBe("verified");
+    expect(itemGreenVerified(normalized)).toBe(true);
+  });
+
+  it("an absent generated_at is still tolerated (absence is not malformation)", () => {
+    const item = realEmittedItem();
+    const normalized = normalizeRegistryItem(item, { items: [item] }, "2026-07-23T00:00:00Z");
+    expect(normalized.verification_status).toBe("verified");
+  });
 
   it("validator output stays JSON-serializable (no BigInt ordinal escapes)", () => {
     // The dashboard ordinal is a BigInt; JSON.stringify throws on one. These

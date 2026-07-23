@@ -355,6 +355,34 @@ export function registryItemErrors(item) {
 // schema, enums, proof-type provenance (G1-C11), and per-item chronology
 // (G1-C12). Anything malformed, mislabelled, stale, duplicated, or with an
 // unknown proof type / empty required checks renders neutral — never green.
+// Cross-field normalization at the registry boundary, mirroring the server's
+// build_public_registry: an item whose proposal identity does not match the
+// registry, or whose capture time is after the registry generation time, or a
+// registry generated after the verifier reference time, is stamped invalid so
+// no downstream panel can render it green.
+//
+// Lives here (not in the renderer) so the invariant is JSX-free and can be
+// exercised directly by the cross-language suite.
+export function normalizeRegistryItem(item, registry, referenceTime) {
+  if (!item || typeof item !== "object") return item;
+  const generatedAt = parseRfc3339Utc(registry?.generated_at);
+  const capturedAt = parseRfc3339Utc(item.captured_at);
+  const reference = parseRfc3339Utc(referenceTime);
+  let invalid = registryItemErrors(item).length > 0;
+  if (registry?.proposal_id && item.proposal_id != null && item.proposal_id !== registry.proposal_id) invalid = true;
+  // A null from the parser means "absent OR malformed". Overloading the two
+  // cases silently DISABLED both guards below: a registry stating a
+  // generation time this UTC-Z-only grammar cannot read (e.g. Python's
+  // `datetime.now(UTC).isoformat()` "+00:00" form, which several producers in
+  // this repo emit) skipped the chronology checks entirely, so an item
+  // captured long after its registry was generated still rendered green.
+  // A stated-but-unreadable generation time now fails closed.
+  if (registry?.generated_at != null && generatedAt == null) invalid = true;
+  if (generatedAt != null && capturedAt != null && capturedAt > generatedAt) invalid = true;
+  if (generatedAt != null && reference != null && generatedAt > reference) invalid = true;
+  return invalid && item.verification_status !== "invalid" ? { ...item, verification_status: "invalid" } : item;
+}
+
 export function itemGreenVerified(item) {
   if (!item || item.verification_status !== "verified") return false;
   if (registryItemErrors(item).length) return false;

@@ -19,7 +19,7 @@ import { cx, shortHash, titleCaseAction } from "./lib";
 import { Icon, PendingNote, StatusPill } from "./primitives";
 import {
   itemGreenVerified,
-  parseRfc3339Utc,
+  normalizeRegistryItem,
   registryItemErrors,
   PUBLIC_ITEM_REQUIRED_FIELDS,
   REQUIRED_CHECKS_BY_PROOF_TYPE,
@@ -27,27 +27,11 @@ import {
 
 export {
   itemGreenVerified,
+  normalizeRegistryItem,
   registryItemErrors,
   PUBLIC_ITEM_REQUIRED_FIELDS,
   REQUIRED_CHECKS_BY_PROOF_TYPE,
 };
-
-// Cross-field normalization at the registry boundary, mirroring the server's
-// build_public_registry: an item whose proposal identity does not match the
-// registry, or whose capture time is after the registry generation time, or a
-// registry generated after the verifier reference time, is stamped invalid so
-// no downstream panel can render it green.
-function normalizeRegistryItem(item, registry, referenceTime) {
-  if (!item || typeof item !== "object") return item;
-  const generatedAt = parseRfc3339Utc(registry?.generated_at);
-  const capturedAt = parseRfc3339Utc(item.captured_at);
-  const reference = parseRfc3339Utc(referenceTime);
-  let invalid = registryItemErrors(item).length > 0;
-  if (registry?.proposal_id && item.proposal_id != null && item.proposal_id !== registry.proposal_id) invalid = true;
-  if (generatedAt != null && capturedAt != null && capturedAt > generatedAt) invalid = true;
-  if (generatedAt != null && reference != null && generatedAt > reference) invalid = true;
-  return invalid && item.verification_status !== "invalid" ? { ...item, verification_status: "invalid" } : item;
-}
 
 export function findRegistryItems(registry, proofType) {
   if (!registry || !Array.isArray(registry.items)) return [];

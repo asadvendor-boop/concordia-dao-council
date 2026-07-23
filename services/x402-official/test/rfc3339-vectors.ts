@@ -11,9 +11,19 @@
  *
  * Python compares full-microsecond datetimes. A JavaScript `number` cannot
  * hold microseconds-since-epoch exactly past `Number.MAX_SAFE_INTEGER`
- * (9007199254740991 µs — reached inside year 2255), so adjacent microseconds
- * in any later year collapse onto the same double and a chronology violation
- * Python reports is silently missed. The exact ordinal is therefore a BigInt
+ * (9007199254740991 µs — reached inside year 2255). Two distinct failures
+ * follow, and the vectors below distinguish them:
+ *
+ *   - Just past 2^53 the ordinal becomes INEXACT: 9025257600000001 silently
+ *     stores as 9025257600000000. Adjacent values may still differ, but the
+ *     instant itself is already wrong.
+ *   - Further out the double spacing exceeds one microsecond and adjacent
+ *     instants COLLAPSE outright: at year 9999 (spacing 32 µs) and at year
+ *     0001 (spacing 8 µs, magnitude ~6.2e16) two neighbours become one
+ *     value, so a chronology violation Python reports cannot be seen.
+ *
+ * Note the second case is symmetric about 1970 — ancient timestamps are as
+ * broken as far-future ones. The exact ordinal is therefore a BigInt
  * everywhere it is compared.
  *
  * The table stores each ordinal as a DECIMAL STRING, never a BigInt literal:
@@ -54,12 +64,12 @@ export const ACCEPTED_VECTORS: readonly Rfc3339Vector[] = [
   {
     value: "0001-01-01T00:00:00.000001Z",
     micros: "-62135596799999999",
-    note: "adjacent microsecond at the minimum year (pre-epoch, negative ordinal)",
+    note: "adjacent microsecond at the minimum year; |value| ~6.2e16 puts double spacing at 8 µs, so as Numbers this and the next vector BOTH became -62135596800000000 — a real collapse, verified",
   },
   {
     value: "0001-01-01T00:00:00.000002Z",
     micros: "-62135596799999998",
-    note: "its neighbour — must NOT collapse onto the previous vector",
+    note: "its neighbour — collapsed onto the previous vector before the fix; proves the defect is not far-future-only",
   },
   {
     value: "0099-12-31T23:59:59.999999Z",
@@ -94,22 +104,22 @@ export const ACCEPTED_VECTORS: readonly Rfc3339Vector[] = [
   {
     value: "2255-06-05T23:47:34.000001Z",
     micros: "9007199254000001",
-    note: "AT the Number.MAX_SAFE_INTEGER microsecond boundary (9007199254740991)",
+    note: "just BELOW Number.MAX_SAFE_INTEGER (9007199254740991) — still exact as a double, so this pair is a control, not a collapse",
   },
   {
     value: "2255-06-05T23:47:34.000002Z",
     micros: "9007199254000002",
-    note: "neighbour at the safe-integer boundary — still distinguishable",
+    note: "its neighbour, also still exact — the last year where a Number ordinal is trustworthy",
   },
   {
     value: "2256-01-01T00:00:00.000001Z",
     micros: "9025257600000001",
-    note: "PAST the safe-integer boundary — a double can no longer separate these",
+    note: "just PAST 2^53: no longer exactly representable — as a Number it silently becomes 9025257600000000, a WRONG instant (adjacent values here happen to stay distinct; the value itself is already corrupt)",
   },
   {
     value: "2256-01-01T00:00:00.000002Z",
     micros: "9025257600000002",
-    note: "its neighbour past the boundary — the collapse Sol reproduced",
+    note: "its neighbour, still exactly representable — which is why only the first of this pair is corrupted",
   },
   {
     value: "9999-12-31T23:59:59.000001Z",

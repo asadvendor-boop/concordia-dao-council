@@ -1,14 +1,130 @@
 # INTERFACE MANIFEST — WP5 (official CSPR.cloud x402 settlement service)
 
 - Producer branch: `claude/finals-product-security`
-- Producer commit: `651f90a` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item → `1bf4890` clean-install reproducibility → `0ce907d` validator-parity boundary pins (96-char names, calendar round-trip, pinned registry authority `7170c873fd20c1ff2e9e3115ec1523b9b1ea2c9b`) → `651f90a` truth pass #2: exact-microsecond timestamp parity + prototype-safe proof-type lookup)
+- Producer commit: `cc73c8a` (correction lineage: `f5cf748` → `929f4a2` → `1c832f7` → `2179eb0` → `96f0a1a` → `9391bf9` → `91b5498` schema-driven settlement item → `1bf4890` clean-install reproducibility → `0ce907d` validator-parity boundary pins (96-char names, calendar round-trip, pinned registry authority `7170c873fd20c1ff2e9e3115ec1523b9b1ea2c9b`) → `651f90a` truth pass #2: exact-microsecond timestamp parity + prototype-safe proof-type lookup → `7137674` manifests → `cc73c8a` truth pass #3: exact BigInt microsecond chronology in both JS parsers)
 - Rooted at freeze: `concordia-g1-freeze-v2.0-a` (`b24c0409`)
 - Spec authority: `handoff/G1_INTERFACE_SPEC.md` §6, §11, §12 "Official x402 local service v1", §13
-- Lane status: proven at `1bf4890` from a BRAND-NEW detached checkout in which ONLY `services/x402-official` ran `npm ci` (verified: no `dashboard/node_modules`, no root `node_modules`, `NODE_PATH` unset, isolation re-checked after the runs): typecheck clean; 354/354 vitest green x3 consecutive; `npm audit --audit-level=high` 0 vulnerabilities. Codex independently reproduced the same result at `1bf4890`. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference. At `651f90a`: typecheck clean, **363/363**, audit 0 vulnerabilities.
+- Lane status: proven at `1bf4890` from a BRAND-NEW detached checkout in which ONLY `services/x402-official` ran `npm ci` (verified: no `dashboard/node_modules`, no root `node_modules`, `NODE_PATH` unset, isolation re-checked after the runs): typecheck clean; 354/354 vitest green x3 consecutive; `npm audit --audit-level=high` 0 vulnerabilities. Codex independently reproduced the same result at `1bf4890`. Golden vectors cross-checked against an INDEPENDENT Python `hashlib.blake2b(digest_size=32)` reference. At `651f90a`: typecheck clean, **363/363**, audit 0 vulnerabilities. At `cc73c8a`: typecheck clean, **390/390 x3 consecutive**, `npm run build` OK, `npm audit --omit=dev` 0 vulnerabilities.
+
+## Truth pass #3 (reviewer REJECT of `7137674`) — the timestamp contract
+
+The reviewer accepted five of the six truth-pass-#2 repairs and rejected ONE:
+both JavaScript parsers still lost exact RFC3339 microsecond ordering.
+
+**Root cause (worse than a millisecond bug).** Microseconds-since-epoch pass
+`Number.MAX_SAFE_INTEGER` (9007199254740991 µs) about **285 years either side
+of 1970**, so a `number` of microseconds collapses adjacent instants in every
+year before ~1684 **and** after ~2255 — not only in the far future. Reproduced
+before the fix: `9999-12-31T23:59:59.000001Z` and `.000002Z` both yielded
+`253402300799000000`, and the same collapse fired at year `0001`.
+
+**The exact representation.** `services/x402-official/src/time.ts` now exports
+**`rfc3339UtcOrdinal(value): bigint | null`** — exact microseconds since the
+epoch. Every chronology comparison uses it. A BigInt is lossless at every
+representable year and is what Python's full-microsecond `datetime`
+comparison actually means.
+
+**`parseRfc3339Utc` KEEPS its public contract: epoch MILLISECONDS as a
+`number`.** This is deliberate, not an oversight: `pipeline.ts` compares it
+against `validBeforeEpochMs` (canonical U64 epoch seconds × 1000), so
+changing its units would have silently corrupted expiry terminalization by a
+factor of 1000. Milliseconds for years 0001–9999 stay under 2.6e14 and are
+therefore exact in a double. Sub-millisecond precision truncates **downward,
+never upward**, so an observation can never be rounded past an expiry
+boundary it did not cross.
+
+Four defects closed in `time.ts` (it had been millisecond-based throughout):
+1. `Math.round(Number(frac) * 1000)` mapped `.000001` AND `.000002` to `0 ms`.
+2. `Date.UTC(year, …)` remaps years 0–99 onto 1900+year
+   (`Date.UTC(1,0,1)` is 1901), so Python-valid years `0001`–`0099` were
+   rejected by the round-trip guard. Fixed with `setUTCFullYear`.
+3. **Leap second `:60` was accepted and clamped to `:59`** — inventing an
+   instant that never existed, while Python raises
+   `second must be in 0..59`. `registry.ts` had **no** guard of its own, so
+   governance records carrying `:60` were accepted by JS and rejected by
+   Python. Now refused at the parser. (Found while fixing, not reported by
+   the reviewer.)
+4. **1–9 fractional digits were accepted and truncated to six** — so
+   `.1234567Z` and `.1234568Z` produced ONE ordinal: the same collapse class
+   at a different digit. The grammar now caps at six digits and refuses
+   sub-microsecond precision outright. (Found by differential fuzzing.)
+
+Consumers updated to the exact ordinal (both private helpers, no public API
+changed): `registry.ts requireRfc3339Utc` → `bigint`, with the
+`maxObservedAtEpoch` accumulator moving from a `Number.NEGATIVE_INFINITY`
+sentinel to an explicit `bigint | null` (BigInt has no infinity);
+`settlement-item.ts requireRegistryUtc` → `bigint` and
+`validateCheckObservations(checks, capturedAtEpoch: bigint)`.
+**`pipeline.ts` is deliberately untouched** and still uses the millisecond
+accessor — the one place where milliseconds are the correct unit.
+
+**No BigInt reaches a JSON boundary.** To be exact about the surface:
+`parseRfc3339Utc` is itself one of `provenance-pure.js`'s five exports and it
+*does* return a BigInt — by design. The claim is about where that value can
+travel. Its only two consumers (`registryItemErrors`'s observed-vs-captured
+check and `provenance.js normalizeRegistryItem`) bind it to a local and use
+it solely in `>` comparisons; it is never returned, stored on an item, spread
+into props, or rendered. The other four exports
+(`REQUIRED_CHECKS_BY_PROOF_TYPE`, `PUBLIC_ITEM_REQUIRED_FIELDS`,
+`registryItemErrors`, `itemGreenVerified`) return only arrays, objects of
+strings, and booleans. Verified three ways: a Next.js **production build**
+(which prerenders through these validators) succeeds; explicit tests assert
+`JSON.stringify` of every validator output does not throw; and the shared
+vector table stores ordinals as decimal **strings** precisely so the fixtures
+survive `JSON.stringify` on their way to Python. A future caller that
+serializes the parser's return directly WOULD throw — hence the warning in
+the function's own doc comment.
+
+**Shared boundary vectors** live in `test/rfc3339-vectors.ts` and drive both
+JavaScript parsers and Python from one table: years 0001, 0099, 0100, 1969,
+1970, 2026, 2255 (the safe-integer boundary), 2256, 9999; adjacent
+microseconds at each boundary year; leap days across the century rules
+(1600/1700/1800/1900/2000/2400); impossible dates (Feb 30, Apr 31, month 0/13,
+day 0, hour 24, year 0000, leap second). Every pinned ordinal is re-verified
+against a live `python3` at test time, so the pins cannot rot.
+
+**Deliberate strictness, pinned so nobody "fixes" it.** Nine inputs are
+accepted by Python and refused by BOTH JavaScript parsers — lowercase `t`,
+`+00:00`/`-00:00` offsets, a space separator, an empty fraction, an embedded
+NUL byte (Python accepts it), and 7–9 fractional digits. All are refusals,
+i.e. fail-closed, and both parsers agree on every one.
+
+**Differential fuzz (my own, beyond the suites):** 471 candidates — format
+attacks, a full month-length matrix, the century leap-year matrix, and 400
+pseudo-random instants spanning years 1–9999 — compared across the dashboard
+parser, the compiled x402 parser, and live Python. Result: **zero
+over-acceptances, zero value differences, zero disagreements between the two
+JavaScript parsers.** Only the nine intentional refusals above.
+
+- Gates at this pass: typecheck clean, **390/390** vitest (363 → 382 → 390),
+  `npm run build` OK, `npm audit --omit=dev` **0 vulnerabilities**.
+- Failing-first: **10 of 14 red** in the new parity suite against the
+  unmodified `7137674` code, including the behavioural proof that year-0001
+  adjacent microseconds collapsed (`expected -62135596800000000 not to be
+  -62135596800000000`).
+- The 7–9-digit truncation collapse (defect 4) was found by the differential
+  fuzz, NOT by a pre-written red test: against the pre-fix build the fuzz
+  reported `JS-DISAGREE "2026-07-22T20:05:00.1234567Z" dashboard=null
+  x402=1784750700123456`, and the pre-fix parser mapped `.1234567Z` and
+  `.1234568Z` to the identical ordinal. It was fixed and then pinned by the
+  refusal tests (suite 382 → 390); those tests fail against the pre-fix
+  grammar, which accepted those values.
 
 ## Truth pass #2 (reviewer NO-GO on `f7c6f18`) — fixed at `651f90a`
-- **`parseRfc3339Utc` SEMANTIC CHANGE (Codex: re-audit any consumer):** it now
-  returns exact **MICROSECONDS** since the Unix epoch, not milliseconds.
+
+> **Superseded by truth pass #3 — read that section first.** The note below
+> concerns the DASHBOARD parser
+> (`dashboard/app/_components/provenance-pure.js parseRfc3339Utc`), which at
+> `651f90a` returned a `number` of microseconds and now returns an exact
+> `BigInt`. It is NOT about the x402 parser
+> (`services/x402-official/src/time.ts parseRfc3339Utc`), which is and
+> remains epoch **milliseconds**; the x402 exact ordinal is the separate
+> `rfc3339UtcOrdinal`. Two different functions share the name — the units
+> statement below applies only to the dashboard one.
+
+- **`parseRfc3339Utc` SEMANTIC CHANGE (Codex: re-audit any consumer):** the
+  DASHBOARD parser returns exact **MICROSECONDS** since the Unix epoch, not
+  milliseconds (as of truth pass #3, as an exact `BigInt`).
   Python compares full-microsecond `fromisoformat` datetimes, so a
   millisecond return collapsed `.000001Z`/`.000999Z` into one instant and
   silently skipped `check_observed_after_capture` violations Python reports.
