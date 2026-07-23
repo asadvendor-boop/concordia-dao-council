@@ -1,5 +1,5 @@
 {
-  "schema_version": "concordia.organizer_rendered_link_request.v1",
+  "schema_version": "concordia.organizer_rendered_link_request.v2",
   "app_origin": "https://concordia.47.84.232.193.sslip.io",
   "docs_origin": "https://docs.concordiadao.xyz",
   "proposal_id": "DAO-PROP-6CB25C",
@@ -7,87 +7,114 @@
     {
       "link_id": "custom_apex",
       "url": "https://concordiadao.xyz/",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": {
+        "kind": "concordia_home"
+      }
     },
     {
       "link_id": "custom_www",
       "url": "https://www.concordiadao.xyz/",
-      "allowed_redirects": []
+      "allowed_redirects": [
+        {
+          "from": "https://www.concordiadao.xyz/",
+          "to": "https://concordiadao.xyz/",
+          "status": 308
+        }
+      ],
+      "identity": {
+        "kind": "concordia_home"
+      }
     },
     {
       "link_id": "docs_root",
       "url": "https://docs.concordiadao.xyz/",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "docs_judge_quickstart_anchor",
       "url": "https://docs.concordiadao.xyz/judge-walkthrough/#judge-walkthrough",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "github_repository",
       "url": "https://github.com/asadvendor-boop/concordia-dao-council",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "dorahacks_buidl",
       "url": "https://dorahacks.io/buidl/46732",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "youtube_initial_round",
       "url": "https://www.youtube.com/watch?v=GU01V83Jrko",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "twitter_profile",
       "url": "https://x.com/ConcordiaDAO",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "twitter_launch_post",
       "url": "https://x.com/ConcordiaDAO/status/2074438324769689653",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "canonical_receipt",
       "url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "canonical_contract",
       "url": "https://testnet.cspr.live/contract/a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "quorum_precondition_refusal",
       "url": "https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "quorum_approval",
       "url": "https://testnet.cspr.live/deploy/7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "quorum_acceptance",
       "url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "wallet_receipt",
       "url": "https://testnet.cspr.live/deploy/56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "supplemental_dynamic_receipt",
       "url": "https://testnet.cspr.live/deploy/68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     },
     {
       "link_id": "historical_safepay_payment",
       "url": "https://testnet.cspr.live/deploy/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
-      "allowed_redirects": []
+      "allowed_redirects": [],
+      "identity": null
     }
   ]
 }

@@ -79,7 +79,7 @@ from shared.release_gate_contract import (
 from shared.secret_variants import normalize_sensitive_key, secret_variants
 
 
-SCHEMA_VERSION = "concordia.release_manifest.v4"
+SCHEMA_VERSION = "concordia.release_manifest.v5"
 OBSERVATION_SCHEMA_VERSION = "concordia.release_observation_receipt.v1"
 PROOF_RECEIPT_SCHEMA_VERSION = "concordia.proof_verifier_receipt.v1"
 RELEASE_MANIFEST_PATH = "release/RELEASE_MANIFEST.json"
@@ -166,13 +166,40 @@ PROOF_RECEIPT_PATHS: dict[str, str] = {
 # The authoritative inventory lives in the shared immutable gate contract.
 COMMAND_GATE_ARTIFACT_PATHS = COMMAND_GATE_PRODUCED_ARTIFACT_PATHS
 
-G13_SUBMISSION_RECEIPT_SCHEMA_VERSION = "concordia.g13_submission_receipt.v2"
+G13_SUBMISSION_RECEIPT_SCHEMA_VERSION = "concordia.g13_submission_receipt.v3"
 G13_SUBMISSION_RECEIPT_PATH = "release/G13_SUBMISSION_RECEIPT.json"
 G13_RUNNER_PATH = "scripts/run_g13_submission_gate.mjs"
 G13_BROWSER_RECEIPT_SCHEMA_VERSION = "concordia.g13_browser_receipt.v1"
 G13_BROWSER_RECEIPT_PATH = "release/g13/BROWSER_RECEIPT.json"
 G13_BROWSER_TRACE_SCHEMA_VERSION = "concordia.g13_browser_probe_result.v1"
 G13_BROWSER_TRACE_PATH = "release/g13/BROWSER_TRACE.json"
+ORGANIZER_LINK_AUDIT_SCHEMA_VERSION = (
+    "concordia.organizer_rendered_link_audit.v2"
+)
+ORGANIZER_LINK_REQUEST_PATH = "handoff/ORGANIZER_LINK_GATE_REQUEST.json"
+ORGANIZER_LINK_CORE_PATH = "scripts/organizer-link-gate-core.mjs"
+ORGANIZER_LINK_RUNNER_PATH = "scripts/run_organizer_link_gate.mjs"
+ORGANIZER_LINK_VERIFIER_PATH = "scripts/verify_organizer_link_audit.mjs"
+ORGANIZER_G12_AUDIT_PATH = (
+    "release/organizer/G12_RENDERED_LINK_AUDIT.json"
+)
+ORGANIZER_G13_AUDIT_PATH = (
+    "release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json"
+)
+_ORGANIZER_DASHBOARD_ROUTE_IDS = (
+    "overview",
+    "proposals",
+    "approvals",
+    "council_chamber",
+    "evidence",
+    "proof_center",
+    "judge_walkthrough",
+    "judge_recording",
+    "runs_replay",
+    "record",
+    "technical_jury_note",
+)
+_ORGANIZER_PROOF_TAB_IDS = ("summary", "safety", "onchain", "data", "exports")
 _G1_FREEZE_MANIFEST_PATH = "handoff/G1_FREEZE_MANIFEST.json"
 _G1_FREEZE_ANNOTATION = "Concordia finals G1 interface freeze v2.0-A\n"
 
@@ -2483,10 +2510,12 @@ def _assert_release_only_history(
         *RECEIPT_PATHS.values(),
         *PROOF_RECEIPT_PATHS.values(),
         NPM_CAPTURE_PATH,
+        ORGANIZER_G12_AUDIT_PATH,
         RELEASE_MANIFEST_PATH,
         G13_SUBMISSION_RECEIPT_PATH,
         G13_BROWSER_RECEIPT_PATH,
         G13_BROWSER_TRACE_PATH,
+        ORGANIZER_G13_AUDIT_PATH,
         "release/g13/DORAHACKS_SUBMISSION.png",
         "release/g13/FINAL_LINK_AUDIT.json",
         "release/g13/YOUTUBE_DESCRIPTION.txt",
@@ -7741,12 +7770,298 @@ def _assert_unchanged(root: Path, bound: _BoundFile, limit: int) -> None:
         raise ReleaseManifestError(f"{bound.path} changed during release assembly")
 
 
+def _validate_organizer_link_audit_document(
+    document: Mapping[str, object],
+    *,
+    phase: str,
+) -> dict[str, object]:
+    """Validate the stable release-qualification projection.
+
+    The complete nested browser evidence is independently replayed by the
+    locked Node verifier.  This Python layer freezes the cross-gate fields and
+    refuses any test fixture or operator-authored success projection.
+    """
+
+    expected_keys = {
+        "schema_version",
+        "verdict",
+        "release_qualified",
+        "collection_mode",
+        "started_at",
+        "captured_at",
+        "request_sha256",
+        "runtime",
+        "inventory",
+        "summary",
+        "dashboard_routes",
+        "proof_tabs",
+        "links",
+    }
+    if set(document) != expected_keys:
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link audit schema is not exact"
+        )
+    if (
+        document.get("schema_version") != ORGANIZER_LINK_AUDIT_SCHEMA_VERSION
+        or document.get("verdict") != "PASS"
+        or document.get("release_qualified") is not True
+        or document.get("collection_mode") != "live_incognito"
+    ):
+        raise ReleaseManifestError(
+            f"{phase} only a live-incognito PASS is qualifying release evidence"
+        )
+    _, started = _parse_timestamp(
+        document.get("started_at"), f"{phase} organizer audit start"
+    )
+    captured_at, captured = _parse_timestamp(
+        document.get("captured_at"), f"{phase} organizer audit capture"
+    )
+    if captured < started:
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link chronology differs"
+        )
+    _hash32(
+        document.get("request_sha256"),
+        f"{phase} organizer request SHA-256",
+    )
+    runtime = _mapping(document.get("runtime"), f"{phase} organizer runtime")
+    if set(runtime) != {
+        "node",
+        "playwright",
+        "chromium",
+        "chromium_executable_sha256",
+    }:
+        raise ReleaseManifestError(
+            f"{phase} organizer runtime inventory differs"
+        )
+    for name in ("node", "playwright", "chromium"):
+        if len(_text(runtime.get(name), f"{phase} organizer {name}")) > 160:
+            raise ReleaseManifestError(
+                f"{phase} organizer runtime value is malformed"
+            )
+    _hash32(
+        runtime.get("chromium_executable_sha256"),
+        f"{phase} organizer Chromium SHA-256",
+    )
+    inventory = _mapping(
+        document.get("inventory"),
+        f"{phase} organizer inventory",
+    )
+    if set(inventory) != {
+        "dashboard_route_ids",
+        "proof_tab_ids",
+        "known_link_ids",
+    }:
+        raise ReleaseManifestError(
+            f"{phase} organizer inventory schema is not exact"
+        )
+    route_ids = [
+        _text(value, f"{phase} organizer route ID")
+        for value in _sequence(
+            inventory.get("dashboard_route_ids"),
+            f"{phase} organizer route IDs",
+        )
+    ]
+    proof_tab_ids = [
+        _text(value, f"{phase} organizer Proof tab ID")
+        for value in _sequence(
+            inventory.get("proof_tab_ids"),
+            f"{phase} organizer Proof tab IDs",
+        )
+    ]
+    known_link_ids = [
+        _text(value, f"{phase} organizer known-link ID")
+        for value in _sequence(
+            inventory.get("known_link_ids"),
+            f"{phase} organizer known-link IDs",
+        )
+    ]
+    if (
+        tuple(route_ids) != _ORGANIZER_DASHBOARD_ROUTE_IDS
+        or tuple(proof_tab_ids) != _ORGANIZER_PROOF_TAB_IDS
+        or len(known_link_ids) != 17
+        or len(set(known_link_ids)) != 17
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link inventory differs"
+        )
+    summary = _mapping(document.get("summary"), f"{phase} organizer summary")
+    if set(summary) != {
+        "dashboard_route_states",
+        "proof_tabs",
+        "unique_links",
+        "blocked_non_read_requests",
+        "console_errors",
+        "page_errors",
+        "first_party_failures",
+        "blocked_websockets",
+        "client_downloads",
+    }:
+        raise ReleaseManifestError(
+            f"{phase} organizer summary schema is not exact"
+        )
+    if (
+        summary.get("dashboard_route_states") != len(route_ids)
+        or summary.get("proof_tabs") != len(proof_tab_ids)
+        or summary.get("unique_links") < len(known_link_ids)
+        or any(
+            summary.get(name) != 0
+            for name in (
+                "blocked_non_read_requests",
+                "console_errors",
+                "page_errors",
+                "first_party_failures",
+                "blocked_websockets",
+            )
+        )
+        or type(summary.get("client_downloads")) is not int
+        or summary["client_downloads"] < 0
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link summary is not qualifying"
+        )
+    routes = _sequence(
+        document.get("dashboard_routes"), f"{phase} organizer routes"
+    )
+    tabs = _sequence(document.get("proof_tabs"), f"{phase} organizer tabs")
+    links = _sequence(document.get("links"), f"{phase} organizer links")
+    if (
+        len(routes) != len(route_ids)
+        or len(tabs) != len(proof_tab_ids)
+        or len(links) != summary["unique_links"]
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link evidence census differs"
+        )
+    return {
+        "schema_version": ORGANIZER_LINK_AUDIT_SCHEMA_VERSION,
+        "verdict": "PASS",
+        "release_qualified": True,
+        "collection_mode": "live_incognito",
+        "captured_at": captured_at,
+    }
+
+
+def _default_organizer_link_audit_verifier(
+    root: Path,
+    audit: _BoundFile,
+) -> dict[str, object]:
+    result = _run(
+        root,
+        [
+            "node",
+            str(root / ORGANIZER_LINK_VERIFIER_PATH),
+            str(root / audit.path),
+        ],
+        limit=_CONTROL_LIMIT,
+        timeout=60,
+        repository_root=root,
+        bound_data_inputs=(root / audit.path,),
+    )
+    document, canonical = _strict_json(
+        result.stdout,
+        "organizer rendered-link verifier output",
+    )
+    if result.stdout != canonical:
+        raise ReleaseManifestError(
+            "organizer rendered-link verifier output is not canonical JSON"
+        )
+    return document
+
+
+def _organizer_link_audit_verifier_factory(_root: Path) -> object:
+    return _default_organizer_link_audit_verifier
+
+
+def _organizer_link_audit_binding(
+    root: Path,
+    *,
+    path: str,
+    phase: str,
+    artifact_commit: str | None = None,
+) -> tuple[_BoundFile, dict[str, object]]:
+    audit = _load_immutable_bound_file(
+        root,
+        path,
+        _VERIFIER_ARCHIVE_LIMIT,
+        artifact_commit=artifact_commit,
+    )
+    document, canonical = _strict_json(
+        audit.raw,
+        f"{phase} organizer rendered-link audit",
+    )
+    if audit.raw != canonical:
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link audit is not canonical JSON"
+        )
+    stable = _validate_organizer_link_audit_document(document, phase=phase)
+    request = _load_bound_file(
+        root,
+        ORGANIZER_LINK_REQUEST_PATH,
+        _CONTROL_LIMIT,
+    )
+    request_document, _ = _strict_json(
+        request.raw,
+        f"{phase} organizer request",
+    )
+    request_digest = hashlib.sha256(
+        _canonical_json(request_document).removesuffix(b"\n")
+    ).hexdigest()
+    if document.get("request_sha256") != request_digest:
+        raise ReleaseManifestError(
+            f"{phase} organizer request binding differs"
+        )
+    source_bounds = [
+        request,
+        _load_bound_file(root, ORGANIZER_LINK_CORE_PATH, _CONTROL_LIMIT),
+        _load_bound_file(root, ORGANIZER_LINK_RUNNER_PATH, _CONTROL_LIMIT),
+        _load_bound_file(root, ORGANIZER_LINK_VERIFIER_PATH, _CONTROL_LIMIT),
+    ]
+    if any(
+        not _is_ancestor(root, source.artifact_commit, audit.artifact_commit)
+        for source in source_bounds
+    ):
+        raise ReleaseManifestError(
+            f"{phase} organizer collector does not precede its audit"
+        )
+    verified = _mapping(
+        _organizer_link_audit_verifier_factory(root)(root, audit),
+        f"{phase} organizer verifier projection",
+    )
+    expected_verified = {
+        "schema_version": ORGANIZER_LINK_AUDIT_SCHEMA_VERSION,
+        "verdict": "PASS",
+        "release_qualified": True,
+        "collection_mode": "live_incognito",
+        "audit_sha256": audit.sha256,
+    }
+    if verified != expected_verified:
+        raise ReleaseManifestError(
+            f"{phase} organizer rendered-link verifier disagrees"
+        )
+    return audit, {
+        "path": path,
+        "sha256": audit.sha256,
+        "artifact_commit": audit.artifact_commit,
+        **stable,
+        "source_bindings": [
+            {
+                "path": source.path,
+                "sha256": source.sha256,
+                "artifact_commit": source.artifact_commit,
+            }
+            for source in source_bounds
+        ],
+    }
+
+
 def _gate_evidence_map(
     *,
     command_gates: Mapping[str, Mapping[str, object]],
     observations: Sequence[Mapping[str, object]],
     proofs: Sequence[Mapping[str, object]],
     npm_capture: _BoundFile,
+    organizer_audit: Mapping[str, object],
 ) -> list[dict[str, object]]:
     references: dict[tuple[str, str], dict[str, object]] = {}
     for gate_id, binding in command_gates.items():
@@ -7781,6 +8096,13 @@ def _gate_evidence_map(
         "path": NPM_CAPTURE_PATH,
         "sha256": npm_capture.sha256,
         "artifact_commit": npm_capture.artifact_commit,
+    }
+    references[("browser_audit", "organizer_rendered_links")] = {
+        "kind": "browser_audit",
+        "evidence_id": "organizer_rendered_links",
+        "path": organizer_audit["path"],
+        "sha256": organizer_audit["sha256"],
+        "artifact_commit": organizer_audit["artifact_commit"],
     }
 
     all_proofs = tuple(("proof", proof_id) for proof_id in sorted(PROOF_RECEIPT_PATHS))
@@ -7852,7 +8174,13 @@ def _gate_evidence_map(
         ),
         (
             "G12",
-            (*all_commands, *all_observations, *all_proofs, ("capture", "npm_tarball")),
+            (
+                *all_commands,
+                *all_observations,
+                *all_proofs,
+                ("capture", "npm_tarball"),
+                ("browser_audit", "organizer_rendered_links"),
+            ),
         ),
     )
     result: list[dict[str, object]] = []
@@ -7871,6 +8199,7 @@ def _gate_evidence_map(
         {
             "gate_id": "G13",
             "required_receipt_path": G13_SUBMISSION_RECEIPT_PATH,
+            "required_rendered_link_audit_path": ORGANIZER_G13_AUDIT_PATH,
             "status": "pending_external",
         }
     )
@@ -7913,6 +8242,7 @@ def _validate_g12_manifest_offline(
         "observation_receipts",
         "proof_verifier_receipts",
         "npm_tarball_capture",
+        "organizer_rendered_link_audit",
         "recheck",
         "artifacts",
         "services",
@@ -8139,6 +8469,36 @@ def _validate_g12_manifest_offline(
     ) or hashlib.sha256(replayed_tarball).hexdigest() != npm_capture.sha256:
         raise ReleaseManifestError("G12 npm tarball capture differs")
 
+    claimed_organizer = _mapping(
+        manifest.get("organizer_rendered_link_audit"),
+        "G12 organizer rendered-link binding",
+    )
+    _, organizer_projection = _organizer_link_audit_binding(
+        root,
+        path=ORGANIZER_G12_AUDIT_PATH,
+        phase="G12",
+        artifact_commit=(
+            _text(
+                claimed_organizer.get("artifact_commit"),
+                "G12 organizer audit artifact commit",
+            )
+            if manifest_commit is not None
+            else None
+        ),
+    )
+    if claimed_organizer != organizer_projection:
+        raise ReleaseManifestError(
+            "G12 organizer rendered-link audit binding differs"
+        )
+    _, organizer_time = _parse_timestamp(
+        organizer_projection.get("captured_at"),
+        "G12 organizer rendered-link capture",
+    )
+    if not capture_time <= organizer_time <= generated_time:
+        raise ReleaseManifestError(
+            "G12 organizer rendered-link chronology differs"
+        )
+
     expected_artifacts = [
         {
             "artifact_id": artifact.artifact_id,
@@ -8160,6 +8520,7 @@ def _validate_g12_manifest_offline(
         observations=observation_bindings,
         proofs=proof_bindings,
         npm_capture=npm_capture,
+        organizer_audit=organizer_projection,
     )
     if manifest.get("gate_evidence") != expected_gates:
         raise ReleaseManifestError("G12 gate evidence map differs")
@@ -8430,6 +8791,12 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
     ):
         raise ReleaseManifestError("committed npm tarball differs from capture receipt")
     receipt_bounds.append(npm_capture)
+    organizer_bound, organizer_projection = _organizer_link_audit_binding(
+        root,
+        path=ORGANIZER_G12_AUDIT_PATH,
+        phase="G12",
+    )
+    receipt_bounds.append(organizer_bound)
 
     recheck_snapshot = _collector_factory(root).collect()
     final_now = _utc_now()
@@ -8447,6 +8814,14 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
         raise ReleaseManifestError("npm tarball bytes changed during release recheck")
     if final_now - capture_time > _RECEIPT_MAX_AGE or capture_time > final_now:
         raise ReleaseManifestError("committed observation receipt is stale")
+    _, organizer_time = _parse_timestamp(
+        organizer_projection.get("captured_at"),
+        "G12 organizer rendered-link capture",
+    )
+    if not capture_time <= organizer_time <= final_now:
+        raise ReleaseManifestError(
+            "G12 organizer rendered-link chronology differs"
+        )
     _compare_recheck(
         captured,
         rechecked,
@@ -8501,6 +8876,7 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
         observations=receipt_bindings,
         proofs=proof_bindings,
         npm_capture=npm_capture,
+        organizer_audit=organizer_projection,
     )
     command_gate_replays = [
         {
@@ -8534,6 +8910,7 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
             "sha256": npm_capture.sha256,
             "artifact_commit": npm_capture.artifact_commit,
         },
+        "organizer_rendered_link_audit": organizer_projection,
         "recheck": {
             "observed_at": recheck_snapshot.observed_at,
             "surfaces": recheck_surfaces,
@@ -9691,6 +10068,7 @@ def _verify_g13_submission_receipt_locked(
         "status",
         "captured_at",
         "g12_manifest",
+        "organizer_rendered_link_audit",
         "browser_receipt",
         "youtube",
         "dorahacks",
@@ -9751,6 +10129,7 @@ def _verify_g13_submission_receipt_locked(
     if not gates or gates[-1] != {
         "gate_id": "G13",
         "required_receipt_path": G13_SUBMISSION_RECEIPT_PATH,
+        "required_rendered_link_audit_path": ORGANIZER_G13_AUDIT_PATH,
         "status": "pending_external",
     }:
         raise ReleaseManifestError(
@@ -9785,11 +10164,38 @@ def _verify_g13_submission_receipt_locked(
         "BROWSER_TRACE.json",
         "DORAHACKS_SUBMISSION.png",
         "FINAL_LINK_AUDIT.json",
+        "ORGANIZER_RENDERED_LINK_AUDIT.json",
         "YOUTUBE_DESCRIPTION.txt",
         "YOUTUBE_INCOGNITO.png",
     }
     if _repository_directory_names(root, "release/g13") != expected_g13_files:
         raise ReleaseManifestError("G13 support-file inventory differs")
+
+    organizer_bound = _g13_support_file(
+        root,
+        row=_mapping(
+            receipt.get("organizer_rendered_link_audit"),
+            "G13 organizer rendered-link audit binding",
+        ),
+        label="G13 organizer rendered-link audit",
+        expected_path=ORGANIZER_G13_AUDIT_PATH,
+        receipt_commit=receipt_bound.artifact_commit,
+        limit=_CONTROL_LIMIT,
+        canaries=canaries,
+    )
+    rebound_organizer, organizer_projection = _organizer_link_audit_binding(
+        root,
+        path=ORGANIZER_G13_AUDIT_PATH,
+        phase="G13",
+        artifact_commit=receipt_bound.artifact_commit,
+    )
+    if (
+        organizer_bound.sha256 != rebound_organizer.sha256
+        or organizer_projection.get("captured_at") != captured_at
+    ):
+        raise ReleaseManifestError(
+            "G13 organizer rendered-link audit identity differs"
+        )
 
     browser_bound = _g13_support_file(
         root,
@@ -10110,6 +10516,10 @@ def _verify_g13_submission_receipt_locked(
         *_sequence(manifest.get("observation_receipts"), "G12 observations"),
         *_sequence(manifest.get("proof_verifier_receipts"), "G12 proofs"),
         _mapping(manifest.get("npm_tarball_capture"), "G12 npm capture"),
+        _mapping(
+            manifest.get("organizer_rendered_link_audit"),
+            "G12 organizer rendered-link audit",
+        ),
     ]
     immutable_receipt_commits = {
         _text(item.get("path"), "G12 receipt path"): _text(

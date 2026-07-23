@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 
 export const REQUEST_SCHEMA =
-  "concordia.organizer_rendered_link_request.v1";
+  "concordia.organizer_rendered_link_request.v2";
 export const RESULT_SCHEMA =
-  "concordia.organizer_rendered_link_audit.v1";
+  "concordia.organizer_rendered_link_audit.v2";
 export const APP_ORIGIN =
   "https://concordia.47.84.232.193.sslip.io";
 export const DOCS_ORIGIN = "https://docs.concordiadao.xyz";
@@ -26,18 +26,33 @@ const CASPER_DEPLOYS = Object.freeze({
     "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
 });
 
-function knownLink(url, allowedRedirects = []) {
+function knownLink(url, allowedRedirects = [], identity = null) {
   return Object.freeze({
     url,
     allowed_redirects: Object.freeze(
       allowedRedirects.map((row) => Object.freeze({ ...row })),
     ),
+    identity: identity === null ? null : Object.freeze({ ...identity }),
   });
 }
 
 export const KNOWN_LINKS = Object.freeze({
-  custom_apex: knownLink("https://concordiadao.xyz/"),
-  custom_www: knownLink("https://www.concordiadao.xyz/"),
+  custom_apex: knownLink(
+    "https://concordiadao.xyz/",
+    [],
+    { kind: "concordia_home" },
+  ),
+  custom_www: knownLink(
+    "https://www.concordiadao.xyz/",
+    [
+      {
+        from: "https://www.concordiadao.xyz/",
+        to: "https://concordiadao.xyz/",
+        status: 308,
+      },
+    ],
+    { kind: "concordia_home" },
+  ),
   docs_root: knownLink(`${DOCS_ORIGIN}/`),
   docs_judge_quickstart_anchor: knownLink(
     `${DOCS_ORIGIN}/judge-walkthrough/#judge-walkthrough`,
@@ -182,6 +197,7 @@ function route(
   pathname,
   expectedQuery = {},
   activeProofTab = null,
+  expectedDom = {},
 ) {
   const url = new URL(pathname, APP_ORIGIN);
   for (const [key, value] of Object.entries(expectedQuery)) {
@@ -192,25 +208,67 @@ function route(
     url: url.href,
     expected_query: Object.freeze({ ...expectedQuery }),
     active_proof_tab: activeProofTab,
+    expected_dom: Object.freeze({
+      active_navigation_path:
+        expectedDom.active_navigation_path === undefined
+          ? url.pathname
+          : expectedDom.active_navigation_path,
+      primary_headings: Object.freeze([
+        ...(expectedDom.primary_headings ?? ["*"]),
+      ]),
+    }),
     allowed_redirects: Object.freeze([]),
   });
 }
 
 export function buildInventory() {
   const dashboardRoutes = [
-    route("overview", "/dashboard"),
-    route("proposals", "/dashboard/proposals", {
-      proposal: PROPOSAL_ID,
+    route("overview", "/dashboard", {}, null, {
+      primary_headings: ["Concordia DAO Council"],
     }),
-    route("approvals", "/dashboard/approvals"),
-    route("council_chamber", "/dashboard/agents"),
-    route("evidence", "/dashboard/evidence"),
-    route("proof_center", "/dashboard/proof"),
-    route("judge_walkthrough", "/dashboard/judge"),
-    route("judge_recording", "/dashboard/judge", { recording: "1" }),
-    route("runs_replay", "/dashboard/runs"),
-    route("record", "/dashboard/record"),
-    route("technical_jury_note", "/dashboard/technical-jury-note"),
+    route(
+      "proposals",
+      "/dashboard/proposals",
+      { proposal: PROPOSAL_ID },
+      null,
+      { primary_headings: ["*"] },
+    ),
+    route("approvals", "/dashboard/approvals", {}, null, {
+      primary_headings: ["Review Exact Governance execution"],
+    }),
+    route("council_chamber", "/dashboard/agents", {}, null, {
+      primary_headings: ["Council Chamber"],
+    }),
+    route("evidence", "/dashboard/evidence", {}, null, {
+      primary_headings: ["Evidence & Audit"],
+    }),
+    route("proof_center", "/dashboard/proof", {}, null, {
+      primary_headings: ["Proof Center"],
+    }),
+    route("judge_walkthrough", "/dashboard/judge", {}, null, {
+      primary_headings: ["Judge Walkthrough"],
+    }),
+    route(
+      "judge_recording",
+      "/dashboard/judge",
+      { recording: "1" },
+      null,
+      {
+        active_navigation_path: "/dashboard/judge",
+        primary_headings: ["90-second Concordia proof path"],
+      },
+    ),
+    route("runs_replay", "/dashboard/runs", {}, null, {
+      primary_headings: ["Runs & Verified Replay", "Runs & Recorded Replay"],
+    }),
+    route("record", "/dashboard/record", {}, null, {
+      active_navigation_path: "/dashboard/judge",
+      primary_headings: ["90-second Concordia proof path"],
+    }),
+    route("technical_jury_note", "/dashboard/technical-jury-note", {}, null, {
+      active_navigation_path: null,
+      primary_headings: ["Technical Jury Note"],
+    }),
   ];
   const proofTabs = ["summary", "safety", "onchain", "data", "exports"].map(
     (tabId) =>
@@ -220,6 +278,10 @@ export function buildInventory() {
           "/dashboard/proof",
           { proposal: PROPOSAL_ID, tab: tabId },
           tabId,
+          {
+            active_navigation_path: "/dashboard/proof",
+            primary_headings: ["Proof Center"],
+          },
         ),
         tab_id: tabId,
       }),
@@ -257,6 +319,7 @@ function expectedRequest() {
       link_id,
       url: link.url,
       allowed_redirects: clone(link.allowed_redirects),
+      identity: clone(link.identity),
     })),
   };
 }
@@ -364,15 +427,101 @@ function redirectsMatch(actual, expected) {
 
 function validateQuery(spec, finalUrl) {
   const parsed = strictPublicUrl(finalUrl, `${spec.route_id} final URL`);
-  for (const [key, value] of Object.entries(spec.expected_query)) {
-    if (parsed.searchParams.get(key) !== value) {
+  const actual = [...parsed.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue),
+  );
+  const expected = Object.entries(spec.expected_query).sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue),
+  );
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    fail(
+      "QUERY_STATE_LOST",
+      `${spec.route_id} did not preserve the exact query multiset`,
+    );
+  }
+  return parsed;
+}
+
+function validateRouteIdentity(spec, observation) {
+  const identity = observation.route_identity;
+  exactKeys(
+    identity,
+    [
+      "brand_text",
+      "active_navigation_path",
+      "primary_heading",
+      "active_tab_id",
+      "active_tabpanel_id",
+    ],
+    "ROUTE_DOM_IDENTITY_MISMATCH",
+    `${spec.route_id} DOM identity`,
+  );
+  const headings = spec.expected_dom.primary_headings;
+  const headingMatches =
+    typeof identity.primary_heading === "string" &&
+    identity.primary_heading.trim() !== "" &&
+    (headings.includes("*") || headings.includes(identity.primary_heading));
+  const expectedPanel =
+    spec.active_proof_tab === null
+      ? null
+      : `proof-tabpanel-${spec.active_proof_tab}`;
+  if (
+    identity.brand_text !== "Concordia DAO Council" ||
+    identity.active_navigation_path !==
+      spec.expected_dom.active_navigation_path ||
+    !headingMatches ||
+    identity.active_tab_id !== spec.active_proof_tab ||
+    identity.active_tabpanel_id !== expectedPanel
+  ) {
+    fail(
+      "ROUTE_DOM_IDENTITY_MISMATCH",
+      `${spec.route_id} rendered the wrong route-specific DOM`,
+    );
+  }
+}
+
+function validateClientDownloads(spec, observation) {
+  if (
+    !Array.isArray(observation.rendered_download_controls) ||
+    !Array.isArray(observation.client_downloads)
+  ) {
+    fail(
+      "OBSERVATION_FIELDS_INVALID",
+      `${spec.route_id} lacks client-download evidence`,
+    );
+  }
+  const expectedIds = observation.rendered_download_controls.map(
+    (row) => row.control_id,
+  );
+  const observedIds = observation.client_downloads.map(
+    (row) => row.control_id,
+  );
+  if (
+    expectedIds.length !== new Set(expectedIds).size ||
+    observedIds.length !== new Set(observedIds).size ||
+    canonicalJson([...expectedIds].sort()) !==
+      canonicalJson([...observedIds].sort())
+  ) {
+    fail(
+      "CLIENT_DOWNLOAD_MISSING",
+      `${spec.route_id} did not capture every rendered client download`,
+    );
+  }
+  for (const row of observation.client_downloads) {
+    if (
+      typeof row.suggested_filename !== "string" ||
+      row.suggested_filename.trim() === "" ||
+      !Number.isInteger(row.body_bytes) ||
+      row.body_bytes <= 0 ||
+      typeof row.body_sha256 !== "string" ||
+      !HEX_64.test(row.body_sha256)
+    ) {
       fail(
-        "QUERY_STATE_LOST",
-        `${spec.route_id} did not preserve query parameter ${key}`,
+        "CLIENT_DOWNLOAD_INVALID",
+        `${spec.route_id} has invalid client-download evidence`,
       );
     }
   }
-  return parsed;
 }
 
 export function validateRouteObservation(spec, observation) {
@@ -404,6 +553,20 @@ export function validateRouteObservation(spec, observation) {
     fail(
       "PROOF_TAB_NOT_ACTIVE",
       `${spec.route_id} did not activate ${spec.active_proof_tab}`,
+    );
+  }
+  validateRouteIdentity(spec, observation);
+  validateClientDownloads(spec, observation);
+  if (!Array.isArray(observation.blocked_websockets)) {
+    fail(
+      "OBSERVATION_FIELDS_INVALID",
+      `${spec.route_id} lacks WebSocket guard evidence`,
+    );
+  }
+  if (observation.blocked_websockets.length > 0) {
+    fail(
+      "WEBSOCKET_ATTEMPT",
+      `${spec.route_id} attempted a bidirectional WebSocket connection`,
     );
   }
   for (const [field, code] of [
@@ -468,13 +631,40 @@ export function validateLinkObservation(spec, observation) {
   }
   const requested = new URL(spec.url);
   if (
-    requested.origin === DOCS_ORIGIN &&
+    [APP_ORIGIN, DOCS_ORIGIN].includes(requested.origin) &&
     requested.hash &&
     observation.anchor_found !== true
   ) {
     fail(
-      "MISSING_DOC_ANCHOR",
-      `${spec.link_id} documentation anchor is absent`,
+      requested.origin === DOCS_ORIGIN
+        ? "MISSING_DOC_ANCHOR"
+        : "MISSING_DOCUMENT_ANCHOR",
+      `${spec.link_id} cross-document anchor is absent`,
+    );
+  }
+  const expectedIdentity = spec.identity ?? null;
+  if (expectedIdentity !== null) {
+    if (
+      expectedIdentity.kind !== "concordia_home" ||
+      canonicalJson(observation.concordia_identity) !==
+        canonicalJson({
+          kind: "concordia_home",
+          title_match: true,
+          visible_marker_match: true,
+        })
+    ) {
+      fail(
+        "CONCORDIA_IDENTITY_MISMATCH",
+        `${spec.link_id} did not render the Concordia home identity`,
+      );
+    }
+  } else if (
+    observation.concordia_identity !== undefined &&
+    observation.concordia_identity !== null
+  ) {
+    fail(
+      "CONCORDIA_IDENTITY_MISMATCH",
+      `${spec.link_id} has unexpected identity evidence`,
     );
   }
   return clone(observation);
@@ -581,7 +771,6 @@ export function buildResult({
       );
       if (
         classified.kind !== "document_anchor" &&
-        classified.kind !== "external_asset" &&
         !checkedUrls.has(classified.url)
       ) {
         fail(
@@ -595,7 +784,9 @@ export function buildResult({
     allPages.reduce((total, row) => total + row[field].length, 0);
   const result = {
     schema_version: RESULT_SCHEMA,
-    verdict: "PASS",
+    verdict:
+      collectionMode === "live_incognito" ? "PASS" : "NON_QUALIFYING",
+    release_qualified: collectionMode === "live_incognito",
     collection_mode: collectionMode,
     started_at: startedAt,
     captured_at: capturedAt,
@@ -618,12 +809,60 @@ export function buildResult({
       console_errors: sum("console_errors"),
       page_errors: sum("page_errors"),
       first_party_failures: sum("first_party_failures"),
+      blocked_websockets: sum("blocked_websockets"),
+      client_downloads: sum("client_downloads"),
     },
     dashboard_routes: validatedRoutes,
     proof_tabs: validatedTabs,
     links: validatedLinks,
   };
   return result;
+}
+
+export function validateResultDocument(value) {
+  exactKeys(
+    value,
+    [
+      "schema_version",
+      "verdict",
+      "release_qualified",
+      "collection_mode",
+      "started_at",
+      "captured_at",
+      "request_sha256",
+      "runtime",
+      "inventory",
+      "summary",
+      "dashboard_routes",
+      "proof_tabs",
+      "links",
+    ],
+    "RESULT_DOCUMENT_INVALID",
+    "organizer rendered-link audit",
+  );
+  if (value.schema_version !== RESULT_SCHEMA) {
+    fail(
+      "RESULT_DOCUMENT_INVALID",
+      "organizer rendered-link audit schema differs",
+    );
+  }
+  const rebuilt = buildResult({
+    request: expectedRequest(),
+    routes: value.dashboard_routes,
+    proof_tabs: value.proof_tabs,
+    links: value.links,
+    runtime: value.runtime,
+    started_at: value.started_at,
+    captured_at: value.captured_at,
+    collection_mode: value.collection_mode,
+  });
+  if (canonicalJson(rebuilt) !== canonicalJson(value)) {
+    fail(
+      "RESULT_DOCUMENT_INVALID",
+      "organizer rendered-link audit is not self-consistent",
+    );
+  }
+  return clone(rebuilt);
 }
 
 export default Object.freeze({
@@ -640,5 +879,6 @@ export default Object.freeze({
   classifyRenderedTarget,
   validateLinkObservation,
   validateRequest,
+  validateResultDocument,
   validateRouteObservation,
 });

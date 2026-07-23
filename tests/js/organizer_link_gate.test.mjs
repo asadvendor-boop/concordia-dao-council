@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
@@ -12,6 +13,10 @@ const testRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testRoot, "../..");
 const corePath = path.join(repositoryRoot, "scripts/organizer-link-gate-core.mjs");
 const runnerPath = path.join(repositoryRoot, "scripts/run_organizer_link_gate.mjs");
+const verifierPath = path.join(
+  repositoryRoot,
+  "scripts/verify_organizer_link_audit.mjs",
+);
 const requestPath = path.join(
   repositoryRoot,
   "handoff/ORGANIZER_LINK_GATE_REQUEST.json",
@@ -34,6 +39,7 @@ test("the pure core exposes the fail-closed audit contract", () => {
     "validateRouteObservation",
     "validateLinkObservation",
     "buildResult",
+    "validateResultDocument",
   ]) {
     assert.equal(typeof gate[name], "function", `${name} must be a function`);
   }
@@ -51,6 +57,8 @@ function expectedRequest() {
         link_id,
         url: link.url,
         allowed_redirects: [...link.allowed_redirects],
+        identity:
+          link.identity === null ? null : structuredClone(link.identity),
       }),
     ),
   };
@@ -186,6 +194,19 @@ function passingRouteObservation(spec) {
     rendered_assets: [],
     document_ids: ["top"],
     document_names: [],
+    route_identity: {
+      brand_text: "Concordia DAO Council",
+      active_navigation_path: spec.expected_dom.active_navigation_path,
+      primary_heading: spec.expected_dom.primary_headings[0],
+      active_tab_id: spec.active_proof_tab,
+      active_tabpanel_id:
+        spec.active_proof_tab === null
+          ? null
+          : `proof-tabpanel-${spec.active_proof_tab}`,
+    },
+    rendered_download_controls: [],
+    client_downloads: [],
+    blocked_websockets: [],
   };
 }
 
@@ -198,6 +219,18 @@ test("route observations fail closed on query loss, wrong tabs, browser errors, 
   proposalObservation.final_url = `${gate.APP_ORIGIN}/dashboard/proposals`;
   expectFailure("QUERY_STATE_LOST", () =>
     gate.validateRouteObservation(proposalRoute, proposalObservation),
+  );
+
+  const extraAllowedQuery = passingRouteObservation(proposalRoute);
+  extraAllowedQuery.final_url = `${proposalRoute.url}&tab=safety`;
+  expectFailure("QUERY_STATE_LOST", () =>
+    gate.validateRouteObservation(proposalRoute, extraAllowedQuery),
+  );
+
+  const wrongRouteIdentity = passingRouteObservation(proposalRoute);
+  wrongRouteIdentity.route_identity.active_navigation_path = "/dashboard/proof";
+  expectFailure("ROUTE_DOM_IDENTITY_MISMATCH", () =>
+    gate.validateRouteObservation(proposalRoute, wrongRouteIdentity),
   );
 
   const tabSpec = inventory.proof_tabs.find((tab) => tab.tab_id === "onchain");
@@ -239,6 +272,26 @@ test("route observations fail closed on query loss, wrong tabs, browser errors, 
   ];
   expectFailure("DOUBLED_BASE_PATH", () =>
     gate.validateRouteObservation(overview, doubled),
+  );
+
+  const unaccountedDownload = passingRouteObservation(overview);
+  unaccountedDownload.rendered_download_controls = [
+    { control_id: "export-evidence", label: "Export Evidence" },
+  ];
+  expectFailure("CLIENT_DOWNLOAD_MISSING", () =>
+    gate.validateRouteObservation(overview, unaccountedDownload),
+  );
+
+  const websocketAttempt = passingRouteObservation(overview);
+  websocketAttempt.blocked_websockets = [
+    {
+      url_sha256: "1".repeat(64),
+      host: "sdk.cspr.click",
+      disposition: "blocked_before_connect",
+    },
+  ];
+  expectFailure("WEBSOCKET_ATTEMPT", () =>
+    gate.validateRouteObservation(overview, websocketAttempt),
   );
 });
 
@@ -299,6 +352,58 @@ test("link observations require documented redirects, successful bytes, and real
       anchor_found: false,
     }),
   );
+
+  const appFragmentSpec = {
+    link_id: "app_cross_document_fragment",
+    url: `${gate.APP_ORIGIN}/dashboard/proof#proof-tabpanel-summary`,
+    allowed_redirects: [],
+    identity: null,
+  };
+  expectFailure("MISSING_DOCUMENT_ANCHOR", () =>
+    gate.validateLinkObservation(appFragmentSpec, {
+      ...passing,
+      link_id: appFragmentSpec.link_id,
+      requested_url: appFragmentSpec.url,
+      effective_url: appFragmentSpec.url,
+      anchor_found: false,
+    }),
+  );
+});
+
+test("www has one exact tracked 308 to the apex and both surfaces prove Concordia identity", () => {
+  const request = expectedRequest();
+  const www = request.known_links.find((row) => row.link_id === "custom_www");
+  const apex = request.known_links.find((row) => row.link_id === "custom_apex");
+  assert.deepEqual(www.allowed_redirects, [
+    {
+      from: "https://www.concordiadao.xyz/",
+      to: "https://concordiadao.xyz/",
+      status: 308,
+    },
+  ]);
+  assert.deepEqual(www.identity, { kind: "concordia_home" });
+  assert.deepEqual(apex.identity, { kind: "concordia_home" });
+
+  const observation = {
+    link_id: www.link_id,
+    requested_url: www.url,
+    effective_url: "https://concordiadao.xyz/",
+    status: 200,
+    redirects: structuredClone(www.allowed_redirects),
+    body_bytes: 128,
+    body_sha256: "3".repeat(64),
+    anchor_found: null,
+    concordia_identity: {
+      kind: "concordia_home",
+      title_match: true,
+      visible_marker_match: true,
+    },
+  };
+  assert.equal(gate.validateLinkObservation(www, observation).status, 200);
+  observation.concordia_identity.visible_marker_match = false;
+  expectFailure("CONCORDIA_IDENTITY_MISMATCH", () =>
+    gate.validateLinkObservation(www, observation),
+  );
 });
 
 test("canonical output is stable and refuses an incomplete route or Proof-tab census", () => {
@@ -309,12 +414,20 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
   const links = request.known_links.map((spec) => ({
     link_id: spec.link_id,
     requested_url: spec.url,
-    effective_url: spec.url,
+    effective_url: spec.allowed_redirects.at(-1)?.to ?? spec.url,
     status: 200,
-    redirects: [],
+    redirects: structuredClone(spec.allowed_redirects),
     body_bytes: 128,
     body_sha256: "d".repeat(64),
     anchor_found: spec.url.includes("#") ? true : null,
+    concordia_identity:
+      spec.identity === null
+        ? null
+        : {
+            kind: "concordia_home",
+            title_match: true,
+            visible_marker_match: true,
+          },
   }));
   const result = gate.buildResult({
     request,
@@ -331,7 +444,8 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
     captured_at: "2026-07-24T00:01:00.000Z",
     collection_mode: "fixture",
   });
-  assert.equal(result.verdict, "PASS");
+  assert.equal(result.verdict, "NON_QUALIFYING");
+  assert.equal(result.release_qualified, false);
   assert.equal(result.collection_mode, "fixture");
   assert.deepEqual(result.summary, {
     dashboard_route_states: 11,
@@ -341,10 +455,31 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
     console_errors: 0,
     page_errors: 0,
     first_party_failures: 0,
+    blocked_websockets: 0,
+    client_downloads: 0,
   });
   assert.equal(
     gate.canonicalJson(result),
     gate.canonicalJson(structuredClone(result)),
+  );
+  const liveResult = gate.buildResult({
+    request,
+    routes,
+    proof_tabs: proofTabs,
+    links,
+    runtime: result.runtime,
+    started_at: result.started_at,
+    captured_at: result.captured_at,
+    collection_mode: "live_incognito",
+  });
+  assert.equal(liveResult.verdict, "PASS");
+  assert.equal(liveResult.release_qualified, true);
+  assert.deepEqual(gate.validateResultDocument(liveResult), liveResult);
+  const forgedFixtureQualification = structuredClone(result);
+  forgedFixtureQualification.verdict = "PASS";
+  forgedFixtureQualification.release_qualified = true;
+  expectFailure("RESULT_DOCUMENT_INVALID", () =>
+    gate.validateResultDocument(forgedFixtureQualification),
   );
   expectFailure("ROUTE_INVENTORY_INCOMPLETE", () =>
     gate.buildResult({
@@ -370,6 +505,27 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
     gate.buildResult({
       request,
       routes: unprobedRoutes,
+      proof_tabs: proofTabs,
+      links,
+      runtime: result.runtime,
+      started_at: result.started_at,
+      captured_at: result.captured_at,
+      collection_mode: "fixture",
+    }),
+  );
+
+  const externalAssetRoutes = structuredClone(routes);
+  externalAssetRoutes[0].rendered_assets = [
+    {
+      href: "https://cdn.cspr.click/widget.js",
+      element_kind: "asset",
+      download: false,
+    },
+  ];
+  expectFailure("RENDERED_TARGET_UNCHECKED", () =>
+    gate.buildResult({
+      request,
+      routes: externalAssetRoutes,
       proof_tabs: proofTabs,
       links,
       runtime: result.runtime,
@@ -406,6 +562,7 @@ test("canonical output is stable and refuses an incomplete route or Proof-tab ce
 
 test("the locked collector and exact public request are committed as separate release inputs", async () => {
   assert.equal(existsSync(runnerPath), true);
+  assert.equal(existsSync(verifierPath), true);
   assert.equal(existsSync(requestPath), true);
   const request = JSON.parse(
     await import("node:fs/promises").then(({ readFile }) =>
@@ -420,6 +577,73 @@ test("the locked collector and exact public request are committed as separate re
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /--input/);
   assert.match(help.stdout, /stdout/);
+});
+
+test("the offline verifier accepts only a self-consistent live-incognito PASS", async () => {
+  const temporary = await mkdtemp(
+    path.join(os.tmpdir(), "concordia-organizer-link-verify-"),
+  );
+  try {
+    const fixtureRun = spawnSync(
+      process.execPath,
+      [runnerPath, "--input", requestPath, "--fixture", fixturePath],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH },
+      },
+    );
+    assert.equal(fixtureRun.status, 0, fixtureRun.stderr);
+    const fixtureDocument = JSON.parse(fixtureRun.stdout);
+    const liveDocument = gate.buildResult({
+      request: expectedRequest(),
+      routes: fixtureDocument.dashboard_routes,
+      proof_tabs: fixtureDocument.proof_tabs,
+      links: fixtureDocument.links,
+      runtime: fixtureDocument.runtime,
+      started_at: fixtureDocument.started_at,
+      captured_at: fixtureDocument.captured_at,
+      collection_mode: "live_incognito",
+    });
+    const livePath = path.join(temporary, "live.json");
+    const fixtureResultPath = path.join(temporary, "fixture.json");
+    await writeFile(livePath, `${gate.canonicalJson(liveDocument)}\n`);
+    await writeFile(
+      fixtureResultPath,
+      `${gate.canonicalJson(fixtureDocument)}\n`,
+    );
+
+    const accepted = spawnSync(process.execPath, [verifierPath, livePath], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH },
+    });
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.deepEqual(JSON.parse(accepted.stdout), {
+      schema_version: gate.RESULT_SCHEMA,
+      verdict: "PASS",
+      release_qualified: true,
+      collection_mode: "live_incognito",
+      audit_sha256: createHash("sha256")
+        .update(Buffer.from(`${gate.canonicalJson(liveDocument)}\n`))
+        .digest("hex"),
+    });
+
+    const refused = spawnSync(
+      process.execPath,
+      [verifierPath, fixtureResultPath],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH },
+      },
+    );
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /NON_QUALIFYING_AUDIT/u);
+    assert.equal(refused.stdout, "");
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("fixture mode is deterministic, offline, and runs through the same fail-closed validators", async () => {
@@ -446,7 +670,8 @@ test("fixture mode is deterministic, offline, and runs through the same fail-clo
   assert.equal(first.stdout, second.stdout);
   const result = JSON.parse(first.stdout);
   assert.equal(result.collection_mode, "fixture");
-  assert.equal(result.verdict, "PASS");
+  assert.equal(result.verdict, "NON_QUALIFYING");
+  assert.equal(result.release_qualified, false);
   assert.equal(result.summary.dashboard_route_states, 11);
   assert.equal(result.summary.proof_tabs, 5);
 

@@ -38,8 +38,11 @@ does not replace or weaken G12 or G13. Its request file fixes the public
 origins, 11 dashboard route states, five Proof tabs, proposal/recording query
 states, custom-domain and documentation surfaces, repository, DoraHacks,
 initial-round video, socials, and every historical Casper receipt linked to
-judges. The collector also discovers rendered anchors, first-party downloads,
-and first-party assets from the DOM.
+judges. The collector also discovers rendered anchors, client- and server-side
+downloads, and every rendered asset from the DOM. It binds exact route and tab
+identity, exact query-parameter multisets, same-origin cross-document
+fragments, the tracked `www` 308 to the Concordia apex, and blocks WebSockets
+before connection while retaining the attempt as failing evidence.
 
 It fails closed on any non-read application request, invalid URL, doubled
 `/dashboard/dashboard` base path, missing document anchor, undocumented
@@ -53,8 +56,9 @@ Run this against the exact deployed release-candidate SHA before G12:
 ```bash
 mkdir -p release/organizer
 node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
-  > release/organizer/RENDERED_LINK_AUDIT.json
-test "$(jq -r .verdict release/organizer/RENDERED_LINK_AUDIT.json)" = PASS
+  > release/organizer/G12_RENDERED_LINK_AUDIT.json
+node scripts/verify_organizer_link_audit.mjs \
+  release/organizer/G12_RENDERED_LINK_AUDIT.json
 ```
 
 The stdout document is canonical JSON and is the machine-readable G12 link
@@ -66,8 +70,9 @@ again before G13; G13's existing video/embed/link receipt still runs afterward:
 
 ```bash
 node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
-  > release/organizer/RENDERED_LINK_AUDIT_G13.json
-test "$(jq -r .verdict release/organizer/RENDERED_LINK_AUDIT_G13.json)" = PASS
+  > release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json
+node scripts/verify_organizer_link_audit.mjs \
+  release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json
 node scripts/run_g13_submission_gate.mjs --help
 ```
 
@@ -85,9 +90,11 @@ node scripts/run_organizer_link_gate.mjs \
 ```
 
 Fixture mode never launches a browser or opens a network connection. It proves
-the gate mechanics, census, canonical serialization, and refusal paths; it is
-never release evidence and must never be written to either release audit path.
-Only `collection_mode: live_incognito` qualifies for G12/G13.
+the gate mechanics, census, canonical serialization, and refusal paths, but
+returns `verdict: NON_QUALIFYING` and `release_qualified: false`. Fixture output
+is never release evidence and must never be written to either release audit path. Only
+an independently verified `collection_mode: live_incognito`, `verdict: PASS`
+document qualifies for G12/G13.
 
 ## Core proof path
 

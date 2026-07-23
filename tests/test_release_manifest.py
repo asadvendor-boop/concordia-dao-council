@@ -2133,6 +2133,13 @@ def release_repository(
         "shared/secret_variants.py",
     ):
         _write_bytes(repository, relative, (repository_root / relative).read_bytes())
+    for relative in (
+        release_manifest.ORGANIZER_LINK_REQUEST_PATH,
+        release_manifest.ORGANIZER_LINK_CORE_PATH,
+        release_manifest.ORGANIZER_LINK_RUNNER_PATH,
+        release_manifest.ORGANIZER_LINK_VERIFIER_PATH,
+    ):
+        _write_bytes(repository, relative, (repository_root / relative).read_bytes())
     for gate_id, runner_path in COMMAND_GATE_RUNNER_PATHS.items():
         _write_bytes(
             repository,
@@ -2530,6 +2537,24 @@ def release_repository(
         "_g13_link_reprobe_factory",
         lambda _root: replay_fixture_links,
     )
+
+    def replay_fixture_organizer_audit(
+        _root: Path,
+        audit: release_manifest._BoundFile,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": release_manifest.ORGANIZER_LINK_AUDIT_SCHEMA_VERSION,
+            "verdict": "PASS",
+            "release_qualified": True,
+            "collection_mode": "live_incognito",
+            "audit_sha256": audit.sha256,
+        }
+
+    monkeypatch.setattr(
+        release_manifest,
+        "_organizer_link_audit_verifier_factory",
+        lambda _root: replay_fixture_organizer_audit,
+    )
     return (
         repository,
         {
@@ -2544,10 +2569,80 @@ def release_repository(
     )
 
 
+def _write_organizer_link_audit(
+    repository: Path,
+    relative: str,
+    *,
+    captured_at: str,
+) -> bytes:
+    request = json.loads(
+        (repository / release_manifest.ORGANIZER_LINK_REQUEST_PATH).read_bytes()
+    )
+    request_sha256 = hashlib.sha256(
+        _canonical(request).removesuffix(b"\n")
+    ).hexdigest()
+    captured = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+    started_at = (captured - timedelta(seconds=1)).isoformat().replace(
+        "+00:00", "Z"
+    )
+    known_link_ids = [item["link_id"] for item in request["known_links"]]
+    document = {
+        "schema_version": release_manifest.ORGANIZER_LINK_AUDIT_SCHEMA_VERSION,
+        "verdict": "PASS",
+        "release_qualified": True,
+        "collection_mode": "live_incognito",
+        "started_at": started_at,
+        "captured_at": captured_at,
+        "request_sha256": request_sha256,
+        "runtime": {
+            "node": "node-test-1.0",
+            "playwright": "playwright-test-1.0",
+            "chromium": "chromium-test-1.0",
+            "chromium_executable_sha256": "31" * 32,
+        },
+        "inventory": {
+            "dashboard_route_ids": list(
+                release_manifest._ORGANIZER_DASHBOARD_ROUTE_IDS
+            ),
+            "proof_tab_ids": list(release_manifest._ORGANIZER_PROOF_TAB_IDS),
+            "known_link_ids": known_link_ids,
+        },
+        "summary": {
+            "dashboard_route_states": len(
+                release_manifest._ORGANIZER_DASHBOARD_ROUTE_IDS
+            ),
+            "proof_tabs": len(release_manifest._ORGANIZER_PROOF_TAB_IDS),
+            "unique_links": len(known_link_ids),
+            "blocked_non_read_requests": 0,
+            "console_errors": 0,
+            "page_errors": 0,
+            "first_party_failures": 0,
+            "blocked_websockets": 0,
+            "client_downloads": 0,
+        },
+        "dashboard_routes": [
+            {"route_id": route_id}
+            for route_id in release_manifest._ORGANIZER_DASHBOARD_ROUTE_IDS
+        ],
+        "proof_tabs": [
+            {"route_id": f"proof_tab_{tab_id}"}
+            for tab_id in release_manifest._ORGANIZER_PROOF_TAB_IDS
+        ],
+        "links": [{"link_id": link_id} for link_id in known_link_ids],
+    }
+    _write(repository, relative, document)
+    return (repository / relative).read_bytes()
+
+
 def _capture_and_commit(
     repository: Path,
 ) -> str:
     capture_release_observations_once(repository)
+    _write_organizer_link_audit(
+        repository,
+        release_manifest.ORGANIZER_G12_AUDIT_PATH,
+        captured_at="2026-07-23T00:10:26Z",
+    )
     return _commit(repository, "code-collected release observations")
 
 
@@ -2564,6 +2659,7 @@ def _write_g13_submission_receipt(
     audit_path = "release/g13/FINAL_LINK_AUDIT.json"
     browser_receipt_path = release_manifest.G13_BROWSER_RECEIPT_PATH
     browser_trace_path = release_manifest.G13_BROWSER_TRACE_PATH
+    organizer_audit_path = release_manifest.ORGANIZER_G13_AUDIT_PATH
     description = (
         b"Concordia is the constitutional execution firewall for AI-run DAOs on "
         b"Casper. Verify every final receipt at https://concordiadao.xyz/.\n"
@@ -2623,6 +2719,7 @@ def _write_g13_submission_receipt(
             *manifest["observation_receipts"],
             *manifest["proof_verifier_receipts"],
             manifest["npm_tarball_capture"],
+            manifest["organizer_rendered_link_audit"],
         ]
     ]
     receipt_bindings.append(
@@ -2893,8 +2990,20 @@ def _write_g13_submission_receipt(
         browser_receipt["youtube"]["captions_visible"] = False
     _write(repository, browser_receipt_path, browser_receipt)
     browser_receipt_bytes = (repository / browser_receipt_path).read_bytes()
+    organizer_audit_bytes = _write_organizer_link_audit(
+        repository,
+        organizer_audit_path,
+        captured_at=captured_at,
+    )
+    if mutation == "organizer_audit":
+        organizer_audit = json.loads(organizer_audit_bytes)
+        organizer_audit["collection_mode"] = "fixture"
+        organizer_audit["verdict"] = "NON_QUALIFYING"
+        organizer_audit["release_qualified"] = False
+        _write(repository, organizer_audit_path, organizer_audit)
+        organizer_audit_bytes = (repository / organizer_audit_path).read_bytes()
     receipt = {
-        "schema_version": "concordia.g13_submission_receipt.v2",
+        "schema_version": release_manifest.G13_SUBMISSION_RECEIPT_SCHEMA_VERSION,
         "gate_id": "G13",
         "status": "verified",
         "captured_at": captured_at,
@@ -2904,6 +3013,10 @@ def _write_g13_submission_receipt(
             "manifest_commit": manifest_commit,
             "frozen_commit": manifest["frozen_commit"],
             "integration_commit": manifest["integration_commit"],
+        },
+        "organizer_rendered_link_audit": {
+            "path": organizer_audit_path,
+            "sha256": hashlib.sha256(organizer_audit_bytes).hexdigest(),
         },
         "browser_receipt": {
             "path": browser_receipt_path,
@@ -3517,9 +3630,27 @@ def test_manifest_has_one_to_one_g2_through_g12_evidence_and_external_g13(
         reference["path"] == COMMAND_GATE_RECEIPT_PATHS["G11"]
         for reference in gates["G11"]["evidence_refs"]
     )
+    assert manifest["organizer_rendered_link_audit"]["path"] == (
+        release_manifest.ORGANIZER_G12_AUDIT_PATH
+    )
+    assert any(
+        reference == {
+            "kind": "browser_audit",
+            "evidence_id": "organizer_rendered_links",
+            "path": release_manifest.ORGANIZER_G12_AUDIT_PATH,
+            "sha256": manifest["organizer_rendered_link_audit"]["sha256"],
+            "artifact_commit": (
+                manifest["organizer_rendered_link_audit"]["artifact_commit"]
+            ),
+        }
+        for reference in gates["G12"]["evidence_refs"]
+    )
     assert gates["G13"] == {
         "gate_id": "G13",
         "required_receipt_path": G13_SUBMISSION_RECEIPT_PATH,
+        "required_rendered_link_audit_path": (
+            release_manifest.ORGANIZER_G13_AUDIT_PATH
+        ),
         "status": "pending_external",
     }
 
@@ -3576,6 +3707,7 @@ def test_g13_replays_full_g12_semantics_without_live_collection(
         ("solid_png", "blank|visual"),
         ("browser_trace", "browser trace"),
         ("browser_receipt", "browser YouTube"),
+        ("organizer_audit", "live-incognito|qualifying"),
     ],
 )
 def test_g13_verifier_rejects_unbound_or_incomplete_submission_evidence(

@@ -36,8 +36,10 @@ const HELP = `Usage:
   node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json
   node scripts/run_organizer_link_gate.mjs --input handoff/ORGANIZER_LINK_GATE_REQUEST.json --fixture tests/fixtures/organizer-link-gate-pass.json
 
-The collector emits exactly one canonical JSON audit to stdout. Redirect stdout
-to release/organizer/RENDERED_LINK_AUDIT.json only on an exact clean release
+The collector emits exactly one canonical JSON audit to stdout. Redirect a
+live-incognito G12 run to release/organizer/G12_RENDERED_LINK_AUDIT.json and a
+separate live-incognito G13 run to
+release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json only on an exact clean release
 candidate. Fixture mode is deterministic, offline CI validation only and never
 qualifies as release evidence. No browser state or other local artifact is
 written.
@@ -245,7 +247,7 @@ function firstParty(value) {
   }
 }
 
-async function collectDom(page) {
+export async function collectDom(page) {
   return page.evaluate(({ limit }) => {
     const links = Array.from(document.querySelectorAll("a[href]")).map(
       (element) => ({
@@ -293,6 +295,34 @@ async function collectDom(page) {
     }
     const selected = document.querySelector('[role="tab"][aria-selected="true"]');
     const selectedId = selected?.id ?? "";
+    const selectedPanelId = selected?.getAttribute("aria-controls") ?? null;
+    const selectedPanel = selectedPanelId
+      ? document.getElementById(selectedPanelId)
+      : null;
+    const activeNavigation = document.querySelector("a.nav-item.active[href]");
+    const primaryHeading = document.querySelector("main h1,[role=main] h1");
+    const brand = document.querySelector(".brand-copy strong");
+    const renderedDownloadControls = Array.from(
+      document.querySelectorAll("button:not([disabled])"),
+    )
+      .map((element, selectorIndex) => {
+        const label = (element.innerText || element.textContent || "")
+          .replace(/\s+/gu, " ")
+          .trim();
+        const dataTestId = element.getAttribute("data-testid");
+        return {
+          selector_index: selectorIndex,
+          control_id:
+            dataTestId ||
+            `download-${selectorIndex}-${label
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/gu, "-")
+              .replace(/^-|-$/gu, "")
+              .slice(0, 64)}`,
+          label,
+        };
+      })
+      .filter((item) => /^(?:export|download)\b/iu.test(item.label));
     return {
       overflow: false,
       links,
@@ -302,6 +332,23 @@ async function collectDom(page) {
       active_proof_tab: selectedId.startsWith("proof-tab-")
         ? selectedId.slice("proof-tab-".length)
         : null,
+      route_identity: {
+        brand_text: (brand?.textContent || "").replace(/\s+/gu, " ").trim(),
+        active_navigation_path: activeNavigation
+          ? new URL(activeNavigation.href).pathname
+          : null,
+        primary_heading: (primaryHeading?.textContent || "")
+          .replace(/\s+/gu, " ")
+          .trim(),
+        active_tab_id: selectedId.startsWith("proof-tab-")
+          ? selectedId.slice("proof-tab-".length)
+          : null,
+        active_tabpanel_id:
+          selectedPanel && selectedPanel.getAttribute("role") === "tabpanel"
+            ? selectedPanelId
+            : null,
+      },
+      rendered_download_controls: renderedDownloadControls,
       title: document.title,
       main_count: document.querySelectorAll("main,[role=main]").length,
       heading_count: document.querySelectorAll("h1,h2,h3,h4,h5,h6").length,
@@ -335,12 +382,125 @@ function validateDocumentAnchors(observation) {
   }
 }
 
+async function digestDownload(download) {
+  const stream = await download.createReadStream();
+  if (!stream) {
+    throw new GateFailure(
+      "CLIENT_DOWNLOAD_FAILED",
+      "browser did not expose client-download bytes",
+    );
+  }
+  const digest = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of stream) {
+    bytes += chunk.length;
+    if (bytes > BODY_LIMIT) {
+      throw new GateFailure(
+        "CLIENT_DOWNLOAD_OVERSIZED",
+        "client download exceeded the byte limit",
+      );
+    }
+    digest.update(chunk);
+  }
+  if (bytes === 0) {
+    throw new GateFailure(
+      "CLIENT_DOWNLOAD_EMPTY",
+      "client download returned no bytes",
+    );
+  }
+  return {
+    suggested_filename: download.suggestedFilename(),
+    body_bytes: bytes,
+    body_sha256: digest.digest("hex"),
+  };
+}
+
+export async function collectClientDownloads(page, controls) {
+  const buttons = page.locator("button:not([disabled])");
+  const observed = [];
+  for (const control of controls) {
+    const button = buttons.nth(control.selector_index);
+    const downloadPromise = page.waitForEvent("download", {
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+    await button.click({ timeout: NAVIGATION_TIMEOUT_MS });
+    const download = await downloadPromise;
+    observed.push({
+      control_id: control.control_id,
+      ...(await digestDownload(download)),
+    });
+    await download.delete();
+  }
+  return observed;
+}
+
+function websocketEvidence(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new GateFailure(
+      "WEBSOCKET_URL_INVALID",
+      "WebSocket attempt URL is invalid",
+    );
+  }
+  if (
+    parsed.protocol !== "wss:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port
+  ) {
+    throw new GateFailure(
+      "WEBSOCKET_URL_INVALID",
+      "WebSocket attempt escaped the public secure surface",
+    );
+  }
+  return {
+    url_sha256: digestBytes(Buffer.from(parsed.href, "utf8")),
+    host: parsed.hostname,
+    disposition: "blocked_before_connect",
+  };
+}
+
+export async function installReadOnlyWebSocketGuard(page, evidence) {
+  await page.exposeBinding("__concordiaBlockWebSocket", (_source, value) => {
+    evidence.push(websocketEvidence(value));
+    return false;
+  });
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    class ReadOnlyBlockedWebSocket extends EventTarget {
+      static CONNECTING = NativeWebSocket.CONNECTING;
+      static OPEN = NativeWebSocket.OPEN;
+      static CLOSING = NativeWebSocket.CLOSING;
+      static CLOSED = NativeWebSocket.CLOSED;
+
+      constructor(value) {
+        super();
+        const url = new URL(String(value), window.location.href).href;
+        void window.__concordiaBlockWebSocket(url);
+        throw new DOMException(
+          "WebSocket blocked by read-only release collector",
+          "SecurityError",
+        );
+      }
+    }
+    Object.defineProperty(window, "WebSocket", {
+      configurable: false,
+      enumerable: true,
+      value: ReadOnlyBlockedWebSocket,
+      writable: false,
+    });
+  });
+}
+
 async function captureRoute(context, spec) {
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
   const blockedNonReadRequests = [];
   const firstPartyFailures = [];
+  const blockedWebSockets = [];
   const failedReadRequests = new WeakSet();
 
   page.on("console", (message) => {
@@ -388,6 +548,7 @@ async function captureRoute(context, spec) {
     }
     await intercepted.continue();
   });
+  await installReadOnlyWebSocketGuard(page, blockedWebSockets);
 
   try {
     const response = await page.goto(spec.url, {
@@ -422,6 +583,10 @@ async function captureRoute(context, spec) {
       );
     }
     const redirects = await redirectChain(response);
+    const clientDownloads = await collectClientDownloads(
+      page,
+      dom.rendered_download_controls,
+    );
     const observation = {
       route_id: spec.route_id,
       requested_url: spec.url,
@@ -437,6 +602,12 @@ async function captureRoute(context, spec) {
       rendered_assets: dom.assets,
       document_ids: dom.ids,
       document_names: dom.names,
+      route_identity: dom.route_identity,
+      rendered_download_controls: dom.rendered_download_controls.map(
+        ({ control_id, label }) => ({ control_id, label }),
+      ),
+      client_downloads: clientDownloads,
+      blocked_websockets: blockedWebSockets,
       document: {
         title_sha256: digestBytes(Buffer.from(dom.title, "utf8")),
         main_count: dom.main_count,
@@ -467,8 +638,7 @@ function renderedLinkSpecs(request, pages) {
     ]) {
       const classified = classifyRenderedTarget(item.href, page.final_url, item);
       if (
-        classified.kind === "document_anchor" ||
-        classified.kind === "external_asset"
+        classified.kind === "document_anchor"
       ) {
         continue;
       }
@@ -558,9 +728,14 @@ async function probeWithRequest(context, spec) {
   };
 }
 
-async function documentationAnchorFound(context, html, url) {
+async function documentAnchorFound(context, html, url) {
   const parsed = new URL(url);
-  if (parsed.origin !== DOCS_ORIGIN || !parsed.hash) return null;
+  if (
+    ![APP_ORIGIN, DOCS_ORIGIN].includes(parsed.origin) ||
+    !parsed.hash
+  ) {
+    return null;
+  }
   const fragment = decodeURIComponent(parsed.hash.slice(1));
   const page = await context.newPage();
   try {
@@ -577,6 +752,28 @@ async function documentationAnchorFound(context, html, url) {
   }
 }
 
+async function concordiaIdentity(context, html, spec) {
+  if (spec.identity === null) return null;
+  const page = await context.newPage();
+  try {
+    await page.setContent(html.toString("utf8"), {
+      waitUntil: "domcontentloaded",
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+    const facts = await page.evaluate(() => ({
+      title: document.title,
+      text: document.body?.innerText ?? "",
+    }));
+    return {
+      kind: "concordia_home",
+      title_match: /\bconcordia\b/iu.test(facts.title),
+      visible_marker_match: /\bconcordia\b/iu.test(facts.text),
+    };
+  } finally {
+    await page.close();
+  }
+}
+
 async function probeLink(context, spec) {
   const captured = await probeWithRequest(context, spec);
   const observation = {
@@ -587,10 +784,15 @@ async function probeLink(context, spec) {
     redirects: captured.redirects,
     body_bytes: captured.body.length,
     body_sha256: digestBytes(captured.body),
-    anchor_found: await documentationAnchorFound(
+    anchor_found: await documentAnchorFound(
       context,
       captured.body,
       captured.effective_url,
+    ),
+    concordia_identity: await concordiaIdentity(
+      context,
+      captured.body,
+      spec,
     ),
     kind: spec.kind,
     sources: spec.sources,
@@ -614,6 +816,10 @@ const FIXTURE_ROUTE_OVERRIDE_FIELDS = new Set([
   "rendered_assets",
   "document_ids",
   "document_names",
+  "route_identity",
+  "rendered_download_controls",
+  "client_downloads",
+  "blocked_websockets",
 ]);
 const FIXTURE_LINK_OVERRIDE_FIELDS = new Set([
   "requested_url",
@@ -623,6 +829,7 @@ const FIXTURE_LINK_OVERRIDE_FIELDS = new Set([
   "body_bytes",
   "body_sha256",
   "anchor_found",
+  "concordia_identity",
 ]);
 
 function fixtureOverride(overrides, id, allowedFields, knownIds, label) {
@@ -668,6 +875,19 @@ function fixtureRoute(spec, overrides, knownIds) {
     rendered_assets: [],
     document_ids: ["fixture-anchor"],
     document_names: [],
+    route_identity: {
+      brand_text: "Concordia DAO Council",
+      active_navigation_path: spec.expected_dom.active_navigation_path,
+      primary_heading: spec.expected_dom.primary_headings[0],
+      active_tab_id: spec.active_proof_tab ?? null,
+      active_tabpanel_id:
+        spec.active_proof_tab === null
+          ? null
+          : `proof-tabpanel-${spec.active_proof_tab}`,
+    },
+    rendered_download_controls: [],
+    client_downloads: [],
+    blocked_websockets: [],
     ...fixtureOverride(
       overrides,
       spec.route_id,
@@ -684,12 +904,20 @@ function fixtureLink(spec, overrides, knownIds) {
   return {
     link_id: spec.link_id,
     requested_url: spec.url,
-    effective_url: spec.url,
+    effective_url: spec.allowed_redirects.at(-1)?.to ?? spec.url,
     status: 200,
-    redirects: [],
+    redirects: structuredClone(spec.allowed_redirects),
     body_bytes: 128,
     body_sha256: digestBytes(Buffer.from(`fixture:${spec.url}`, "utf8")),
     anchor_found: hasDocsAnchor ? true : null,
+    concordia_identity:
+      spec.identity === null
+        ? null
+        : {
+            kind: "concordia_home",
+            title_match: true,
+            visible_marker_match: true,
+          },
     kind: "fixture",
     sources: [`known:${spec.link_id}`],
     content_type: "text/html; fixture=true",
@@ -748,7 +976,7 @@ async function main() {
   });
   try {
     const context = await browser.newContext({
-      acceptDownloads: false,
+      acceptDownloads: true,
       ignoreHTTPSErrors: false,
       javaScriptEnabled: true,
       locale: "en-US",
@@ -798,15 +1026,22 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const code =
-    error instanceof GateFailure
-      ? error.code
-      : "UNEXPECTED_COLLECTOR_FAILURE";
-  const message =
-    error instanceof GateFailure
-      ? error.message
-      : `unexpected collector failure ${opaqueError(error?.message).sha256}`;
-  process.stderr.write(`organizer rendered-link gate refused ${code}: ${message}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    const code =
+      error instanceof GateFailure
+        ? error.code
+        : "UNEXPECTED_COLLECTOR_FAILURE";
+    const message =
+      error instanceof GateFailure
+        ? error.message
+        : `unexpected collector failure ${opaqueError(error?.message).sha256}`;
+    process.stderr.write(
+      `organizer rendered-link gate refused ${code}: ${message}\n`,
+    );
+    process.exitCode = 1;
+  });
+}

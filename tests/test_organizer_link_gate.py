@@ -22,7 +22,7 @@ def test_failure_first_node_contract_suite_passes() -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "# pass 10" in completed.stdout
+    assert "# pass 12" in completed.stdout
     assert "# fail 0" in completed.stdout
 
 
@@ -45,7 +45,7 @@ def test_frozen_request_and_core_cover_the_organizer_census() -> None:
     request = json.loads(REQUEST.read_text())
     core = CORE.read_text()
 
-    assert request["schema_version"] == "concordia.organizer_rendered_link_request.v1"
+    assert request["schema_version"] == "concordia.organizer_rendered_link_request.v2"
     assert len(request["known_links"]) == 17
     assert "docs_judge_quickstart_anchor" in {
         row["link_id"] for row in request["known_links"]
@@ -64,7 +64,8 @@ def test_organizer_gate_is_invoked_before_both_g12_and_g13() -> None:
     )
 
     assert notes.count(command) >= 2
-    assert "release/organizer/RENDERED_LINK_AUDIT.json" in notes
+    assert "release/organizer/G12_RENDERED_LINK_AUDIT.json" in notes
+    assert "release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json" in notes
     assert "before G12" in notes
     assert "before G13" in notes
     assert "does not replace or weaken G12 or G13" in notes
