@@ -170,6 +170,9 @@ def make_parameters(**overrides: object) -> dict[str, object]:
         "preauth_evidence_root": "37" * 32,
         "authorized_metadata_root": "38" * 32,
         "max_amount_motes": "50000000000",
+        # v2: the amount is an explicit human authorization, never derived
+        # silently.  625000000000 * 800bps / 10000 = 50000000000 is the bound.
+        "human_authorized_amount_motes": "50000000000",
     }
     document.update(overrides)
     return document

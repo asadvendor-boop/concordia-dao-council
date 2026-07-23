@@ -1,3 +1,7 @@
+// Testnet-profile suite: every fixture embeds the frozen `casper-test`
+// identity, so this file only exists on the Testnet network profile.
+#![cfg(network_profile_testnet)]
+
 use concordia_odra_governance_receipt_v3::{
     derive_action_id, derive_deployment_domain, derive_envelope_hash, derive_transfer_id,
     CommonHeader, NativeTransferV1, OfficialX402SettlementV1, ValidationError,

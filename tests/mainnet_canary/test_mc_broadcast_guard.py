@@ -213,7 +213,14 @@ def test_in_flight_journal_blocks_broadcast_before_confirmation(
     journal.transition(
         "B-install-rc-wasm", "AUTHORIZATION_VALIDATED", plan_hash=plan_hash
     )
-    journal.transition("B-install-rc-wasm", "SIGNED", plan_hash=plan_hash)
+    journal.transition(
+        "B-install-rc-wasm",
+        "SIGNED",
+        plan_hash=plan_hash,
+        deploy_hash="d0" * 32,
+        signed_bytes_sha256="b1" * 32,
+    )
+    journal.close()
     authorization = write_json(
         tmp_path / "live-authorization.json", _authorization_for(plan)
     )

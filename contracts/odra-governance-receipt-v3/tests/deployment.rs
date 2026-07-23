@@ -1,3 +1,7 @@
+// Testnet-profile suite: every fixture embeds the frozen `casper-test`
+// identity, so this file only exists on the Testnet network profile.
+#![cfg(network_profile_testnet)]
+
 use concordia_odra_governance_receipt_v3::{
     validated_deployment_init_args, DeploymentIdentity, DeploymentRoleInputs,
     DeploymentValidationError,

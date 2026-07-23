@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.mainnet_canary.constants import (
+    EXPECTED_PREQUORUM_ERROR_MESSAGE,
     MAINNET_CHAIN_NAME,
     MAINNET_RPC_URL,
     TESTNET_RC_WASM_SHA256_AT_PREP_BASE,
@@ -188,14 +189,17 @@ def validate_rc_gate(repo_root: Path, declaration_path: Path) -> RcDeclaration:
             "against a different tree",
         )
 
-    # Clean tracked source tree, recomputed — never trusted from the file.
+    # Clean source tree, recomputed — never trusted from the file.  v2:
+    # untracked drift refuses too (the prototype's --untracked-files=no let
+    # unvetted files ride into an exported build tree).
     dirty = _git(
-        repo_root, "status", "--porcelain", "--untracked-files=no"
+        repo_root, "status", "--porcelain", "--untracked-files=all"
     ).strip()
     if dirty:
         raise CanaryRefusal(
             RefusalCode.SOURCE_TREE_DIRTY,
-            "tracked files are modified; the canary requires a clean tree",
+            "tracked/staged/unstaged/untracked drift present; the canary "
+            "requires a pristine tree",
         )
 
     # Exact v3 Wasm hash recomputed from the tracked artifact.
@@ -269,14 +273,14 @@ def validate_rc_gate(repo_root: Path, declaration_path: Path) -> RcDeclaration:
                 f"historical artifact drift detected: {relpath.strip()}",
             )
 
+    # v2: exact equality with the frozen QuorumNotMet rendering — prefix
+    # matching accepted `User error: 88` in the prototype.
     expected_error = document["expected_prequorum_error_message"]
-    if not isinstance(expected_error, str) or not expected_error.startswith(
-        "User error: "
-    ):
+    if expected_error != EXPECTED_PREQUORUM_ERROR_MESSAGE:
         raise CanaryRefusal(
             RefusalCode.RC_DECLARATION_INVALID,
-            "expected_prequorum_error_message must be the exact Testnet-RC "
-            "measured `User error: <code>` rendering",
+            "expected_prequorum_error_message must be exactly "
+            f"{EXPECTED_PREQUORUM_ERROR_MESSAGE!r} (QuorumNotMet)",
         )
 
     return RcDeclaration(

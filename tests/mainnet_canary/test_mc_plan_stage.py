@@ -264,7 +264,14 @@ def test_stage_refuses_after_in_flight_restart(
     journal.transition(
         "B-install-rc-wasm", "AUTHORIZATION_VALIDATED", plan_hash=plan_hash
     )
-    journal.transition("B-install-rc-wasm", "SIGNED", plan_hash=plan_hash)
+    journal.transition(
+        "B-install-rc-wasm",
+        "SIGNED",
+        plan_hash=plan_hash,
+        deploy_hash="d0" * 32,
+        signed_bytes_sha256="b1" * 32,
+    )
+    journal.close()
     with pytest.raises(CanaryRefusal) as refusal:
         _stage(plan_inputs, plan, tmp_path)
     assert refusal.value.code == RefusalCode.RECONCILIATION_REQUIRED

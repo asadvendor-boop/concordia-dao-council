@@ -87,6 +87,9 @@ EXPECTED_PREQUORUM_ERROR_MESSAGE = (
 EXPECTED_POSTQUORUM_MUTATION_ERROR_MESSAGE = (
     f"{USER_ERROR_PREFIX}{V3_ERROR_CODES['EnvelopeHashMismatch']}"
 )
+EXPECTED_DUPLICATE_FINALIZE_ERROR_MESSAGE = (
+    f"{USER_ERROR_PREFIX}{V3_ERROR_CODES['AlreadyFinalized']}"
+)
 
 # --- Future mount paths (referenced only; NEVER read by this lane) ----------
 
@@ -107,11 +110,35 @@ PUBLIC_KEY_INVENTORY_MOUNT_PATH = (
 # below this prefix; it never opens, lists, or tests anything under it.
 SECRET_KEY_MOUNT_PREFIX = "/run/secrets/mainnet_canary/"
 
+# --- Network identity (CAIP-2) ----------------------------------------------
+
+TESTNET_CAIP2_IDENTITY = "casper:casper-test"
+MAINNET_CAIP2_IDENTITY = "casper:casper"
+
+# Confirmation depth both RPC providers must independently show beyond a
+# block before an economic conclusion is drawn from it (belt-and-suspenders on
+# top of Casper 2.x per-block finality signatures).
+FINALITY_CONFIRMATION_DEPTH = 8
+
+# OfficialX402SettlementV1 on the Mainnet-native contract profile: pinned
+# fail-closed outcome until a live Mainnet `/supported` observation
+# independently pins the real asset constants. `InvalidActionField` (16) is
+# the contract-level refusal every x402 action hits on that profile.
+MAINNET_X402_PINNED_REFUSAL = (
+    f"{USER_ERROR_PREFIX}{V3_ERROR_CODES['InvalidActionField']}"
+)
+
 # --- Artifact lineage --------------------------------------------------------
 
 # Future live artifacts namespace (never created by the preparation branch).
 MAINNET_ARTIFACT_NAMESPACE = "artifacts/mainnet-canary/v3/"
 MAINNET_SUPPLEMENTAL_PROVENANCE = "mainnet_supplemental"
+
+# Supplemental output namespace for canary evidence bundles; a path policy
+# instance only ever permits in-repo writes below
+# `artifacts/mainnet-canary/<canary_id>/` and only with explicit live-capture
+# authorization (never granted in the preparation lane).
+CANARY_OUTPUT_NAMESPACE = "artifacts/mainnet-canary/"
 
 # Canonical/Testnet evidence namespaces that Mainnet supplemental records may
 # never overwrite or re-label.

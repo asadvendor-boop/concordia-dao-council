@@ -329,7 +329,9 @@ def test_cli_verify_never_claims_mainnet_verified(
         expected = step["expected_outcome"]
         overrides: dict[str, object] = {}
         transfer = None
-        if step_id == "E-prequorum-finalize-refusal":
+        if expected.get("execution") == "failure":
+            # E pre-quorum, F9 wrong-envelope, and H duplicate-finalize are
+            # all finalized refusal proofs with exact error renderings.
             overrides["execution"] = {
                 "success": False,
                 "error_message": expected["exact_error_message"],

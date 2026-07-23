@@ -23,12 +23,24 @@ import re
 from dataclasses import dataclass
 
 # Domain separators (G1 §2 authoritative table; final byte is 0x00).
-DOMAIN_DEPLOYMENT = b"CONCORDIA_DOMAIN_V3\x00"
+# The DEPLOYMENT domain is network-specific: the Mainnet-native contract
+# profile pins a disjoint separator so a Mainnet deployment domain can never
+# collide with (or replay against) a Testnet one.  Byte-frozen against the
+# Rust constants in contracts/odra-governance-receipt-v3/src/encoding.rs.
+DOMAIN_DEPLOYMENT_TESTNET = b"CONCORDIA_DOMAIN_V3\x00"
+DOMAIN_DEPLOYMENT_MAINNET = b"CONCORDIA_DOMAIN_V3_MAINNET\x00"
+# Historical alias (Testnet value) kept for the frozen v1 call sites.
+DOMAIN_DEPLOYMENT = DOMAIN_DEPLOYMENT_TESTNET
 DOMAIN_ENVELOPE = b"CONCORDIA_GOVERNANCE_ENVELOPE_V3\x00"
 DOMAIN_ACTION_ID = b"CONCORDIA_ACTION_ID_V3\x00"
 DOMAIN_TRANSFER_ID = b"CONCORDIA_TRANSFER_ID_V3\x00"
 
 SUPPORTED_CHAIN_NAMES = ("casper", "casper-test")
+
+_DEPLOYMENT_DOMAIN_BY_CHAIN = {
+    "casper-test": DOMAIN_DEPLOYMENT_TESTNET,
+    "casper": DOMAIN_DEPLOYMENT_MAINNET,
+}
 
 _PROPOSAL_ID = re.compile(r"[A-Z0-9-]{1,64}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -236,7 +248,7 @@ def derive_deployment_domain(
     if nonce == bytes(32):
         raise _fail("InvalidEnvelopeField", "installation_nonce", "must be non-zero")
     return blake2b_256(
-        DOMAIN_DEPLOYMENT
+        _DEPLOYMENT_DOMAIN_BY_CHAIN[chain_name]
         + _lp(chain_name.encode("ascii"))
         + _lp(package_key_name.encode("ascii"))
         + nonce

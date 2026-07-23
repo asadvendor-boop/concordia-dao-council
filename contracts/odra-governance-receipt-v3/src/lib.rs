@@ -9,7 +9,8 @@ mod encoding;
 
 pub use encoding::{
     derive_action_id, derive_deployment_domain, derive_envelope_hash, derive_transfer_id,
-    CommonHeader, NativeTransferV1, OfficialX402SettlementV1, ValidationError,
+    CommonHeader, NativeTransferV1, OfficialX402SettlementV1, ValidationError, CAIP2_NETWORK,
+    CASPER_CHAIN_NAME, OFFICIAL_X402_SUPPORTED,
 };
 
 use alloc::string::String;

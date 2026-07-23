@@ -7,12 +7,52 @@ use odra::casper_types::{U256, U512};
 
 pub const SCHEMA_VERSION: u32 = 3;
 pub const ACTION_VERSION: u32 = 1;
-pub const CASPER_CHAIN_NAME: &str = "casper-test";
 pub const PACKAGE_KEY_NAME: &str = "concordia_governance_receipt_v3";
 pub const NATIVE_TRANSFER_KIND: u8 = 1;
 pub const OFFICIAL_X402_KIND: u8 = 2;
 
+// --- Compile-time network profile -------------------------------------------
+// Exactly one profile cfg is injected by build.rs from
+// CONCORDIA_V3_NETWORK_PROFILE. These guards make a profile-less or
+// double-profile compilation impossible even if build.rs is bypassed.
+#[cfg(all(network_profile_testnet, network_profile_mainnet_native))]
+compile_error!(
+    "network profiles are mutually exclusive: both network_profile_testnet \
+     and network_profile_mainnet_native are set"
+);
+#[cfg(not(any(network_profile_testnet, network_profile_mainnet_native)))]
+compile_error!(
+    "exactly one network profile is required: build with \
+     CONCORDIA_V3_NETWORK_PROFILE=testnet or =mainnet-native"
+);
+
+#[cfg(network_profile_testnet)]
+pub const CASPER_CHAIN_NAME: &str = "casper-test";
+#[cfg(network_profile_mainnet_native)]
+pub const CASPER_CHAIN_NAME: &str = "casper";
+
+#[cfg(network_profile_testnet)]
+pub const CAIP2_NETWORK: &str = "casper:casper-test";
+#[cfg(network_profile_mainnet_native)]
+pub const CAIP2_NETWORK: &str = "casper:casper";
+
+/// OfficialX402SettlementV1 is a Testnet-proven WCSPR/CEP-18 flow. On the
+/// Mainnet-native profile it stays disabled until every real Mainnet constant
+/// (asset package, contract, decimals, scheme, facilitator) is independently
+/// verified against a live Mainnet `/supported` observation; until then every
+/// x402 action fails closed with `InvalidActionField` (User error: 16).
+#[cfg(network_profile_testnet)]
+pub const OFFICIAL_X402_SUPPORTED: bool = true;
+#[cfg(network_profile_mainnet_native)]
+pub const OFFICIAL_X402_SUPPORTED: bool = false;
+
+// The Testnet separator is frozen history and must stay byte-identical; the
+// Mainnet-native profile pins its own separator so the two deployment-domain
+// spaces can never collide, even for equal chain-name/nonce inputs.
+#[cfg(network_profile_testnet)]
 const DOMAIN_SEPARATOR: &[u8] = b"CONCORDIA_DOMAIN_V3\0";
+#[cfg(network_profile_mainnet_native)]
+const DOMAIN_SEPARATOR: &[u8] = b"CONCORDIA_DOMAIN_V3_MAINNET\0";
 const ENVELOPE_SEPARATOR: &[u8] = b"CONCORDIA_GOVERNANCE_ENVELOPE_V3\0";
 const ACTION_ID_SEPARATOR: &[u8] = b"CONCORDIA_ACTION_ID_V3\0";
 const TRANSFER_ID_SEPARATOR: &[u8] = b"CONCORDIA_TRANSFER_ID_V3\0";
@@ -73,6 +113,9 @@ impl CommonHeader {
         if !matches!(self.action_kind, NATIVE_TRANSFER_KIND | OFFICIAL_X402_KIND)
             || self.action_version != ACTION_VERSION
         {
+            return Err(ValidationError::InvalidActionField);
+        }
+        if !OFFICIAL_X402_SUPPORTED && self.action_kind == OFFICIAL_X402_KIND {
             return Err(ValidationError::InvalidActionField);
         }
         Ok(())
@@ -280,9 +323,12 @@ impl OfficialX402SettlementV1 {
     }
 
     pub fn validate_semantics(&self) -> Result<(), ValidationError> {
+        if !OFFICIAL_X402_SUPPORTED {
+            return Err(ValidationError::InvalidActionField);
+        }
         if self.x402_version != 2
             || self.scheme != "exact"
-            || self.caip2_network != "casper:casper-test"
+            || self.caip2_network != CAIP2_NETWORK
             || self.wcspr_package != WCSPR_PACKAGE
             || self.wcspr_contract != WCSPR_CONTRACT
             || self.token_name != "Wrapped CSPR"

@@ -20,8 +20,11 @@ from pathlib import Path
 
 from tools.mainnet_canary.constants import (
     BLOCKED_PENDING_LIVE_PROOF,
+    EXPECTED_DUPLICATE_FINALIZE_ERROR_MESSAGE,
+    EXPECTED_POSTQUORUM_MUTATION_ERROR_MESSAGE,
     MAINNET_CHAIN_NAME,
     MAINNET_RPC_URL,
+    MAINNET_X402_PINNED_REFUSAL,
     PACKAGE_KEY_NAME,
     PREP_BASE_SHA,
     SNAPSHOT_MAX_AGE_SECONDS,
@@ -75,6 +78,7 @@ _PARAM_FIELDS = {
     "preauth_evidence_root",
     "authorized_metadata_root",
     "max_amount_motes",
+    "human_authorized_amount_motes",
 }
 
 _SNAPSHOT_FIELDS = {
@@ -312,10 +316,31 @@ def build_plan(
         raise CanaryRefusal(
             RefusalCode.PLAN_INPUT_INVALID, "approved_allocation_bps malformed"
         )
-    amount_motes = int(balance_raw) * approved_bps // 10_000
+    # v2: the transfer amount is an explicit HUMAN-AUTHORIZED parameter —
+    # the plan never chooses it silently.  The policy-derived allocation
+    # (balance * approved_bps / 10000) and the tiny cap are upper bounds the
+    # authorized amount must respect.
+    allocation_bound = int(balance_raw) * approved_bps // 10_000
+    authorized_raw = parameters["human_authorized_amount_motes"]
+    if not isinstance(authorized_raw, str) or _DECIMAL.match(authorized_raw) is None:
+        raise CanaryRefusal(
+            RefusalCode.PLAN_INPUT_INVALID,
+            "human_authorized_amount_motes malformed",
+        )
+    amount_motes = int(authorized_raw)
     if amount_motes <= 0:
         raise CanaryRefusal(
-            RefusalCode.AMOUNT_MISMATCH, "derived canary amount is zero"
+            RefusalCode.AMOUNT_MISMATCH, "authorized canary amount is zero"
+        )
+    if amount_motes != allocation_bound:
+        # The frozen v3 envelope semantics pin amount == floor(balance *
+        # approved_bps / 10000), so the human authorization is an exact
+        # confirmation: the plan proceeds only when the operator writes the
+        # precise allocation value — never a silently derived number.
+        raise CanaryRefusal(
+            RefusalCode.AMOUNT_MISMATCH,
+            "human-authorized amount must equal the policy-derived "
+            "allocation exactly (floor(balance * approved_bps / 10000))",
         )
     max_amount = parameters["max_amount_motes"]
     if not isinstance(max_amount, str) or _DECIMAL.match(max_amount) is None:
@@ -325,7 +350,7 @@ def build_plan(
     if amount_motes > int(max_amount):
         raise CanaryRefusal(
             RefusalCode.AMOUNT_MISMATCH,
-            "derived amount exceeds the deliberately-tiny canary cap",
+            "authorized amount exceeds the deliberately-tiny canary cap",
         )
 
     installation_nonce = parameters["installation_nonce"]
@@ -405,6 +430,29 @@ def build_plan(
             name,
             _FINALIZE_ARG_TYPES[name],
             header.get(name, body.get(name)),
+        )
+        for name in FINALIZE_NATIVE_ARG_ORDER
+    ]
+
+    # Post-quorum wrong-envelope refusal proof: one hash-bearing field is
+    # deliberately flipped, so the recomputed envelope hash cannot match the
+    # approved one and the contract must refuse with EnvelopeHashMismatch.
+    _wrong_metadata_root = "".join(
+        format(int(pair, 16) ^ 0x01, "02x")
+        for pair in [
+            str(header["authorized_metadata_root"])[i : i + 2]
+            for i in range(0, 64, 2)
+        ]
+    )
+    wrong_envelope_args = [
+        _typed_arg(
+            name,
+            _FINALIZE_ARG_TYPES[name],
+            (
+                _wrong_metadata_root
+                if name == "authorized_metadata_root"
+                else header.get(name, body.get(name))
+            ),
         )
         for name in FINALIZE_NATIVE_ARG_ORDER
     ]
@@ -530,11 +578,25 @@ def build_plan(
         )
         previous = step_id
     add_step(
-        "G-finalize-exact-envelope",
+        "F9-wrong-envelope-refusal",
         kind="contract_call",
         economic=True,
         role="finalizer",
         depends_on=[previous],
+        entry_point="finalize_native_transfer",
+        typed_args=wrong_envelope_args,
+        expected_outcome={
+            "execution": "failure",
+            "exact_error_message": EXPECTED_POSTQUORUM_MUTATION_ERROR_MESSAGE,
+            "error_name": "EnvelopeHashMismatch",
+        },
+    )
+    add_step(
+        "G-finalize-exact-envelope",
+        kind="contract_call",
+        economic=True,
+        role="finalizer",
+        depends_on=["F9-wrong-envelope-refusal"],
         entry_point="finalize_native_transfer",
         typed_args=finalize_args,
         expected_outcome={
@@ -544,15 +606,20 @@ def build_plan(
             "envelope_hash": material.envelope_hash_hex,
         },
     )
+    # v2: the no-second-action invariant is PROVEN on chain, not asserted —
+    # a duplicate finalize of the same proposal must refuse AlreadyFinalized.
     add_step(
         "H-no-second-economic-action",
-        kind="invariant_assertion",
-        economic=False,
-        role=None,
+        kind="contract_call",
+        economic=True,
+        role="finalizer",
         depends_on=["G-finalize-exact-envelope"],
+        entry_point="finalize_native_transfer",
+        typed_args=finalize_args,
         expected_outcome={
-            "assertion": "no additional finalize/transfer is created for "
-            "this action_id"
+            "execution": "failure",
+            "exact_error_message": EXPECTED_DUPLICATE_FINALIZE_ERROR_MESSAGE,
+            "error_name": "AlreadyFinalized",
         },
     )
     add_step(
@@ -618,6 +685,17 @@ def build_plan(
         "network": {
             "chain_name": MAINNET_CHAIN_NAME,
             "rpc_url": MAINNET_RPC_URL,
+        },
+        # Mainnet OfficialX402SettlementV1 is compile-time fail-closed on the
+        # mainnet-native contract profile; the plan carries no x402 step and
+        # pins the refusal every x402 action would hit.
+        "mainnet_x402": {
+            "supported": False,
+            "pinned_refusal": MAINNET_X402_PINNED_REFUSAL,
+            "until": (
+                "a live Mainnet /supported observation independently pins "
+                "the asset constants"
+            ),
         },
         "identities": {
             role.role: {

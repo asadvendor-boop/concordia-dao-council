@@ -29,6 +29,7 @@ from tools.mainnet_canary.constants import (
 from tools.mainnet_canary.cost_model import require_approved_estimate
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.journal import CanaryJournal
+from tools.mainnet_canary.path_policy import CanaryPathPolicy
 from tools.mainnet_canary.plan import (
     canonical_json,
     load_snapshot_observation,
@@ -145,60 +146,71 @@ def run_stage(
     )
 
     refuse_artifact_namespace_write(output_dir, repo_root)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Every staged output resolves through the centralized path policy; the
+    # preparation lane never authorizes live capture, so the output root must
+    # live outside the repository.
+    canary_id = plan_hash[:24] + "-prep"
+    path_policy = CanaryPathPolicy(
+        repo_root, output_dir, canary_id=canary_id, live_capture_authorized=False
+    )
 
     if journal_path.exists():
         journal = CanaryJournal.load(journal_path)
         if journal.plan_hash != plan_hash:
+            journal.close()
             raise CanaryRefusal(
                 RefusalCode.PLAN_HASH_MISMATCH,
                 "existing journal is bound to a different plan",
             )
-        journal.require_no_in_flight(context="stage")
     else:
         journal = CanaryJournal.create(
             journal_path, plan_hash=plan_hash, rc_tag=rc.rc_tag
         )
 
-    staged: list[dict[str, object]] = []
-    for step in plan_document["steps"]:
-        if not step["economic"]:
-            continue
-        step_id = str(step["step_id"])
-        intent_bytes = build_unsigned_intent(step, plan_hash=plan_hash)
-        content_address = hashlib.sha256(intent_bytes).hexdigest()
-        intent_path = output_dir / f"{content_address}.unsigned-intent.bin"
-        intent_path.write_bytes(intent_bytes)
-        status_now = journal.step_status(step_id)
-        if status_now is None:
-            journal.transition(step_id, "PLANNED", plan_hash=plan_hash)
-            journal.transition(
-                step_id,
-                "STAGED",
-                plan_hash=plan_hash,
-                detail=f"unsigned_intent_sha256={content_address}",
+    try:
+        journal.require_no_in_flight(context="stage")
+        staged: list[dict[str, object]] = []
+        for step in plan_document["steps"]:
+            if not step["economic"]:
+                continue
+            step_id = str(step["step_id"])
+            intent_bytes = build_unsigned_intent(step, plan_hash=plan_hash)
+            content_address = hashlib.sha256(intent_bytes).hexdigest()
+            intent_path = path_policy.exclusive_write_bytes(
+                f"{content_address}.unsigned-intent.bin", intent_bytes
             )
-        elif status_now.state == "PLANNED":
-            journal.transition(
-                step_id,
-                "STAGED",
-                plan_hash=plan_hash,
-                detail=f"unsigned_intent_sha256={content_address}",
+            status_now = journal.step_status(step_id)
+            if status_now is None:
+                journal.transition(step_id, "PLANNED", plan_hash=plan_hash)
+                journal.transition(
+                    step_id,
+                    "STAGED",
+                    plan_hash=plan_hash,
+                    detail=f"unsigned_intent_sha256={content_address}",
+                )
+            elif status_now.state == "PLANNED":
+                journal.transition(
+                    step_id,
+                    "STAGED",
+                    plan_hash=plan_hash,
+                    detail=f"unsigned_intent_sha256={content_address}",
+                )
+            elif status_now.state != "STAGED":
+                raise CanaryRefusal(
+                    RefusalCode.JOURNAL_CONFLICT,
+                    f"step {step_id} is already {status_now.state}; staging "
+                    "again is not a legal transition",
+                )
+            staged.append(
+                {
+                    "step_id": step_id,
+                    "unsigned_intent_sha256": content_address,
+                    "unsigned_intent_path": str(intent_path),
+                    "signed": False,
+                }
             )
-        elif status_now.state != "STAGED":
-            raise CanaryRefusal(
-                RefusalCode.JOURNAL_CONFLICT,
-                f"step {step_id} is already {status_now.state}; staging again "
-                "is not a legal transition",
-            )
-        staged.append(
-            {
-                "step_id": step_id,
-                "unsigned_intent_sha256": content_address,
-                "unsigned_intent_path": str(intent_path),
-                "signed": False,
-            }
-        )
+    finally:
+        journal.close()
 
     return {
         "schema_id": "concordia.mainnet-canary.stage-report.v1",
@@ -207,5 +219,10 @@ def run_stage(
         "staged_steps": staged,
         "cost_estimate": estimate,
         "journal_path": str(journal_path),
+        "path_policy": {
+            "canary_id": canary_id,
+            "live_capture_authorized": False,
+            "output_root_in_repo": False,
+        },
         "broadcast_enabled": False,
     }

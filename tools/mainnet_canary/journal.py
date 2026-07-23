@@ -23,13 +23,17 @@ machine and its refusals are provable by tests today.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
+
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 JOURNAL_SCHEMA_ID = "concordia.mainnet-canary.journal.v1"
 GENESIS_PREV_HASH = "0" * 64
@@ -84,26 +88,106 @@ class StepStatus:
     step_id: str
     state: str
     deploy_hash: str | None
+    signed_bytes_sha256: str | None = None
+
+
+def _require_safe_journal_path(path: Path, *, must_exist: bool) -> None:
+    """Symlink-safe journal placement: no symlinked file or ancestors."""
+
+    if path.is_symlink():
+        raise CanaryRefusal(
+            RefusalCode.JOURNAL_PATH_UNSAFE,
+            "journal file may not be a symlink",
+        )
+    ancestor = path.parent
+    while True:
+        if ancestor.is_symlink():
+            raise CanaryRefusal(
+                RefusalCode.JOURNAL_PATH_UNSAFE,
+                "journal directory chain may not contain symlinks",
+            )
+        if ancestor == ancestor.parent:
+            break
+        ancestor = ancestor.parent
+    if must_exist and not path.is_file():
+        raise CanaryRefusal(
+            RefusalCode.JOURNAL_ABSENT, "journal file does not exist"
+        )
+
+
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 class CanaryJournal:
-    """Durable journal bound to one plan hash."""
+    """Durable journal bound to one plan hash; one exclusive holder at a time."""
 
-    def __init__(self, path: Path, records: list[dict[str, object]]):
+    def __init__(self, path: Path, records: list[dict[str, object]], lock_fd: int):
         self._path = path
         self._records = records
+        self._lock_fd = lock_fd
+
+    # -- exclusive OS lock ---------------------------------------------------
+
+    @staticmethod
+    def _acquire_lock(path: Path) -> int:
+        """flock the sidecar lock; a dead process releases automatically."""
+
+        lock_path = path.parent / (path.name + ".lock")
+        fd = os.open(
+            lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise CanaryRefusal(
+                RefusalCode.JOURNAL_LOCK_HELD,
+                "another live process holds this journal; a second executor "
+                "may never run against the same durable state",
+            ) from None
+        return fd
+
+    def close(self) -> None:
+        """Release the exclusive lock (also released on process death)."""
+
+        if self._lock_fd >= 0:
+            os.close(self._lock_fd)
+            self._lock_fd = -1
 
     # -- construction -------------------------------------------------------
 
     @classmethod
     def create(cls, path: Path, *, plan_hash: str, rc_tag: str) -> CanaryJournal:
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        _require_safe_journal_path(path, must_exist=False)
         if path.exists():
             raise CanaryRefusal(
                 RefusalCode.JOURNAL_CONFLICT,
                 "journal already exists; refusing to overwrite durable state",
             )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        journal = cls(path, [])
+        lock_fd = cls._acquire_lock(path)
+        try:
+            # Atomic exclusive creation: a pre-existing (even partial) file
+            # is durable state we must never clobber.
+            fd = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+        except FileExistsError:
+            os.close(lock_fd)
+            raise CanaryRefusal(
+                RefusalCode.JOURNAL_CONFLICT,
+                "journal already exists; refusing to overwrite durable state",
+            ) from None
+        os.close(fd)
+        _fsync_dir(path.parent)
+        journal = cls(path, [], lock_fd)
         journal._append(
             {
                 "schema_id": JOURNAL_SCHEMA_ID,
@@ -119,43 +203,46 @@ class CanaryJournal:
 
     @classmethod
     def load(cls, path: Path) -> CanaryJournal:
-        if not path.is_file():
-            raise CanaryRefusal(
-                RefusalCode.JOURNAL_ABSENT, "journal file does not exist"
-            )
-        records: list[dict[str, object]] = []
-        prev_hash = GENESIS_PREV_HASH
-        for index, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines()
-        ):
-            if not line.strip():
-                raise CanaryRefusal(
-                    RefusalCode.JOURNAL_TAMPERED, f"blank journal line {index}"
-                )
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise CanaryRefusal(
-                    RefusalCode.JOURNAL_TAMPERED,
-                    f"journal line {index} is not valid JSON",
-                ) from exc
-            if (
-                not isinstance(record, dict)
-                or record.get("seq") != index
-                or record.get("prev_hash") != prev_hash
-                or record.get("record_hash") != _record_hash(record)
+        _require_safe_journal_path(path, must_exist=True)
+        lock_fd = cls._acquire_lock(path)
+        try:
+            records: list[dict[str, object]] = []
+            prev_hash = GENESIS_PREV_HASH
+            for index, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines()
             ):
+                if not line.strip():
+                    raise CanaryRefusal(
+                        RefusalCode.JOURNAL_TAMPERED, f"blank journal line {index}"
+                    )
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise CanaryRefusal(
+                        RefusalCode.JOURNAL_TAMPERED,
+                        f"journal line {index} is not valid JSON",
+                    ) from exc
+                if (
+                    not isinstance(record, dict)
+                    or record.get("seq") != index
+                    or record.get("prev_hash") != prev_hash
+                    or record.get("record_hash") != _record_hash(record)
+                ):
+                    raise CanaryRefusal(
+                        RefusalCode.JOURNAL_TAMPERED,
+                        f"journal hash chain broken at line {index}",
+                    )
+                records.append(record)
+                prev_hash = str(record["record_hash"])
+            if not records or records[0].get("kind") != "genesis":
                 raise CanaryRefusal(
                     RefusalCode.JOURNAL_TAMPERED,
-                    f"journal hash chain broken at line {index}",
+                    "journal is missing its genesis record",
                 )
-            records.append(record)
-            prev_hash = str(record["record_hash"])
-        if not records or records[0].get("kind") != "genesis":
-            raise CanaryRefusal(
-                RefusalCode.JOURNAL_TAMPERED, "journal is missing its genesis record"
-            )
-        return cls(path, records)
+        except BaseException:
+            os.close(lock_fd)
+            raise
+        return cls(path, records, lock_fd)
 
     # -- append -------------------------------------------------------------
 
@@ -186,14 +273,22 @@ class CanaryJournal:
     def step_status(self, step_id: str) -> StepStatus | None:
         state: str | None = None
         deploy_hash: str | None = None
+        signed_bytes: str | None = None
         for record in self._records:
             if record.get("kind") == "transition" and record.get("step_id") == step_id:
                 state = str(record["state"])
                 if record.get("deploy_hash") is not None:
                     deploy_hash = str(record["deploy_hash"])
+                if record.get("signed_bytes_sha256") is not None:
+                    signed_bytes = str(record["signed_bytes_sha256"])
         if state is None:
             return None
-        return StepStatus(step_id=step_id, state=state, deploy_hash=deploy_hash)
+        return StepStatus(
+            step_id=step_id,
+            state=state,
+            deploy_hash=deploy_hash,
+            signed_bytes_sha256=signed_bytes,
+        )
 
     def in_flight_steps(self) -> list[StepStatus]:
         seen: dict[str, StepStatus] = {}
@@ -218,6 +313,7 @@ class CanaryJournal:
         *,
         plan_hash: str,
         deploy_hash: str | None = None,
+        signed_bytes_sha256: str | None = None,
         detail: str | None = None,
     ) -> None:
         if new_state not in STATES:
@@ -250,19 +346,49 @@ class CanaryJournal:
                 f"illegal transition {current_state} -> {new_state} "
                 f"for step {step_id}",
             )
+        if new_state == "SIGNED":
+            # v2: SIGNED without the canonical signed-bytes digest and the
+            # locally computed deploy hash is impossible — both are persisted
+            # BEFORE any submission so a crash can always reconcile.
+            if (
+                not isinstance(deploy_hash, str)
+                or _HEX64.match(deploy_hash) is None
+                or not isinstance(signed_bytes_sha256, str)
+                or _HEX64.match(signed_bytes_sha256) is None
+            ):
+                raise CanaryRefusal(
+                    RefusalCode.JOURNAL_CONFLICT,
+                    "SIGNED requires the canonical signed-bytes SHA-256 and "
+                    "the locally computed deploy hash before any submission",
+                )
+        original = current.deploy_hash if current is not None else None
+        if new_state == "SUBMITTED":
+            if deploy_hash is None:
+                raise CanaryRefusal(
+                    RefusalCode.JOURNAL_CONFLICT,
+                    "SUBMITTED requires the submitted deploy hash",
+                )
+            if deploy_hash != original:
+                raise CanaryRefusal(
+                    RefusalCode.DUPLICATE_ECONOMIC_ACTION,
+                    f"step {step_id} may only submit the exact deploy whose "
+                    "bytes were persisted at SIGNED; submitting different "
+                    "bytes would be a second economic action",
+                )
+        if new_state in ("CONFIRMED_FINALIZED", "FAILED_FINALIZED"):
+            if original is None or deploy_hash != original:
+                raise CanaryRefusal(
+                    RefusalCode.JOURNAL_CONFLICT,
+                    f"step {step_id} finalization must bind the original "
+                    "deploy hash recorded at signing time",
+                )
         if new_state in _RECONCILE_STATES:
-            original = current.deploy_hash if current is not None else None
             if original is None or deploy_hash != original:
                 raise CanaryRefusal(
                     RefusalCode.RECONCILIATION_REQUIRED,
                     f"step {step_id} may only reconcile against its original "
                     "deploy hash",
                 )
-        if new_state == "SUBMITTED" and deploy_hash is None:
-            raise CanaryRefusal(
-                RefusalCode.JOURNAL_CONFLICT,
-                "SUBMITTED requires the submitted deploy hash",
-            )
         self._append(
             {
                 "schema_id": JOURNAL_SCHEMA_ID,
@@ -270,6 +396,7 @@ class CanaryJournal:
                 "step_id": step_id,
                 "state": new_state,
                 "deploy_hash": deploy_hash,
+                "signed_bytes_sha256": signed_bytes_sha256,
                 "detail": detail,
             }
         )

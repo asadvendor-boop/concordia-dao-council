@@ -18,7 +18,6 @@ from pathlib import Path
 
 from tools.mainnet_canary.constants import (
     ALL_ROLES,
-    GOVERNANCE_ROLES,
     MAINNET_CHAIN_NAME,
 )
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
@@ -156,18 +155,22 @@ def load_key_inventory(path: Path) -> KeyInventory:
             key_file_mount_path=mount,
         )
 
-    # Governance roles are pairwise distinct (constructor invariant), and the
-    # executor pair must differ so a transfer cannot be self-directed.
-    governance_hashes = [roles[role].account_hash_hex for role in GOVERNANCE_ROLES]
-    if len(set(governance_hashes)) != len(governance_hashes):
+    # v2: ALL seven canary roles are pairwise distinct — the prototype only
+    # enforced governance-pairwise plus treasury != recipient, which allowed
+    # the treasury source (or the recipient) to BE a governance signer.
+    all_hashes = [roles[role].account_hash_hex for role in ALL_ROLES]
+    if len(set(all_hashes)) != len(all_hashes):
         raise CanaryRefusal(
             RefusalCode.ROLE_SET_INVALID,
-            "governance roles must be pairwise distinct accounts",
+            "installer/owner, proposer, finalizer, all three signers, "
+            "treasury source, and recipient must be pairwise distinct "
+            "accounts",
         )
-    if roles["treasury_source"].account_hash_hex == roles["recipient"].account_hash_hex:
+    mounts = [roles[role].key_file_mount_path for role in ALL_ROLES]
+    if len(set(mounts)) != len(mounts):
         raise CanaryRefusal(
             RefusalCode.ROLE_SET_INVALID,
-            "treasury source and recipient must be distinct accounts",
+            "every role must reference a unique key-file mount",
         )
     return KeyInventory(
         network=MAINNET_CHAIN_NAME, threshold=int(threshold), roles=roles
