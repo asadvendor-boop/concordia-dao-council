@@ -35,8 +35,9 @@ every handoff or live mutation. Claims require the evidence listed here.
 | WP4 registry/artifacts | PASS_LOCAL_PENDING_CAPTURE | fail-closed registry/API, provenance/chronology binding, bounded exact card-chain export, and offline historical receipt verification are committed. Independent C10 review passed the 64 MiB/RSS and nested credential-bypass probes. Only v1 currently has a matching canonical card chain; no root or combined artifact is fabricated locally, and live capture/registry publication remain WP10 |
 | WP6 executor | PASS_LOCAL | `ac03cec` + ordering hardening `fd66e67`; independent audit GO, 285 focused tests |
 | WP8 verifier | PASS_LOCAL_PENDING_PRODUCERS | `8f5ac4a` + truth correction `7aadeca`; independent audit found no P0/P1/P2. Serialized npm gate passes 142/142, lint, audit 0, 132-file pack, temp install/import/bin. Historical v1, exact-v3, native treasury and two-node live corroboration fail closed; WP2/WP3/WP5 adapters await corrected producer schemas. No npm publication yet |
-| WP10 live/release | BLOCKED_ON_POST_REVIEW_FIXES | no live mutation. Core through integration `77bedb9` now has pinned HTTPS RPC transport, owner-private secret reads, durable pre-broadcast journals, two-node finality, verification-only defaults, and exact reconciliation. Independent red-team still requires secure create-once readback output, secure signer custody in install/live tools, exact install-success parsing, explicit journal resume modes, durable two-node treasury-snapshot lineage, exhaustive CLI mode rejection, and source-to-deployment ancestry before Testnet |
-| Release manifest | BLOCKED_ON_DERIVED_RECEIPTS | first assembler `7507684` passed 25 tests but independent adversarial review proved its staged/live status JSON was self-attested. Follow-up must derive and recheck Compose/runtime/Caddy/HTTP/TLS/Pages/npm/RPC observations, bind exact producer-verifier receipts, equality-bind registry metadata to artifacts, scan exact secret canaries, enforce source -> deployment -> artifact ancestry, and remove the arbitrary-payload writer bypass |
+| WP10 live/release | PASS_LOCAL_PENDING_FINAL_BATCH_REVIEW | no live mutation. The correction tree now has secure create-once readback output, file-only signer custody, exact install success, explicit journal resume modes, two-node treasury-snapshot lineage, exhaustive CLI mode rejection, and source-to-deployment ancestry. After additional cross-runtime URL/DNS parity fixes, fresh gates are 895 Python and 149 verifier tests plus lint/Ruff/diff checks. The corrected snapshot-specific independent review is GO with zero P0/P1/P2; the whole-batch independent review remains the commit gate |
+| Release manifest | BLOCKED_ON_FINAL_COLLECTOR_REVIEW | first assembler `7507684` remains superseded and NO-GO. Its three-file replacement now derives Compose/runtime/Caddy/HTTP/TLS/Pages/npm/two-RPC observations, reloads and reruns producer-verifier receipts, binds registry metadata and lineage, scans known secret canaries, requires stable observations, and removes arbitrary ready-payload writing. The new 22-test suite is green, but DNS projection, deep route predicates, Pages deployment status, npm offline self-test, and an independent adversarial review still gate commit |
+| Compose secret scope | PASS_LOCAL_PENDING_REREVIEW | isolated branch `codex/finals-compose-secrets`; CSPR.cloud is file-only in production and mounted only into Mercer, Casper signing is limited to Gateway/Locke, legacy x402 credentials are absent, and SafePay config is limited to Gateway/provider. Raw CSPR.cloud authorization is chain-bound to exact API and Node `/rpc` origins; Association/lookalike hosts receive no token; redirects and environment proxies are disabled. Fresh gate: 883 Python tests, Ruff, rendered Compose, and diff check pass; independent re-review of the final P1/P2 corrections is pending |
 | Integration branch | PASS_LOCAL_PENDING_CORRECTIONS | core history through `77bedb9` is integrated. Fresh integration evidence: 831 Python tests excluding the separately run manifest suite, 25/25 manifest tests, 29 Rust v3 tests, 147 npm verifier tests, TypeScript lint, and Python Ruff all pass. These passing tests do not override the two independent NO-GO code reviews above |
 | Claude integration | BLOCKED_ON_CORRECTIONS | WP2 `9a4d66f` and WP3 `d096403` independently reviewed NO-GO; exact blockers in `handoff/CODEX_REVIEW_CLAUDE_WP2_WP3.md`; no cherry-pick performed |
 | Claude WP5 | BLOCKED_ON_CORRECTIONS | `f5cf748` independently reviewed NO-GO: fail-open optional/partial settlement args plus five durability/config/readiness blockers; exact corrections in `handoff/CODEX_REVIEW_CLAUDE_WP5.md` |
@@ -55,6 +56,21 @@ every handoff or live mutation. Claims require the evidence listed here.
 - CAIP/EIP-712 domain is `casper:casper-test`, not `casper-test`.
 
 ## Latest checkpoint
+
+The latest active local gate has not mutated production, Testnet, DNS, npm,
+GitHub Pages, Caddy, canonical evidence, or `main`. The WP10 correction tree
+passes 895 Python and 149 verifier tests; its snapshot/URL review is GO and its
+whole-batch review is active. The isolated Compose least-privilege tree passes
+883 Python tests after correcting exact raw-auth routing and Testnet/Mainnet
+host binding; final re-review is pending. A local Caddy 2.10.2 probe proved
+that mounted-file placeholders work for both the approval bcrypt hash and the
+overwritten upstream proxy header: unauthenticated access returned 401 and an
+authenticated spoofed-header request reached the test upstream only with the
+mounted value. All temporary containers and files were removed.
+
+Claude's producer branch is still at `9839032`; no correction commit newer than
+the recorded WP2/WP3/WP5/WP7/WP9/WP11 NO-GO reviews has been presented, so
+none of those commits has been integrated.
 
 At the current integration checkpoint, Codex is the sole merge and release
 operator. The full committed core range through `1aa856b` was cherry-picked
