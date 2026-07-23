@@ -117,26 +117,33 @@ def test_quorum_invariant_requires_unique_green_exact_v3_observation(
 
     checks = {
         check["id"]: check
-        for check in proof_runtime.build_invariant_runner(_canonical_evidence())["checks"]
+        for check in proof_runtime.build_invariant_runner(_canonical_evidence())[
+            "checks"
+        ]
     }
 
     assert checks["quorum_required"]["passed"] is True
-    assert "pre_quorum_finalize_reverted_with_code_8" in checks["quorum_required"]["evidence"]
-
-    failed = _exact_v3_item(
-        failed_check="pre_quorum_finalize_reverted_with_code_8"
+    assert (
+        "pre_quorum_finalize_reverted_with_code_8"
+        in checks["quorum_required"]["evidence"]
     )
+
+    failed = _exact_v3_item(failed_check="pre_quorum_finalize_reverted_with_code_8")
     _write_registry(registry, [failed])
     checks = {
         check["id"]: check
-        for check in proof_runtime.build_invariant_runner(_canonical_evidence())["checks"]
+        for check in proof_runtime.build_invariant_runner(_canonical_evidence())[
+            "checks"
+        ]
     }
     assert checks["quorum_required"]["passed"] is False
 
     _write_registry(registry, [_exact_v3_item(), copy.deepcopy(_exact_v3_item())])
     checks = {
         check["id"]: check
-        for check in proof_runtime.build_invariant_runner(_canonical_evidence())["checks"]
+        for check in proof_runtime.build_invariant_runner(_canonical_evidence())[
+            "checks"
+        ]
     }
     assert checks["quorum_required"]["passed"] is False
 
@@ -246,9 +253,12 @@ def test_audit_packet_does_not_promote_unverified_quorum_or_topology_rows(
 
     assert quorum["status"] == "unavailable"
     assert topology["status"] == "unavailable"
-    assert packet["proof_center"]["locke_execution_firewall"].get(
-        "on_chain_quorum_enforced"
-    ) is not True
+    assert (
+        packet["proof_center"]["locke_execution_firewall"].get(
+            "on_chain_quorum_enforced"
+        )
+        is not True
+    )
 
 
 def test_missing_live_gateway_validation_never_defaults_true() -> None:
@@ -267,7 +277,9 @@ def test_missing_live_gateway_validation_never_defaults_true() -> None:
     assert result["live_gateway_validation"] is False
 
 
-def test_below_cap_replay_is_safe_preview_with_separate_envelope_binding_signal() -> None:
+def test_below_cap_replay_is_safe_preview_with_separate_envelope_binding_signal() -> (
+    None
+):
     result = proof_runtime.build_interactive_adversarial_replay(
         _canonical_evidence(), "move 5% of the treasury"
     )
@@ -295,6 +307,48 @@ def test_adversarial_safety_demo_does_not_call_safe_below_cap_preview_blocked() 
     assert "within" in result["reason"].lower()
 
 
+def test_proof_center_never_promotes_local_replay_or_caller_boolean_to_verified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONCORDIA_PROOF_REGISTRY_DIR", str(tmp_path / "empty"))
+    evidence = _canonical_evidence()
+    evidence["casper_receipt"]["deploy_hash"] = "44" * 32
+    evidence["collaboration"] = {"execution_conflict_control": {"exact_match": True}}
+
+    rows = {
+        row["claim"]: row
+        for row in proof_pack.build_proof_center(evidence)["compact_proof_table"]
+    }
+
+    assert (
+        rows["Approved receipt anchored on Casper Testnet"]["status"] == "unavailable"
+    )
+    assert rows["Blocked tamper attempt"]["status"] == "evidenced"
+    assert rows["Exact action envelope matched"]["status"] == "unavailable"
+    assert rows["DAO Mandate binds Locke execution"]["status"] == "unavailable"
+
+
+def test_proof_center_below_cap_preview_is_not_a_blocked_tamper_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONCORDIA_PROOF_REGISTRY_DIR", str(tmp_path / "empty"))
+    evidence = _canonical_evidence()
+    evidence["cards"][0]["data"]["evidence"]["policy_evaluation"][
+        "requested_allocation_bps"
+    ] = 500
+
+    row = next(
+        item
+        for item in proof_pack.build_proof_center(evidence)["compact_proof_table"]
+        if item["claim"] == "Blocked tamper attempt"
+    )
+
+    assert row["status"] == "not_applicable"
+    assert "within" in row["evidence"].lower()
+
+
 def test_judge_quorum_step_fails_closed_without_registry_and_verifies_exact_item(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -303,9 +357,7 @@ def test_judge_quorum_step_fails_closed_without_registry_and_verifies_exact_item
     monkeypatch.setenv("CONCORDIA_PROOF_REGISTRY_DIR", str(registry))
 
     walkthrough = proof_runtime.build_judge_walkthrough(_canonical_evidence())
-    quorum_step = next(
-        step for step in walkthrough["steps"] if step["step"] == 7
-    )
+    quorum_step = next(step for step in walkthrough["steps"] if step["step"] == 7)
 
     assert quorum_step["status"] == "unavailable"
     assert "no unique green" in quorum_step["summary"].lower()
@@ -313,9 +365,7 @@ def test_judge_quorum_step_fails_closed_without_registry_and_verifies_exact_item
 
     _write_registry(registry, [_exact_v3_item()])
     walkthrough = proof_runtime.build_judge_walkthrough(_canonical_evidence())
-    quorum_step = next(
-        step for step in walkthrough["steps"] if step["step"] == 7
-    )
+    quorum_step = next(step for step in walkthrough["steps"] if step["step"] == 7)
 
     assert quorum_step["status"] == "verified"
     assert quorum_step["proof_id"] == "exact_envelope_v3"
@@ -438,19 +488,25 @@ def test_legacy_quorum_boolean_and_hash_summary_cannot_satisfy_verifier() -> Non
     failures = _quorum_failures_for_packet(fabricated)
 
     assert any("derived proof-registry" in failure.lower() for failure in failures)
-    assert _quorum_failures_for_packet(
-        {
-            "odra_quorum_exercise": {
-                "verification_status": "unavailable",
-                "registry_proof": None,
+    assert (
+        _quorum_failures_for_packet(
+            {
+                "odra_quorum_exercise": {
+                    "verification_status": "unavailable",
+                    "registry_proof": None,
+                }
             }
-        }
-    ) == []
-    assert _quorum_failures_for_packet(
-        {
-            "odra_quorum_exercise": {
-                "verification_status": "verified",
-                "registry_proof": _exact_v3_item(),
+        )
+        == []
+    )
+    assert (
+        _quorum_failures_for_packet(
+            {
+                "odra_quorum_exercise": {
+                    "verification_status": "verified",
+                    "registry_proof": _exact_v3_item(),
+                }
             }
-        }
-    ) == []
+        )
+        == []
+    )

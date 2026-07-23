@@ -1,4 +1,5 @@
 """Judge-facing proof and safety packet builders for Concordia."""
+
 from __future__ import annotations
 
 import hashlib
@@ -77,7 +78,9 @@ def _publicize_legacy_fields(value: Any, parent_key: str | None = None) -> Any:
         for key, raw in value.items():
             public_key = _PUBLIC_FIELD_ALIASES.get(key, key)
             public_value = _publicize_legacy_fields(raw, key)
-            if key in {"severity", "preliminary_severity"} and isinstance(public_value, str):
+            if key in {"severity", "preliminary_severity"} and isinstance(
+                public_value, str
+            ):
                 public_value = _PUBLIC_SEVERITY_ALIASES.get(public_value, public_value)
             if key == "runbook" and isinstance(public_value, str):
                 public_value = _PUBLIC_PLAYBOOK_ALIASES.get(public_value, public_value)
@@ -101,7 +104,8 @@ def canonicalize_public_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     evidence = _publicize_legacy_fields(evidence)
     cards = list(evidence.get("cards") or [])
     receipt_indexes = [
-        index for index, card in enumerate(cards)
+        index
+        for index, card in enumerate(cards)
         if card.get("card_type") == "CasperExecutionReceipt"
     ]
     if len(receipt_indexes) <= 1:
@@ -141,12 +145,14 @@ def canonicalize_public_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         new_cards.append(summarized)
     canonicalized["cards"] = new_cards
     canonicalized.setdefault("proof_reconciliation", {})
-    canonicalized["proof_reconciliation"].update({
-        "canonical_receipt_deploy_hash": canonical_deploy,
-        "canonical_contract_hash": canonical_contract,
-        "superseded_receipt_cards": len(receipt_indexes) - 1,
-        "superseded_cards_summarized": True,
-    })
+    canonicalized["proof_reconciliation"].update(
+        {
+            "canonical_receipt_deploy_hash": canonical_deploy,
+            "canonical_contract_hash": canonical_contract,
+            "superseded_receipt_cards": len(receipt_indexes) - 1,
+            "superseded_cards_summarized": True,
+        }
+    )
     return canonicalized
 
 
@@ -213,9 +219,7 @@ def build_adversarial_safety_demo(evidence: dict[str, Any]) -> dict[str, Any]:
         or ("refused_to_sign" if blocked else "preview_only_no_execution"),
         "poisoned_input_rejected": blocked,
         "llm_cannot_inject_numbers": blocked,
-        "envelope_binding_demonstrated": replay.get(
-            "envelope_binding_demonstrated"
-        ),
+        "envelope_binding_demonstrated": replay.get("envelope_binding_demonstrated"),
         "adversarial_prompt": replay.get("prompt"),
         "advisory_model_suggestion": replay.get("advisory_model_suggestion"),
         "casper_transaction_triggered": False,
@@ -224,12 +228,17 @@ def build_adversarial_safety_demo(evidence: dict[str, Any]) -> dict[str, Any]:
 
 def _stored_adversarial_attempt(evidence: dict[str, Any]) -> dict[str, Any] | None:
     top_level_attempt = evidence.get("adversarial_safety_attempt")
-    if isinstance(top_level_attempt, dict) and top_level_attempt.get("status") == "blocked":
+    if (
+        isinstance(top_level_attempt, dict)
+        and top_level_attempt.get("status") == "blocked"
+    ):
         return _format_stored_adversarial_attempt(top_level_attempt)
 
     for card in reversed(evidence.get("cards") or []):
         data = card.get("data") or {}
-        attempt = data.get("adversarial_safety_attempt") or data.get("rogue_execution_attempt")
+        attempt = data.get("adversarial_safety_attempt") or data.get(
+            "rogue_execution_attempt"
+        )
         if isinstance(attempt, dict) and attempt.get("status") == "blocked":
             return _format_stored_adversarial_attempt(attempt)
     return None
@@ -242,7 +251,9 @@ def _format_stored_adversarial_attempt(attempt: dict[str, Any]) -> dict[str, Any
         "proof_mode": attempt.get("proof_mode") or "stored_gateway_attempt",
         "live_gateway_validation": bool(attempt.get("live_gateway_validation", False)),
         "live_exploit_execution": bool(attempt.get("live_exploit_execution", False)),
-        "network_broadcast_attempted": bool(attempt.get("network_broadcast_attempted", False)),
+        "network_broadcast_attempted": bool(
+            attempt.get("network_broadcast_attempted", False)
+        ),
         "execution_attempted": bool(attempt.get("execution_attempted", False)),
         "created_at": attempt.get("created_at"),
         "summary": attempt.get("summary")
@@ -250,19 +261,24 @@ def _format_stored_adversarial_attempt(attempt: dict[str, Any]) -> dict[str, Any
         "approved_allocation_bps": attempt.get("approved_allocation_bps"),
         "attempted_allocation_bps": attempt.get("attempted_allocation_bps"),
         "approved_allocation_label": _bps_label(attempt.get("approved_allocation_bps")),
-        "attempted_allocation_label": _bps_label(attempt.get("attempted_allocation_bps")),
+        "attempted_allocation_label": _bps_label(
+            attempt.get("attempted_allocation_bps")
+        ),
         "approved_envelope_hash": attempt.get("approved_envelope_hash"),
         "attempted_envelope_hash": attempt.get("attempted_envelope_hash"),
         "approved_action_hash": attempt.get("approved_action_hash"),
         "attempted_action_hash": attempt.get("attempted_action_hash"),
-        "reason": attempt.get("reason") or "payload hash does not match approved multisig envelope",
+        "reason": attempt.get("reason")
+        or "payload hash does not match approved multisig envelope",
         "locke_result": attempt.get("locke_result") or "refused_to_sign",
         "poisoned_input_rejected": True,
         "llm_cannot_inject_numbers": True,
     }
 
 
-def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -> list[dict[str, Any]]:
+def build_council_reputation(
+    evidence: dict[str, Any], tamper: dict[str, Any]
+) -> list[dict[str, Any]]:
     cards = evidence.get("cards") or []
     challenge_count = 0
     revision_count = 0
@@ -292,7 +308,7 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
                 ):
                     execution_count += 1
         if card_type == "Assessment":
-            status = ((data.get("evidence") or {}).get("casper_node_status") or {})
+            status = (data.get("evidence") or {}).get("casper_node_status") or {}
             if status:
                 live_read_count += 1
         if card_type == "GovernanceSummary":
@@ -304,19 +320,25 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
             "agent": "Verity",
             "metric": "Challenges raised",
             "value": challenge_count,
-            "signal": f"+{challenge_count} confirmed policy violation" if challenge_count else "No challenge recorded",
+            "signal": f"+{challenge_count} confirmed policy violation"
+            if challenge_count
+            else "No challenge recorded",
         },
         {
             "agent": "Alden",
             "metric": "Revisions accepted",
             "value": revision_count,
-            "signal": "30% plan revised to 8%" if revision_count else "No revision recorded",
+            "signal": "30% plan revised to 8%"
+            if revision_count
+            else "No revision recorded",
         },
         {
             "agent": "Locke",
             "metric": "Exact-envelope executions",
             "value": execution_count,
-            "signal": f"{execution_count} Casper receipt(s) anchored" if execution_count else "No receipt anchored",
+            "signal": f"{execution_count} Casper receipt(s) anchored"
+            if execution_count
+            else "No receipt anchored",
         },
         {
             "agent": "Locke",
@@ -328,67 +350,121 @@ def build_council_reputation(evidence: dict[str, Any], tamper: dict[str, Any]) -
             "agent": "Mercer",
             "metric": "Live Casper reads",
             "value": live_read_count,
-            "signal": "Node status and state-root source surfaced" if live_read_count else "No live read surfaced",
+            "signal": "Node status and state-root source surfaced"
+            if live_read_count
+            else "No live read surfaced",
         },
         {
             "agent": "Concordia Core",
             "metric": "Archives sealed",
             "value": archive_count,
-            "signal": "Deterministic archive packet available" if archive_count else "No sealed archive recorded",
+            "signal": "Deterministic archive packet available"
+            if archive_count
+            else "No sealed archive recorded",
         },
         {
             "agent": "Wells",
             "metric": "Optional summaries",
             "value": optional_summary_count,
-            "signal": "Presentation summary available" if optional_summary_count else "No optional summary recorded",
+            "signal": "Presentation summary available"
+            if optional_summary_count
+            else "No optional summary recorded",
         },
     ]
 
 
 def build_proof_center(evidence: dict[str, Any]) -> dict[str, Any]:
     receipt = _receipt(evidence)
-    collaboration = _collaboration(evidence)
+    proposal_id = str(evidence.get("proposal_id") or "")
     requested, approved = requested_and_approved_bps(evidence)
-    exact_match = (collaboration.get("execution_conflict_control") or {}).get("exact_match")
+    historical_receipt = (
+        _green_registry_item(
+            proposal_id,
+            "historical_odra_receipt_v2",
+            temporal_scope="historical",
+        )
+        if proposal_id
+        else None
+    )
+    exact_v3 = (
+        _green_registry_item(
+            proposal_id,
+            "exact_envelope_v3",
+            temporal_scope="current",
+        )
+        if proposal_id
+        else None
+    )
     tamper = build_adversarial_safety_demo(evidence)
     safepay = build_safepay_lite(evidence)
     invariants = build_invariant_runner(evidence, safepay)
     mandate = build_dao_mandate(evidence)
+    tamper_status = {
+        "blocked": "evidenced",
+        "within_policy_preview": "not_applicable",
+    }.get(str(tamper.get("status")), "unavailable")
+    mandate_evidenced = all(
+        mandate.get(field)
+        for field in (
+            "policy_hash",
+            "dissent_hash",
+            "approval_hash",
+            "final_card_hash",
+        )
+    )
     return {
         "proposal_id": evidence.get("proposal_id"),
         "generated_at": datetime.now(UTC).isoformat(),
         "canonical_manifest": canonical_manifest(),
-        "outcome": receipt.get("decision") or "APPROVED_WITH_LIMITS",
+        "outcome": receipt.get("decision") or "UNAVAILABLE",
         "state": evidence.get("state"),
         "compact_proof_table": [
             {
                 "claim": "Approved receipt anchored on Casper Testnet",
-                "status": "verified" if receipt.get("deploy_hash") else "missing",
-                "evidence": receipt.get("explorer_url") or receipt.get("deploy_hash"),
+                "status": (
+                    "verified" if historical_receipt is not None else "unavailable"
+                ),
+                "evidence": (
+                    historical_receipt.get("artifact_path")
+                    if historical_receipt is not None
+                    else receipt.get("explorer_url") or receipt.get("deploy_hash")
+                ),
             },
             {
                 "claim": "Blocked tamper attempt",
-                "status": "verified",
+                "status": tamper_status,
                 "evidence": f"{tamper['reason']} ({tamper.get('proof_mode', 'proof')})",
             },
             {
                 "claim": "DAO Constitution cap enforced",
-                "status": "verified" if approved < requested else "not_applicable",
+                "status": (
+                    "verified"
+                    if historical_receipt is not None and approved < requested
+                    else "evidenced"
+                    if approved < requested
+                    else "not_applicable"
+                ),
                 "evidence": f"{_bps_label(requested)} request reduced to {_bps_label(approved)} cap",
             },
             {
                 "claim": "Exact action envelope matched",
-                "status": "verified" if exact_match else "review",
-                "evidence": "planned action list equals executed action list" if exact_match else "inspect evidence chain",
+                "status": "verified" if exact_v3 is not None else "unavailable",
+                "evidence": (
+                    exact_v3.get("artifact_path")
+                    if exact_v3 is not None
+                    else "No unique green current exact-envelope v3 registry item"
+                ),
             },
             {
                 "claim": "SafePay Lite specialist report verified",
-                "status": "verified" if safepay.get("status") == "verified" else "unverified",
+                "status": "verified"
+                if safepay.get("status") == "verified"
+                else "unverified",
                 "evidence": safepay.get("payment_hash"),
             },
             {
                 "claim": "DAO Mandate binds Locke execution",
-                "status": "verified",
+                "status": "evidenced" if mandate_evidenced else "unavailable",
                 "evidence": mandate.get("mandate_hash"),
             },
             {
@@ -398,12 +474,18 @@ def build_proof_center(evidence: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "locke_execution_firewall": {
-            "approved_envelope_hash_matched": exact_match is True,
-            "policy_hash_sealed": bool(receipt.get("policy_hash")),
-            "dissent_hash_sealed": bool(receipt.get("dissent_hash")),
-            "final_card_hash_sealed": bool(receipt.get("final_card_hash")),
+            "approved_envelope_hash_matched": exact_v3 is not None,
+            "policy_hash_sealed": bool(
+                historical_receipt is not None and receipt.get("policy_hash")
+            ),
+            "dissent_hash_sealed": bool(
+                historical_receipt is not None and receipt.get("dissent_hash")
+            ),
+            "final_card_hash_sealed": bool(
+                historical_receipt is not None and receipt.get("final_card_hash")
+            ),
             "multisig_approval_required": True,
-            "casper_receipt_processed": bool(receipt.get("deploy_hash")),
+            "casper_receipt_processed": historical_receipt is not None,
             "llm_can_suggest": True,
             "llm_can_execute_unapproved_action": False,
         },
@@ -458,7 +540,7 @@ def build_proof_center(evidence: dict[str, Any]) -> dict[str, Any]:
 def _find_state_root(evidence: dict[str, Any]) -> str | None:
     for card in evidence.get("cards") or []:
         data = card.get("data") or {}
-        status = ((data.get("evidence") or {}).get("casper_node_status") or {})
+        status = (data.get("evidence") or {}).get("casper_node_status") or {}
         if status.get("state_root_hash"):
             return status["state_root_hash"]
     return None
@@ -508,16 +590,13 @@ def build_audit_packet(evidence: dict[str, Any]) -> dict[str, Any]:
     }
     if quorum_proof:
         quorum_status = (
-            quorum_proof.get("current_quorum_verification_status")
-            or "unavailable"
+            quorum_proof.get("current_quorum_verification_status") or "unavailable"
         )
         registry_proof = quorum_proof.get("registry_proof") or {}
         quorum_projection = {
             "schema": "concordia.quorum-public-projection.v2",
             "verification_status": quorum_status,
-            "artifact_reported_status": quorum_proof.get(
-                "artifact_reported_status"
-            ),
+            "artifact_reported_status": quorum_proof.get("artifact_reported_status"),
             "historical_artifact": {
                 "artifact_path": "artifacts/live/odra-quorum-exercise-plan.json",
                 "verification_status": "unavailable",
@@ -548,11 +627,8 @@ def build_audit_packet(evidence: dict[str, Any]) -> dict[str, Any]:
     if topology_proof:
         topology_projection = {
             "schema": "concordia.topology-public-projection.v2",
-            "verification_status": topology_proof.get("status")
-            or "unavailable",
-            "artifact_reported_status": topology_proof.get(
-                "artifact_reported_status"
-            ),
+            "verification_status": topology_proof.get("status") or "unavailable",
+            "artifact_reported_status": topology_proof.get("artifact_reported_status"),
             "artifact_path": "artifacts/live/odra-topology-genesis-proof.json",
             "module_names": sorted((topology_proof.get("modules") or {}).keys()),
             "registry_proof": topology_proof.get("registry_proof"),
