@@ -24,6 +24,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
     "opentelemetry-instrumentation-httpx>=0.51b0,<1.0",
     "reportlab>=5.0.0",
+    "pypdf==6.14.2",
 ]
 
 [dependency-groups]
