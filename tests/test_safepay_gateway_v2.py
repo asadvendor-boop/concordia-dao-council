@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1676,6 +1677,122 @@ def test_safepay_global_admission_resets_only_at_window_boundary() -> None:
     assert not limiter.admit("redemptions", "client-c")
     now[0] = 180.0
     assert limiter.admit("redemptions", "client-c")
+
+
+class _ForcedWindowInterleavingLock:
+    """Hold the stale thread before the limiter's real critical section."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.stale_waiting = threading.Event()
+        self.release_stale = threading.Event()
+
+    def __enter__(self):
+        if threading.current_thread().name == "stale-window":
+            self.stale_waiting.set()
+            if not self.release_stale.wait(timeout=5):
+                raise TimeoutError("forced stale-window interleaving timed out")
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._lock.release()
+
+
+def test_gateway_admission_cannot_rewind_under_forced_window_interleaving() -> None:
+    thread_windows = {
+        "stale-window": 0.0,
+        "fresh-window": 60.0,
+        "followup-window": 60.0,
+    }
+    limiter = SafePayAdmissionLimiter(
+        quote_requests_per_window=10,
+        payment_intent_requests_per_window=10,
+        redemption_requests_per_window=10,
+        global_requests_per_window=1,
+        window_seconds=60,
+        max_buckets=10,
+        clock=lambda: thread_windows[threading.current_thread().name],
+    )
+    forced_lock = _ForcedWindowInterleavingLock()
+    limiter._lock = forced_lock
+    results: dict[str, bool] = {}
+
+    def attempt(name: str, identity: str) -> None:
+        results[name] = limiter.admit("quotes", identity)
+
+    stale = threading.Thread(
+        target=attempt,
+        args=("stale", "client-stale"),
+        name="stale-window",
+    )
+    fresh = threading.Thread(
+        target=attempt,
+        args=("fresh", "client-fresh"),
+        name="fresh-window",
+    )
+    followup = threading.Thread(
+        target=attempt,
+        args=("followup", "client-followup"),
+        name="followup-window",
+    )
+
+    stale.start()
+    assert forced_lock.stale_waiting.wait(timeout=5)
+    fresh.start()
+    fresh.join(timeout=5)
+    assert not fresh.is_alive()
+    forced_lock.release_stale.set()
+    stale.join(timeout=5)
+    assert not stale.is_alive()
+    followup.start()
+    followup.join(timeout=5)
+    assert not followup.is_alive()
+
+    assert results == {"fresh": True, "stale": False, "followup": False}
+    assert limiter._global_window == 1
+    assert limiter._global_count == 1
+
+
+def test_gateway_global_admission_is_atomic_under_concurrency() -> None:
+    limit = 7
+    workers = 32
+    limiter = SafePayAdmissionLimiter(
+        quote_requests_per_window=workers,
+        payment_intent_requests_per_window=workers,
+        redemption_requests_per_window=workers,
+        global_requests_per_window=limit,
+        window_seconds=60,
+        max_buckets=workers,
+        clock=lambda: 120.0,
+    )
+    barrier = threading.Barrier(workers)
+    results: list[bool] = []
+    results_lock = threading.Lock()
+
+    def attempt(index: int) -> None:
+        barrier.wait()
+        admitted = limiter.admit(
+            ("quotes", "payment_intents", "redemptions")[index % 3],
+            f"client-{index}",
+        )
+        with results_lock:
+            results.append(admitted)
+
+    threads = [
+        threading.Thread(target=attempt, args=(index,))
+        for index in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert results.count(True) == limit
+    assert results.count(False) == workers - limit
+    assert limiter._global_window == 2
+    assert limiter._global_count == limit
 
 
 @pytest.mark.parametrize(

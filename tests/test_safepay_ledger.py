@@ -1256,6 +1256,125 @@ def test_provider_redemption_admission_bucket_table_is_bounded_and_fails_closed(
     assert observer.calls == 1
 
 
+class _ProviderForcedWindowInterleavingLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.stale_waiting = threading.Event()
+        self.release_stale = threading.Event()
+
+    def __enter__(self):
+        if threading.current_thread().name == "provider-stale-window":
+            self.stale_waiting.set()
+            if not self.release_stale.wait(timeout=5):
+                raise TimeoutError("forced provider interleaving timed out")
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._lock.release()
+
+
+def test_provider_admission_cannot_rewind_under_forced_window_interleaving() -> None:
+    thread_windows = {
+        "provider-stale-window": 0.0,
+        "provider-fresh-window": 60.0,
+        "provider-followup-window": 60.0,
+    }
+    admission = SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=10,
+            global_limit=1,
+            window_seconds=60,
+            max_client_buckets=10,
+        ),
+        clock=lambda: thread_windows[threading.current_thread().name],
+    )
+    forced_lock = _ProviderForcedWindowInterleavingLock()
+    admission._lock = forced_lock
+    results: dict[str, bool] = {}
+
+    def attempt(name: str, identity: str) -> None:
+        results[name] = admission.admit(identity)
+
+    stale = threading.Thread(
+        target=attempt,
+        args=("stale", "client-stale"),
+        name="provider-stale-window",
+    )
+    fresh = threading.Thread(
+        target=attempt,
+        args=("fresh", "client-fresh"),
+        name="provider-fresh-window",
+    )
+    followup = threading.Thread(
+        target=attempt,
+        args=("followup", "client-followup"),
+        name="provider-followup-window",
+    )
+
+    stale.start()
+    assert forced_lock.stale_waiting.wait(timeout=5)
+    fresh.start()
+    fresh.join(timeout=5)
+    assert not fresh.is_alive()
+    forced_lock.release_stale.set()
+    stale.join(timeout=5)
+    assert not stale.is_alive()
+    followup.start()
+    followup.join(timeout=5)
+    assert not followup.is_alive()
+
+    assert results == {"fresh": True, "stale": False, "followup": False}
+    assert admission._global_window == 1
+    assert admission._global_count == 1
+
+
+def test_provider_admission_rollover_and_global_limit_are_atomic() -> None:
+    clock = FakeClock(start=120)
+    limit = 5
+    workers = 24
+    admission = SafePayRedemptionAdmission(
+        SafePayRedemptionAdmissionCaps(
+            per_client_limit=workers,
+            global_limit=limit,
+            window_seconds=60,
+            max_client_buckets=workers,
+        ),
+        clock=clock,
+    )
+    barrier = threading.Barrier(workers)
+    results: list[bool] = []
+    results_lock = threading.Lock()
+
+    def attempt(index: int) -> None:
+        barrier.wait()
+        admitted = admission.admit(f"client-{index}")
+        with results_lock:
+            results.append(admitted)
+
+    threads = [
+        threading.Thread(target=attempt, args=(index,))
+        for index in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert results.count(True) == limit
+    assert results.count(False) == workers - limit
+    assert admission._global_window == 2
+    assert admission._global_count == limit
+
+    clock.advance(59.999)
+    assert not admission.admit("before-boundary")
+    clock.advance(0.001)
+    assert admission.admit("at-boundary")
+    assert admission._global_window == 3
+    assert admission._global_count == 1
+
+
 def test_provider_v2_amount_never_falls_back_to_legacy_payment_amount(
     tmp_path,
     monkeypatch,

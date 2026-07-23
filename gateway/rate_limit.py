@@ -128,12 +128,22 @@ class SafePayAdmissionLimiter:
         if not isinstance(client_identity, str) or not client_identity:
             return False
 
-        current_window = int(self._clock() // self.window_seconds)
         bucket_key = (operation, client_identity)
         with self._lock:
-            if self._global_window != current_window:
+            # Clock sampling and window-state mutation share one critical
+            # section. A delayed request can therefore never apply an older
+            # sample after another thread has advanced the limiter.
+            current_window = int(self._clock() // self.window_seconds)
+            if self._global_window < 0:
                 self._global_window = current_window
                 self._global_count = 0
+            elif current_window > self._global_window:
+                self._global_window = current_window
+                self._global_count = 0
+            elif current_window < self._global_window:
+                # Wall/fixture clock regression: fail closed rather than
+                # rewinding and manufacturing another aggregate allowance.
+                return False
             existing = self._buckets.get(bucket_key)
             if existing is not None and existing[0] == current_window:
                 if (

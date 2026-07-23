@@ -133,11 +133,18 @@ class SafePayRedemptionAdmission:
     def admit(self, client_key: str) -> bool:
         if not isinstance(client_key, str) or not client_key:
             return False
-        current_window = int(self._clock() // self.caps.window_seconds)
         with self._lock:
-            if self._global_window != current_window:
+            # Sample the clock only after acquiring the state lock. Advancing
+            # is monotonic; a stale or regressed sample never rewinds quotas.
+            current_window = int(self._clock() // self.caps.window_seconds)
+            if self._global_window < 0:
                 self._global_window = current_window
                 self._global_count = 0
+            elif current_window > self._global_window:
+                self._global_window = current_window
+                self._global_count = 0
+            elif current_window < self._global_window:
+                return False
 
             existing = self._client_buckets.get(client_key)
             client_count = (
