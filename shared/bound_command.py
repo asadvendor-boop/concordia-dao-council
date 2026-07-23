@@ -99,6 +99,26 @@ class BoundCommandResult:
     stderr: bytes
     tool_identity: Mapping[str, object]
     command_assets: tuple[Mapping[str, object], ...] = ()
+    private_outputs: tuple[PrivateOutput, ...] = ()
+
+
+@dataclass(frozen=True)
+class PrivateOutputSpec:
+    """One exact private output argument owned by the bound runner."""
+
+    argument_index: int
+    name: str
+    size_limit: int
+
+
+@dataclass(frozen=True)
+class PrivateOutput:
+    """Path-redacted immutable bytes recovered from a descriptor-bound output."""
+
+    name: str
+    raw: bytes
+    sha256: str
+    size: int
 
 
 @dataclass(frozen=True)
@@ -160,6 +180,15 @@ class _StagedData:
     source: _DataBinding
     path: Path
     stat_identity: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _StagedPrivateOutput:
+    spec: PrivateOutputSpec
+    path: Path
+    descriptor: int
+    device: int
+    inode: int
 
 
 _BOUND_PROCESS_NONCE_ENV = "CONCORDIA_INTERNAL_BOUND_PROCESS_NONCE"
@@ -2238,6 +2267,187 @@ def _revalidate_staged_data(staged: _StagedData) -> None:
         raise BoundCommandError("private data snapshot differs")
 
 
+def _validate_private_output_specs(
+    specs: Sequence[PrivateOutputSpec],
+    *,
+    argv: Sequence[str],
+    command_script: bool,
+    bound_data_argument_indexes: set[int],
+) -> tuple[PrivateOutputSpec, ...]:
+    validated: list[PrivateOutputSpec] = []
+    seen_indexes: set[int] = set()
+    seen_names: set[str] = set()
+    for spec in specs:
+        if type(spec) is not PrivateOutputSpec:
+            raise BoundCommandError("private output specification is invalid")
+        argument_index = spec.argument_index
+        name = spec.name
+        size_limit = spec.size_limit
+        if (
+            type(argument_index) is not int
+            or argument_index <= 0
+            or argument_index >= len(argv)
+            or argument_index in seen_indexes
+            or argument_index in bound_data_argument_indexes
+            or command_script
+            and argument_index == 1
+        ):
+            raise BoundCommandError("private output argument is outside its contract")
+        if (
+            type(name) is not str
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) is None
+            or name in {".", ".."}
+            or name in seen_names
+        ):
+            raise BoundCommandError("private output name is outside its contract")
+        if argv[argument_index] != name:
+            raise BoundCommandError(
+                "private output must match one exact command argument"
+            )
+        if (
+            type(size_limit) is not int
+            or size_limit <= 0
+            or size_limit > 1024 * 1024 * 1024
+        ):
+            raise BoundCommandError("private output size limit is outside its contract")
+        seen_indexes.add(argument_index)
+        seen_names.add(name)
+        validated.append(spec)
+    return tuple(validated)
+
+
+def _open_private_output_directory(directory: Path) -> tuple[Path, int]:
+    output_directory = directory / "private-outputs"
+    try:
+        os.mkdir(output_directory, 0o700)
+        descriptor = os.open(
+            output_directory,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise BoundCommandError("private output directory could not be created") from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o777 != 0o700
+    ):
+        os.close(descriptor)
+        raise BoundCommandError("private output directory identity differs")
+    return output_directory, descriptor
+
+
+def _stage_private_output(
+    output_directory: Path,
+    directory_descriptor: int,
+    spec: PrivateOutputSpec,
+) -> _StagedPrivateOutput:
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(
+            spec.name,
+            flags,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+    except OSError as exc:
+        raise BoundCommandError("private output could not be created") from exc
+    try:
+        os.set_inheritable(descriptor, False)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        os.fsync(directory_descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o777 != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise BoundCommandError("private output identity differs")
+        return _StagedPrivateOutput(
+            spec=spec,
+            path=output_directory / spec.name,
+            descriptor=descriptor,
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _revalidate_private_output(
+    staged: _StagedPrivateOutput,
+    *,
+    directory_descriptor: int,
+    include_bytes: bool,
+) -> PrivateOutput | None:
+    try:
+        descriptor_metadata = os.fstat(staged.descriptor)
+        path_metadata = os.stat(
+            staged.spec.name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        path_descriptor = os.open(
+            staged.spec.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+    except OSError as exc:
+        raise BoundCommandError("private output path was substituted") from exc
+    try:
+        opened_metadata = os.fstat(path_descriptor)
+        identities = (
+            descriptor_metadata,
+            path_metadata,
+            opened_metadata,
+        )
+        if any(
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_dev != staged.device
+            or metadata.st_ino != staged.inode
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o777 != 0o600
+            or metadata.st_nlink != 1
+            for metadata in identities
+        ):
+            raise BoundCommandError("private output path changed")
+        if descriptor_metadata.st_size > staged.spec.size_limit:
+            raise BoundCommandError("private output is oversized")
+        if not include_bytes:
+            return None
+        os.fsync(staged.descriptor)
+        os.lseek(staged.descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = descriptor_metadata.st_size
+        while remaining:
+            chunk = os.read(staged.descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise BoundCommandError("private output read was truncated")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) != descriptor_metadata.st_size:
+            raise BoundCommandError("private output read was truncated")
+        return PrivateOutput(
+            name=staged.spec.name,
+            raw=raw,
+            sha256=hashlib.sha256(raw).hexdigest(),
+            size=len(raw),
+        )
+    finally:
+        os.close(path_descriptor)
+
+
 def run_bound_command(
     *,
     cwd: Path,
@@ -2251,6 +2461,7 @@ def run_bound_command(
     accepted_authority: HostToolchainAuthority | None = None,
     command_asset_root: Path | None = None,
     bound_data_inputs: Sequence[Path] = (),
+    private_output_specs: Sequence[PrivateOutputSpec] = (),
 ) -> BoundCommandResult:
     """Run one exact logical tool without shell or caller-controlled resolution."""
 
@@ -2299,6 +2510,14 @@ def run_bound_command(
             raise BoundCommandError("command entrypoint cannot be a bound data input")
         seen_data_paths.add(binding.path)
         data_bindings.append((matches[0], binding))
+    validated_private_output_specs = _validate_private_output_specs(
+        private_output_specs,
+        argv=argv,
+        command_script=command_script,
+        bound_data_argument_indexes={
+            argument_index for argument_index, _binding in data_bindings
+        },
+    )
 
     primary = _source_binding(spec)
     launcher: _SourceBinding | None = None
@@ -2322,6 +2541,8 @@ def run_bound_command(
     snapshots: list[_StagedSource] = []
     staged_trees: list[_StagedTree] = []
     staged_data: list[_StagedData] = []
+    staged_private_outputs: list[_StagedPrivateOutput] = []
+    private_output_directory_descriptor: int | None = None
     command_assets: list[Mapping[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="concordia-bound-command-") as name:
         directory = Path(name)
@@ -2366,6 +2587,28 @@ def run_bound_command(
             staged_data.append(snapshot)
             execution_parts[argument_index] = snapshot.path.as_posix()
             command_assets.append(binding.safe_identity)
+        if validated_private_output_specs:
+            (
+                private_output_directory,
+                private_output_directory_descriptor,
+            ) = _open_private_output_directory(directory)
+            try:
+                for output_spec in validated_private_output_specs:
+                    staged_output = _stage_private_output(
+                        private_output_directory,
+                        private_output_directory_descriptor,
+                        output_spec,
+                    )
+                    staged_private_outputs.append(staged_output)
+                    execution_parts[output_spec.argument_index] = (
+                        staged_output.path.as_posix()
+                    )
+            except BaseException:
+                for staged_output in staged_private_outputs:
+                    os.close(staged_output.descriptor)
+                os.close(private_output_directory_descriptor)
+                private_output_directory_descriptor = None
+                raise
 
         execution_argv = tuple(execution_parts)
         executable = primary_path
@@ -2422,14 +2665,45 @@ def run_bound_command(
             )
             if check and process_result.returncode != 0:
                 raise BoundCommandError("bound command returned a nonzero status")
+            if private_output_directory_descriptor is None:
+                private_output_records: tuple[PrivateOutput, ...] = ()
+            else:
+                private_output_records = tuple(
+                    output
+                    for staged_output in staged_private_outputs
+                    if (
+                        output := _revalidate_private_output(
+                            staged_output,
+                            directory_descriptor=private_output_directory_descriptor,
+                            include_bytes=True,
+                        )
+                    )
+                    is not None
+                )
             return BoundCommandResult(
                 returncode=process_result.returncode,
                 stdout=process_result.stdout,
                 stderr=process_result.stderr,
                 tool_identity=MappingProxyType(identity.to_dict()),
                 command_assets=tuple(command_assets),
+                private_outputs=private_output_records,
             )
         finally:
+            private_output_error: BaseException | None = None
+            if private_output_directory_descriptor is not None:
+                try:
+                    for staged_output in staged_private_outputs:
+                        _revalidate_private_output(
+                            staged_output,
+                            directory_descriptor=private_output_directory_descriptor,
+                            include_bytes=False,
+                        )
+                except BaseException as exc:
+                    private_output_error = exc
+                finally:
+                    for staged_output in staged_private_outputs:
+                        os.close(staged_output.descriptor)
+                    os.close(private_output_directory_descriptor)
             for snapshot in snapshots:
                 _revalidate_snapshot(snapshot)
             for tree in staged_trees:
@@ -2447,6 +2721,8 @@ def run_bound_command(
                 _revalidate_data(binding)
             if launcher is not None:
                 _revalidate_source(launcher)
+            if private_output_error is not None:
+                raise private_output_error
 
 
 def _run_bound_git(

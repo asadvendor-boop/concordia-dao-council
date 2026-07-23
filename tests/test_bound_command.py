@@ -12,7 +12,7 @@ from types import MappingProxyType
 import pytest
 
 from shared import bound_command, release_gate_contract
-from shared.bound_command import BoundCommandError, ToolSpec
+from shared.bound_command import BoundCommandError, PrivateOutputSpec, ToolSpec
 
 
 def _tool_spec(
@@ -174,6 +174,7 @@ def test_bound_command_ignores_path_and_executes_private_snapshot(
     assert result.returncode == 0
     assert result.stdout == b"SAFE\n"
     assert result.stderr == b""
+    assert result.private_outputs == ()
     assert (
         result.tool_identity["source_sha256"]
         == hashlib.sha256(safe.read_bytes()).hexdigest()
@@ -1541,4 +1542,242 @@ def test_bound_data_requires_one_exact_nonsymlink_argument(
             stderr_limit=4096,
             timeout_s=5,
             bound_data_inputs=(linked,),
+        )
+
+
+def test_bound_command_returns_descriptor_bound_private_output_without_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = tmp_path / "collector"
+    secret = b'{"authorization":"do-not-print","rows":[1,2,3]}\n'
+    tool.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "--version" ]; then printf \'collector 1.0\\n\'; exit; fi\n'
+        "printf '%s' '{\"authorization\":\"do-not-print\",\"rows\":[1,2,3]}'"
+        ' > "$1"\n'
+        "printf '\\n' >> \"$1\"\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(
+        bound_command,
+        "_TOOL_SPECS",
+        MappingProxyType({"collector": _tool_spec("collector", tool)}),
+    )
+
+    result = bound_command.run_bound_command(
+        cwd=tmp_path,
+        tool_id="collector",
+        argv=("collector", "raw-capture.json"),
+        env={"LANG": "C"},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+        private_output_specs=(
+            PrivateOutputSpec(
+                argument_index=1,
+                name="raw-capture.json",
+                size_limit=1024,
+            ),
+        ),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b""
+    assert result.stderr == b""
+    assert len(result.private_outputs) == 1
+    output = result.private_outputs[0]
+    assert output.name == "raw-capture.json"
+    assert output.raw == secret
+    assert output.size == len(secret)
+    assert output.sha256 == hashlib.sha256(secret).hexdigest()
+    identity = json.dumps(dict(result.tool_identity), sort_keys=True)
+    assets = json.dumps([dict(value) for value in result.command_assets], sort_keys=True)
+    assert "do-not-print" not in identity
+    assert "do-not-print" not in assets
+    assert str(tmp_path) not in identity
+
+
+@pytest.mark.parametrize(
+    ("spec", "match"),
+    (
+        (
+            PrivateOutputSpec(
+                argument_index=0,
+                name="raw.json",
+                size_limit=1024,
+            ),
+            "argument",
+        ),
+        (
+            PrivateOutputSpec(
+                argument_index=1,
+                name="../raw.json",
+                size_limit=1024,
+            ),
+            "name",
+        ),
+        (
+            PrivateOutputSpec(
+                argument_index=1,
+                name="raw.json",
+                size_limit=0,
+            ),
+            "size",
+        ),
+    ),
+)
+def test_private_output_spec_is_exact_and_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    spec: PrivateOutputSpec,
+    match: str,
+) -> None:
+    tool = tmp_path / "collector"
+    tool.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "--version" ]; then printf \'collector 1.0\\n\'; exit; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(
+        bound_command,
+        "_TOOL_SPECS",
+        MappingProxyType({"collector": _tool_spec("collector", tool)}),
+    )
+
+    with pytest.raises(BoundCommandError, match=match):
+        bound_command.run_bound_command(
+            cwd=tmp_path,
+            tool_id="collector",
+            argv=("collector", "raw.json"),
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+            private_output_specs=(spec,),
+        )
+
+
+def test_private_output_requires_one_exact_declared_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = tmp_path / "collector"
+    tool.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "--version" ]; then printf \'collector 1.0\\n\'; exit; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(
+        bound_command,
+        "_TOOL_SPECS",
+        MappingProxyType({"collector": _tool_spec("collector", tool)}),
+    )
+
+    with pytest.raises(BoundCommandError, match="exact command argument"):
+        bound_command.run_bound_command(
+            cwd=tmp_path,
+            tool_id="collector",
+            argv=("collector", "different.json"),
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+            private_output_specs=(
+                PrivateOutputSpec(
+                    argument_index=1,
+                    name="raw.json",
+                    size_limit=1024,
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("replacement", ("symlink", "regular"))
+def test_private_output_rejects_path_substitution_after_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    tool = tmp_path / "collector"
+    target = tmp_path / "outside"
+    target.write_bytes(b"outside\n")
+    replacement_command = (
+        f"ln -s '{target.as_posix()}' \"$1\""
+        if replacement == "symlink"
+        else "printf 'replacement\\n' > \"$1\""
+    )
+    tool.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "--version" ]; then printf \'collector 1.0\\n\'; exit; fi\n'
+        "printf 'original\\n' > \"$1\"\n"
+        "mv \"$1\" \"$1.saved\"\n"
+        f"{replacement_command}\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(
+        bound_command,
+        "_TOOL_SPECS",
+        MappingProxyType({"collector": _tool_spec("collector", tool)}),
+    )
+
+    with pytest.raises(BoundCommandError, match="private output.*(changed|substituted)"):
+        bound_command.run_bound_command(
+            cwd=tmp_path,
+            tool_id="collector",
+            argv=("collector", "raw.json"),
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+            private_output_specs=(
+                PrivateOutputSpec(
+                    argument_index=1,
+                    name="raw.json",
+                    size_limit=1024,
+                ),
+            ),
+        )
+
+
+def test_private_output_refuses_oversized_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = tmp_path / "collector"
+    tool.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "--version" ]; then printf \'collector 1.0\\n\'; exit; fi\n'
+        "printf '123456789' > \"$1\"\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    monkeypatch.setattr(
+        bound_command,
+        "_TOOL_SPECS",
+        MappingProxyType({"collector": _tool_spec("collector", tool)}),
+    )
+
+    with pytest.raises(BoundCommandError, match="private output is oversized"):
+        bound_command.run_bound_command(
+            cwd=tmp_path,
+            tool_id="collector",
+            argv=("collector", "raw.bin"),
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+            private_output_specs=(
+                PrivateOutputSpec(
+                    argument_index=1,
+                    name="raw.bin",
+                    size_limit=8,
+                ),
+            ),
         )
