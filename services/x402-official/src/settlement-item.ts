@@ -65,7 +65,16 @@ const PROPOSAL_RE = /^[A-Z0-9-]{1,64}$/;
 const ASCII_TEXT_RE = /^[\x20-\x7e]{1,256}$/;
 // Registry-compatible UTC-Z instant: shared/proof_registry.py accepts at most
 // six fractional digits and no leap second (datetime.fromisoformat rejects
-// second 60), so emission is stricter than src/time.ts alone.
+// second 60).
+//
+// This is now REDUNDANT defence-in-depth, not an added constraint: since the
+// exact-chronology pass, src/time.ts enforces BOTH itself (its grammar caps
+// the fraction at six digits and it rejects second > 59), and a differential
+// check found no input the ordinal parser accepts that this pattern rejects.
+// It is retained deliberately so the emission grammar stays legible and
+// locally enforced at the registry boundary — do NOT read it as licence to
+// relax src/time.ts, whose consumers (registry.ts in particular) have no
+// grammar guard of their own.
 const REGISTRY_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:(\d{2})(?:\.\d{1,6})?Z$/;
 const EVIDENCE_RE = /^[\x20-\x7e]{1,1024}$/;
 
@@ -291,8 +300,12 @@ function requireCommit40(value: string, code: string): string {
 /**
  * Registry-compatible strict UTC-Z instant. Returns the EXACT microsecond
  * ordinal (BigInt) so chronology matches Python to the microsecond; throws
- * with the caller's code otherwise. Stricter than the parser alone: at most
- * six fractional digits and no leap second, matching shared/proof_registry.py.
+ * with the caller's code otherwise.
+ *
+ * The local grammar check below now duplicates rather than tightens
+ * src/time.ts (which itself caps the fraction at six digits and rejects
+ * second 60) — see the REGISTRY_UTC_RE comment. It stays as a boundary-local
+ * restatement of shared/proof_registry.py's rules.
  */
 function requireRegistryUtc(value: unknown, code: string): bigint {
   if (typeof value !== "string") throw new SettlementItemError(code);
