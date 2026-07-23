@@ -6,6 +6,7 @@ import copy
 import json
 import multiprocessing
 import sqlite3
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -47,8 +48,14 @@ SOURCE_KEY = parse_private_key_bytes(bytes(range(1, 33)), KeyAlgorithm.ED25519)
 SOURCE_ACCOUNT = SOURCE_KEY.to_public_key().to_account_hash()
 RECIPIENT_ACCOUNT = bytes.fromhex("42" * 32)
 TIMESTAMP_SECONDS = 1_753_228_800.0
-SOURCE_COMMIT = "ab" * 20
-DEPLOYMENT_COMMIT = "cd" * 20
+RELEASE_COMMIT = subprocess.check_output(
+    ["git", "rev-parse", "HEAD^{commit}"],
+    cwd=Path(__file__).resolve().parents[1],
+    stderr=subprocess.DEVNULL,
+    text=True,
+).strip()
+SOURCE_COMMIT = RELEASE_COMMIT
+DEPLOYMENT_COMMIT = RELEASE_COMMIT
 
 
 def _verified(

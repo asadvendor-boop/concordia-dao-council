@@ -265,6 +265,7 @@ def test_builder_rejects_provider_agreed_state_root_outside_install_state(
         "schema_hash",
         "source_hash",
         "source_commit",
+        "deployment_commit",
     ),
 )
 def test_builder_rejects_deployment_outside_frozen_local_release(
@@ -279,8 +280,10 @@ def test_builder_rejects_deployment_outside_frozen_local_release(
         deployment["build"]["schema_sha256"] = "fe" * 32
     elif tamper == "source_hash":
         deployment["source"]["lib_rs_sha256"] = "fd" * 32
+    elif tamper == "source_commit":
+        deployment["source_commit"] = "de" * 20
     else:
-        deployment["source_commit"] = "not-a-commit"
+        deployment["deployment_commit"] = "ef" * 20
     sources["deployment"] = canonical_bytes(deployment)
 
     with pytest.raises(NativeTransferInputError, match="deployment|release"):

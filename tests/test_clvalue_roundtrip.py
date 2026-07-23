@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -841,6 +842,12 @@ def _deployment_evidence(
         "install_deploy_hash": install_json["hash"],
     }
     verified_install = _validate_successful_install_rpc(install_raw, install_manifest)
+    release_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        cwd=ROOT,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).strip()
     install_block_timestamp = "2026-01-23T12:34:58.000Z"
     install_observations = []
     for index, source in enumerate(
@@ -887,8 +894,8 @@ def _deployment_evidence(
             "deployment_domain": deployment_domain,
             "installation_nonce": nonce,
             "roles": roles,
-            "source_commit": "ab" * 20,
-            "deployment_commit": "cd" * 20,
+            "source_commit": release_commit,
+            "deployment_commit": release_commit,
             "installer_public_key": installer_public.account_key.hex(),
             "installer_account_hash": installer_public.to_account_hash().hex(),
             "threshold": 2,
@@ -1178,6 +1185,24 @@ def test_offline_verifier_requires_install_two_node_finality() -> None:
     del proof["deployment"]["two_node_finality"]
 
     with pytest.raises(ProofVerificationError, match="two-node finality"):
+        verify_v3_proof_document(proof)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("source_commit", "de" * 20),
+        ("deployment_commit", "ef" * 20),
+    ),
+)
+def test_offline_verifier_rejects_arbitrary_valid_git40_release_commits(
+    field: str,
+    replacement: str,
+) -> None:
+    proof, _, _ = _bound_v3_proof()
+    proof["deployment"][field] = replacement
+
+    with pytest.raises(ProofVerificationError, match="release commit identity"):
         verify_v3_proof_document(proof)
 
 

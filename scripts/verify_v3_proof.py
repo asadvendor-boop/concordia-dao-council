@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import re
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -46,6 +47,16 @@ _RFC3339_UTC = re.compile(
 )
 ROOT = Path(__file__).resolve().parents[1]
 V3_ROOT = ROOT / "contracts/odra-governance-receipt-v3"
+_V3_RELEASE_IDENTITY_PATHS = (
+    "contracts/odra-governance-receipt-v3/deployment.manifest.json",
+    "contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm",
+    "contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/"
+    "governance_receiptv3_schema.json",
+    "contracts/odra-governance-receipt-v3/src/lib.rs",
+    "contracts/odra-governance-receipt-v3/src/encoding.rs",
+    "contracts/odra-governance-receipt-v3/Cargo.lock",
+    "handoff/HISTORICAL_ODRA_SHA256.txt",
+)
 
 
 def _canonical_json(value: object) -> bytes:
@@ -211,6 +222,102 @@ def _verify_release_files(manifest: Mapping[str, Any]) -> None:
         raise ProofVerificationError("deployment historical-isolation evidence is invalid")
 
 
+def _verify_release_commit_identity(
+    *,
+    source_commit: str,
+    deployment_commit: str,
+) -> None:
+    error = "deployment release commit identity cannot be verified"
+
+    def git_output(*arguments: str) -> bytes:
+        try:
+            return subprocess.check_output(
+                ["git", *arguments],
+                cwd=ROOT,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ProofVerificationError(error) from exc
+
+    head = git_output("rev-parse", "--verify", "HEAD^{commit}").decode().strip().lower()
+    resolved_source = (
+        git_output("rev-parse", "--verify", source_commit + "^{commit}")
+        .decode()
+        .strip()
+        .lower()
+    )
+    resolved_deployment = (
+        git_output("rev-parse", "--verify", deployment_commit + "^{commit}")
+        .decode()
+        .strip()
+        .lower()
+    )
+    if (
+        not hmac.compare_digest(source_commit, resolved_source)
+        or not hmac.compare_digest(deployment_commit, resolved_deployment)
+    ):
+        raise ProofVerificationError(error)
+
+    for ancestor, descendant in (
+        (source_commit, deployment_commit),
+        (deployment_commit, head),
+    ):
+        try:
+            ancestry = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+                cwd=ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as exc:
+            raise ProofVerificationError(error) from exc
+        if ancestry.returncode != 0:
+            raise ProofVerificationError(error)
+
+    try:
+        worktree = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--quiet",
+                "--no-ext-diff",
+                "--no-textconv",
+                "HEAD",
+                "--",
+                *_V3_RELEASE_IDENTITY_PATHS,
+            ],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError as exc:
+        raise ProofVerificationError(error) from exc
+    if worktree.returncode != 0:
+        raise ProofVerificationError(error)
+
+    head_tree = git_output(
+        "ls-tree",
+        "-r",
+        "--full-tree",
+        head,
+        "--",
+        *_V3_RELEASE_IDENTITY_PATHS,
+    )
+    for commit in (source_commit, deployment_commit):
+        release_tree = git_output(
+            "ls-tree",
+            "-r",
+            "--full-tree",
+            commit,
+            "--",
+            *_V3_RELEASE_IDENTITY_PATHS,
+        )
+        if not hmac.compare_digest(release_tree, head_tree):
+            raise ProofVerificationError(error)
+
+
 def verify_v3_deployment_manifest(value: object) -> dict[str, Any]:
     """Verify a finalized deployment against the frozen local v3 release."""
 
@@ -240,6 +347,10 @@ def verify_v3_deployment_manifest(value: object) -> dict[str, Any]:
         raise ProofVerificationError("deployment source_commit is invalid")
     if not isinstance(value["deployment_commit"], str) or _COMMIT.fullmatch(value["deployment_commit"]) is None:
         raise ProofVerificationError("deployment deployment_commit is invalid")
+    _verify_release_commit_identity(
+        source_commit=value["source_commit"],
+        deployment_commit=value["deployment_commit"],
+    )
     package_hash = _lower_hash(value["package_hash"], "deployment package hash")
     contract_hash = _lower_hash(value["contract_hash"], "deployment contract hash")
     if value["contract_version"] != 1:
