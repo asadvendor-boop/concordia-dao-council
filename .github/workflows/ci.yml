@@ -48,6 +48,14 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install locked Chromium test runtime
+        working-directory: scripts/g13-browser-runtime
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          PLAYWRIGHT_BROWSERS_PATH=0 \
+            node node_modules/playwright/cli.js install --with-deps chromium
+
       - name: Run tests
         run: >-
           uv run --frozen --isolated --python python3.12

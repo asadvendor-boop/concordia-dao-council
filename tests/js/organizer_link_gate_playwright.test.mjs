@@ -15,6 +15,7 @@ const runtimePackage = path.join(
   root,
   "scripts/g13-browser-runtime/package.json",
 );
+process.env.PLAYWRIGHT_BROWSERS_PATH = "0";
 const requireRuntime = createRequire(runtimePackage);
 const { chromium } = requireRuntime("playwright");
 

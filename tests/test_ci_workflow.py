@@ -30,7 +30,17 @@ def test_ci_pins_release_runtimes_and_builds_verifier_before_pytest() -> None:
     assert "npm ci" in source
     assert "npm run build" in source
     assert "working-directory: packages/verify" in source
+    assert "working-directory: scripts/g13-browser-runtime" in source
+    assert "npm ci --ignore-scripts --no-audit --no-fund" in source
+    assert "PLAYWRIGHT_BROWSERS_PATH=0" in source
+    assert (
+        "node node_modules/playwright/cli.js install --with-deps chromium"
+        in source
+    )
     assert source.index("npm run build") < source.index("python -m pytest -q")
+    assert source.index("install --with-deps chromium") < source.index(
+        "python -m pytest -q"
+    )
 
 
 def test_ci_does_not_shadow_pinned_runtime_entrypoints_with_detached_copies() -> None:
