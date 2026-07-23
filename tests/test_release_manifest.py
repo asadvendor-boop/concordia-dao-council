@@ -383,16 +383,61 @@ def _artifact_documents(
         "captured_at": CAPTURED_AT,
         "source_commit": source_commit,
         "deployment_commit": deployment_commit,
-        "quote": {"quote_id": "quote-1", "resource": "DAO-PROP-6CB25C"},
-        "consumption": {"payment_hash": "99" * 32},
-        "redemption_observations": [{"kind": "initial"}, {"kind": "retry"}],
-        "verification": {"report_hash": "aa" * 32},
+        "capture_identity": {
+            "provider_url": "https://x402-provider.example.invalid",
+            "provider_deployment_id": "provider-release-1",
+            "provider_image_digest": f"sha256:{'98' * 32}",
+            "capture_tool_commit": source_commit,
+        },
+        "quote": {
+            "quote_id": "123e4567-e89b-42d3-a456-426614174000",
+            "proposal_id": "DAO-PROP-6CB25C",
+            "resource_id": "risk-report:DAO-PROP-6CB25C",
+            "network": "casper:casper-test",
+            "report_hash": "aa" * 32,
+        },
+        "issued_quote_rows": {
+            "before_restart": {"row_sha256": "90" * 32},
+            "after_restart": {"row_sha256": "90" * 32},
+        },
+        "chain_evidence": {
+            "network": "casper:casper-test",
+            "payment_hash": "99" * 32,
+            "providers": [{"endpoint_id": "node-a"}, {"endpoint_id": "node-b"}],
+            "parsed_transfer": {"native_transfer_count": 1},
+        },
+        "consumption_rows": {
+            "before_restart": {"row_sha256": "91" * 32},
+            "after_restart": {"row_sha256": "91" * 32},
+        },
+        "ledger_evidence": {
+            "authoritative_database_id": "safepay-provider-ledger",
+            "authoritative_schema_id": "concordia.safepay-provider-ledger.sqlite.v1",
+            "after_first_consumption": {"sqlite_backup_sha256": "92" * 32},
+            "after_exact_retry": {"sqlite_backup_sha256": "93" * 32},
+            "after_cross_binding_reuse": {"sqlite_backup_sha256": "94" * 32},
+        },
+        "redemption_observations": {
+            "first_consumption": {"http_status": 200},
+            "exact_retry": {"http_status": 200},
+            "cross_binding_reuse": {"http_status": 409},
+        },
+        "protected_report": {
+            "proposal_id": "DAO-PROP-6CB25C",
+            "report_hash": "aa" * 32,
+        },
     }
     official = {
         "schema_version": "concordia.official_x402_settlement.v1",
         "captured_at": CAPTURED_AT,
         "source_commit": source_commit,
         "deployment_commit": deployment_commit,
+        "capture_identity": {
+            "service_url": "https://x402.example.invalid",
+            "service_deployment_id": "x402-release-1",
+            "service_image_digest": f"sha256:{'97' * 32}",
+            "capture_tool_commit": source_commit,
+        },
         "governance_binding": {
             "proposal_id": "DAO-PROP-6CB25C",
             "proposal_hash": "18" * 32,
@@ -405,35 +450,55 @@ def _artifact_documents(
             "network": "casper:casper-test",
             "package_hash": "11" * 32,
             "contract_hash": "22" * 32,
-            "v3_finalized_exact": True,
             "finalization_transaction": "20" * 32,
             "finalized_at": CAPTURED_AT,
             "observed_at": CAPTURED_AT,
             "resource_url_hash": "21" * 32,
-            "checks": [
-                {
-                    "name": name,
-                    "required": True,
-                    "passed": True,
-                    "source": ARTIFACT_PATHS["official_x402_settlement_v1"],
-                    "observed_at": CAPTURED_AT,
-                }
-                for name in REQUIRED_CHECKS_BY_PROOF_TYPE["exact_envelope_v3"]
-            ],
-        },
-        "payment_requirements": {
-            "amount_atomic": "25",
             "payment_requirements_hash": "14" * 32,
+            "signed_payment_payload_hash": "cc" * 32,
+            "report_hash": "12" * 32,
+            "v3_proof_sha256": "23" * 32,
+            "v3_proof_bytes_base64": "e30=",
         },
-        "signed_payment_payload": {
-            "authorization_hash": "cc" * 32,
+        "resource_and_payment": {
+            "configured_resource_sha256": "21" * 32,
+            "accepted_sha256": "14" * 32,
+            "payment_requirements_argument_sha256": "14" * 32,
+        },
+        "authorization": {
+            "payment_requirements_hash": "14" * 32,
             "signed_payment_payload_hash": "cc" * 32,
         },
-        "facilitator_verification": {"response_digest": "dd" * 32},
-        "settlement": {"transaction_hash": "ee" * 32},
-        "finality": {"block_hash": "ff" * 32},
+        "facilitator": {
+            "supported": {"response_sha256": "24" * 32},
+            "verify": {"response_sha256": "25" * 32},
+            "settle": {"response_sha256": "26" * 32},
+            "parsed_verify": {"isValid": True},
+            "parsed_settle": {"success": True},
+        },
+        "wcspr_readbacks": {
+            "pre_verify": {"contract_hash": "27" * 32},
+            "pre_settle": {"contract_hash": "27" * 32},
+            "post_settle": {"contract_hash": "27" * 32},
+        },
+        "settlement_chain_evidence": {
+            "network": "casper:casper-test",
+            "settlement_transaction": "ee" * 32,
+            "providers": [{"endpoint_id": "node-a"}, {"endpoint_id": "node-b"}],
+            "parsed_settlement": {"execution_error": None},
+        },
+        "fulfillment": {
+            "first_row": {"row_sha256": "28" * 32},
+            "post_restart_row": {"row_sha256": "28" * 32},
+            "exact_retry": {"response_status": 200},
+            "cross_binding_reuse": {"response_status": 409},
+        },
         "protected_report": {"report_hash": "12" * 32},
-        "fulfillment": {"resource": "DAO-PROP-6CB25C"},
+        "release_order": {
+            "v3_finalized_at": CAPTURED_AT,
+            "settlement_finalized_at": CAPTURED_AT,
+            "report_released_at": CAPTURED_AT,
+        },
     }
 
     artifact_by_proof = {
@@ -648,6 +713,327 @@ def _artifact_documents(
         "proof_registry_v1": registry,
         "safepay_v2": safepay,
     }
+
+
+def _adapter_check(check: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "name": check["name"],
+        "passed": True,
+        "source": check["source"],
+        "observed_at": check["observed_at"],
+        "evidence_paths": ["/independently/recomputed/evidence"],
+        "evidence_sha256": "31" * 32,
+    }
+
+
+def _adapter_results(
+    documents: Mapping[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    registry = documents["proof_registry_v1"]
+    public_items = {
+        str(item["proof_type"]): item
+        for item in registry["public_items"]
+        if type(item) is dict
+    }
+    internal_records = {
+        str(item["action_kind"]): item
+        for item in registry["internal_records"]
+        if type(item) is dict
+    }
+    safepay_item = public_items["safepay_v2"]
+    safepay = documents["safepay_v2"]
+    safepay_quote = safepay["quote"]
+    safepay_chain = safepay["chain_evidence"]
+    official_item = public_items["official_x402_settlement_v1"]
+    official = documents["official_x402_settlement_v1"]
+    official_governance = official["governance_binding"]
+    official_settlement = official["settlement_chain_evidence"]
+    return {
+        "safepay_v2": {
+            "schema_version": "concordia.safepay_v2_adapter_result.v1",
+            "proof_type": "safepay_v2",
+            "artifact_sha256": hashlib.sha256(_canonical(safepay)).hexdigest(),
+            "derived_facts": {
+                "proposal_id": safepay_quote["proposal_id"],
+                "resource_id": safepay_quote["resource_id"],
+                "network": safepay_quote["network"],
+                "quote_id": safepay_quote["quote_id"],
+                "quote_hash": "32" * 32,
+                "correlation_id": "1234",
+                "payment_hash": safepay_chain["payment_hash"],
+                "report_hash": safepay_item["report_hash"],
+                "first_fulfillment_hash": "33" * 32,
+                "retry_fulfillment_hash": "33" * 32,
+                "consumption_count": 1,
+                "source_commit": safepay["source_commit"],
+                "deployment_commit": safepay["deployment_commit"],
+                "captured_at": safepay["captured_at"],
+            },
+            "checks": [
+                _adapter_check(check) for check in safepay_item["checks"]
+            ],
+        },
+        "official_x402_settlement_v1": {
+            "schema_version": "concordia.official_x402_adapter_result.v1",
+            "proof_type": "official_x402_settlement_v1",
+            "artifact_sha256": hashlib.sha256(_canonical(official)).hexdigest(),
+            "derived_facts": {
+                "proposal_id": official_governance["proposal_id"],
+                "proposal_hash": official_governance["proposal_hash"],
+                "proposal_nonce": official_governance["proposal_nonce"],
+                "action_id": official_governance["action_id"],
+                "action_kind": official_governance["action_kind"],
+                "action_version": official_governance["action_version"],
+                "envelope_hash": official_governance["envelope_hash"],
+                "deployment_domain": official_governance["deployment_domain"],
+                "network": official_governance["network"],
+                "package_hash": official_governance["package_hash"],
+                "contract_hash": official_governance["contract_hash"],
+                "v3_finalized_exact": True,
+                "finalization_transaction": official_governance[
+                    "finalization_transaction"
+                ],
+                "finalized_at": official_governance["finalized_at"],
+                "observed_at": official_governance["observed_at"],
+                "resource_url_hash": official_governance["resource_url_hash"],
+                "payment_requirements_hash": official_governance[
+                    "payment_requirements_hash"
+                ],
+                "signed_payment_payload_hash": official_governance[
+                    "signed_payment_payload_hash"
+                ],
+                "report_hash": official_governance["report_hash"],
+                "settlement_transaction": official_settlement[
+                    "settlement_transaction"
+                ],
+                "source_commit": official["source_commit"],
+                "deployment_commit": official["deployment_commit"],
+                "captured_at": official["captured_at"],
+            },
+            "internal_record": internal_records["OfficialX402SettlementV1"],
+            "checks": [
+                _adapter_check(check) for check in official_item["checks"]
+            ],
+        },
+    }
+
+
+def _parity_artifacts(
+    documents: Mapping[str, dict[str, object]],
+    *,
+    adapter_results: Mapping[str, dict[str, object]] | None = None,
+) -> dict[str, release_manifest._Artifact]:
+    results: dict[str, release_manifest._Artifact] = {}
+    for artifact_id in (
+        "historical_odra_receipt_v1",
+        "card_chain_roots_v1",
+        "exact_envelope_v3",
+        "native_treasury_execution_v1",
+        "official_x402_settlement_v1",
+        "proof_registry_v1",
+        "safepay_v2",
+    ):
+        document = documents[artifact_id]
+        raw = _canonical(document)
+        metadata = release_manifest._artifact_metadata(
+            artifact_id,
+            document,
+            historical=results.get("historical_odra_receipt_v1"),
+            artifact_commit="fe" * 20,
+        )
+        results[artifact_id] = release_manifest._Artifact(
+            artifact_id=artifact_id,
+            bound=release_manifest._BoundFile(
+                path=ARTIFACT_PATHS[artifact_id],
+                raw=raw,
+                sha256=hashlib.sha256(raw).hexdigest(),
+                artifact_commit="fe" * 20,
+                fingerprint=(1, 1, len(raw), 1),
+            ),
+            document=document,
+            canonical=raw,
+            schema_version=metadata[0],
+            captured_at=metadata[1],
+            source_commit=metadata[2],
+            deployment_commit=metadata[3],
+            observation_mode=metadata[4],
+            adapter_result=(
+                None
+                if adapter_results is None
+                else adapter_results.get(artifact_id)
+            ),
+        )
+    return results
+
+
+def test_fixed_proof_evidence_inventory_matches_pinned_live_schemas() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    root = Path(__file__).parents[1]
+    expected = {
+        "safepay_v2": (
+            "capture_identity",
+            "quote",
+            "issued_quote_rows",
+            "chain_evidence",
+            "consumption_rows",
+            "ledger_evidence",
+            "redemption_observations",
+            "protected_report",
+        ),
+        "official_x402_settlement_v1": (
+            "capture_identity",
+            "governance_binding",
+            "resource_and_payment",
+            "authorization",
+            "facilitator",
+            "wcspr_readbacks",
+            "settlement_chain_evidence",
+            "fulfillment",
+            "protected_report",
+            "release_order",
+        ),
+    }
+    schema_paths = {
+        "safepay_v2": "handoff/schemas/safepay-v2-live-artifact.schema.json",
+        "official_x402_settlement_v1": (
+            "handoff/schemas/official-x402-live-artifact.schema.json"
+        ),
+    }
+    for artifact_id, evidence_fields in expected.items():
+        assert release_manifest._REQUIRED_EVIDENCE_FIELDS[artifact_id] == (
+            evidence_fields
+        )
+        schema = json.loads((root / schema_paths[artifact_id]).read_bytes())
+        assert tuple(schema["required"][4:]) == evidence_fields
+        assert set(documents[artifact_id]) == set(schema["required"])
+        release_manifest._require_nonempty_proof(
+            artifact_id, documents[artifact_id]
+        )
+
+
+def test_fixed_proof_registry_parity_uses_only_independent_adapter_results() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    adapter_results = _adapter_results(documents)
+    artifacts = _parity_artifacts(
+        documents,
+        adapter_results=adapter_results,
+    )
+
+    release_manifest._validate_registry_parity(artifacts)
+
+    forged = json.loads(json.dumps(documents))
+    forged["safepay_v2"]["verification"] = {
+        "verified": True,
+        "report_hash": "aa" * 32,
+    }
+    forged["official_x402_settlement_v1"]["governance_binding"][
+        "v3_finalized_exact"
+    ] = True
+    forged["official_x402_settlement_v1"]["governance_binding"]["checks"] = [
+        {"name": "producer_claim", "passed": True}
+    ]
+    for proof_type, artifact_id in (
+        ("safepay_v2", "safepay_v2"),
+        ("official_x402_settlement_v1", "official_x402_settlement_v1"),
+    ):
+        item = next(
+            row
+            for row in forged["proof_registry_v1"]["public_items"]
+            if row["proof_type"] == proof_type
+        )
+        item["artifact_sha256"] = hashlib.sha256(
+            _canonical(forged[artifact_id])
+        ).hexdigest()
+    with pytest.raises(
+        ReleaseManifestError,
+        match="independent adapter result",
+    ):
+        release_manifest._validate_registry_parity(
+            _parity_artifacts(forged, adapter_results={})
+        )
+
+
+def test_fixed_proof_registry_parity_rejects_adapter_fact_or_check_drift() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    adapter_results = _adapter_results(documents)
+    bad_report = json.loads(json.dumps(adapter_results))
+    bad_report["safepay_v2"]["derived_facts"]["report_hash"] = "ab" * 32
+    with pytest.raises(ReleaseManifestError, match="SafePay.*adapter"):
+        release_manifest._validate_registry_parity(
+            _parity_artifacts(documents, adapter_results=bad_report)
+        )
+
+    bad_check = json.loads(json.dumps(adapter_results))
+    bad_check["official_x402_settlement_v1"]["checks"][0]["name"] = (
+        "producer_claim"
+    )
+    with pytest.raises(ReleaseManifestError, match="official-x402.*adapter"):
+        release_manifest._validate_registry_parity(
+            _parity_artifacts(documents, adapter_results=bad_check)
+        )
+
+
+def test_official_x402_adapter_capture_cannot_be_future_dated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    official = documents["official_x402_settlement_v1"]
+    future = "9999-12-31T23:59:59Z"
+    official["captured_at"] = future
+    raw = _canonical(official)
+    result = _adapter_results(documents)["official_x402_settlement_v1"]
+    result["artifact_sha256"] = hashlib.sha256(raw).hexdigest()
+    result["derived_facts"]["captured_at"] = future
+    monkeypatch.setattr(
+        release_manifest.release_proof_adapters,
+        "verify_official_x402_artifact",
+        lambda document, artifact_bytes: result,
+    )
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="official_x402_settlement_v1 independent adapter release identity differs",
+    ):
+        release_manifest._run_release_adapter(
+            artifact_id="official_x402_settlement_v1",
+            document=official,
+            raw=raw,
+            metadata=(
+                "concordia.official_x402_settlement.v1",
+                future,
+                "1" * 40,
+                "2" * 40,
+                "live",
+            ),
+        )
+
+
+def test_release_adapter_check_cannot_be_future_dated() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    result = _adapter_results(documents)["official_x402_settlement_v1"]
+    result["checks"][0]["observed_at"] = "9999-12-31T23:59:59Z"
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="official_x402_settlement_v1 independent adapter check is future-dated",
+    ):
+        release_manifest._adapter_registry_checks(
+            result,
+            "official_x402_settlement_v1",
+        )
+
+
+def test_release_registry_parity_rejects_future_dated_artifact() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    documents["official_x402_settlement_v1"][
+        "captured_at"
+    ] = "9999-12-31T23:59:59Z"
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="registry artifact is future-dated: official_x402_settlement_v1",
+    ):
+        release_manifest._validate_registry_parity(_parity_artifacts(documents))
 
 
 def test_release_registry_requires_all_five_proofs_green_and_card_roots() -> None:
@@ -1749,6 +2135,35 @@ def release_repository(
         ]
     )
     verifier = FakeVerifier()
+    fixture_adapter_results = _adapter_results(
+        _artifact_documents(source_commit, deployment_commit)
+    )
+
+    def fake_adapter_result(
+        artifact_id: str,
+        document: dict[str, object],
+        raw: bytes,
+    ) -> dict[str, object]:
+        result = json.loads(json.dumps(fixture_adapter_results[artifact_id]))
+        result["artifact_sha256"] = hashlib.sha256(raw).hexdigest()
+        facts = result["derived_facts"]
+        facts["captured_at"] = document["captured_at"]
+        facts["source_commit"] = document["source_commit"]
+        facts["deployment_commit"] = document["deployment_commit"]
+        return result
+
+    monkeypatch.setattr(
+        release_manifest.release_proof_adapters,
+        "verify_safepay_v2_artifact",
+        lambda document, raw: fake_adapter_result("safepay_v2", document, raw),
+    )
+    monkeypatch.setattr(
+        release_manifest.release_proof_adapters,
+        "verify_official_x402_artifact",
+        lambda document, raw: fake_adapter_result(
+            "official_x402_settlement_v1", document, raw
+        ),
+    )
     monkeypatch.setattr(release_manifest, "_collector_factory", lambda root: collector)
     monkeypatch.setattr(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
@@ -3525,7 +3940,7 @@ def test_judge_critical_json_routes_require_artifact_bound_structure(
     )
 
     with pytest.raises(
-        ReleaseManifestError, match="evidence|proof pack|SafePay|artifact"
+        ReleaseManifestError, match=r"evidence|proof[- ]pack|SafePay|artifact"
     ):
         capture_release_observations_once(repository)
 

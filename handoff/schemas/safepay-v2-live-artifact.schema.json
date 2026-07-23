@@ -14,6 +14,7 @@
     "issued_quote_rows",
     "chain_evidence",
     "consumption_rows",
+    "ledger_evidence",
     "redemption_observations",
     "protected_report"
   ],
@@ -37,7 +38,8 @@
         "provider_url",
         "provider_deployment_id",
         "provider_image_digest",
-        "capture_tool_commit"
+        "capture_tool_commit",
+        "provider_instances"
       ],
       "properties": {
         "provider_url": {
@@ -52,6 +54,22 @@
         },
         "capture_tool_commit": {
           "$ref": "#/$defs/git_sha"
+        },
+        "provider_instances": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before_restart",
+            "after_restart"
+          ],
+          "properties": {
+            "before_restart": {
+              "$ref": "#/$defs/provider_runtime_identity"
+            },
+            "after_restart": {
+              "$ref": "#/$defs/provider_runtime_identity"
+            }
+          }
         }
       }
     },
@@ -169,8 +187,7 @@
       "additionalProperties": false,
       "required": [
         "before_restart",
-        "after_restart",
-        "exact_count"
+        "after_restart"
       ],
       "properties": {
         "before_restart": {
@@ -178,11 +195,11 @@
         },
         "after_restart": {
           "$ref": "#/$defs/consumption_row_observation"
-        },
-        "exact_count": {
-          "const": 1
         }
       }
+    },
+    "ledger_evidence": {
+      "$ref": "#/$defs/ledger_evidence"
     },
     "redemption_observations": {
       "type": "object",
@@ -282,10 +299,54 @@
       "minLength": 1,
       "maxLength": 256
     },
+    "provider_runtime_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_id",
+        "deployment_id",
+        "image_digest",
+        "started_at",
+        "observed_at",
+        "restart_count",
+        "instance_id"
+      ],
+      "properties": {
+        "container_id": {
+          "$ref": "#/$defs/hex32"
+        },
+        "deployment_id": {
+          "$ref": "#/$defs/bounded_text"
+        },
+        "image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "started_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "restart_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "instance_id": {
+          "$ref": "#/$defs/hex32"
+        }
+      }
+    },
     "base64": {
       "type": "string",
       "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
       "maxLength": 1398104
+    },
+    "sqlite_backup_base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+      "minLength": 1,
+      "maxLength": 89478488
     },
     "proposal_id": {
       "type": "string",
@@ -468,6 +529,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "url",
         "request_body_base64",
         "request_body_sha256",
         "response_status",
@@ -477,6 +539,9 @@
         "observed_at"
       ],
       "properties": {
+        "url": {
+          "$ref": "#/$defs/https_url"
+        },
         "request_body_base64": {
           "$ref": "#/$defs/base64"
         },
@@ -507,7 +572,8 @@
         "endpoint_id",
         "origin",
         "info_get_deploy",
-        "chain_get_block"
+        "chain_get_block",
+        "info_get_status"
       ],
       "properties": {
         "endpoint_id": {
@@ -521,6 +587,9 @@
           "$ref": "#/$defs/rpc_exchange"
         },
         "chain_get_block": {
+          "$ref": "#/$defs/rpc_exchange"
+        },
+        "info_get_status": {
           "$ref": "#/$defs/rpc_exchange"
         }
       }
@@ -601,6 +670,66 @@
         },
         "provider_instance_id": {
           "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "ledger_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sqlite_backup_base64",
+        "sqlite_backup_sha256",
+        "observed_at",
+        "provider_instance_id"
+      ],
+      "properties": {
+        "sqlite_backup_base64": {
+          "$ref": "#/$defs/sqlite_backup_base64"
+        },
+        "sqlite_backup_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "provider_instance_id": {
+          "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "ledger_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authoritative_database_id",
+        "authoritative_schema_id",
+        "migration_sql_base64",
+        "migration_sql_sha256",
+        "after_first_consumption",
+        "after_exact_retry",
+        "after_cross_binding_reuse"
+      ],
+      "properties": {
+        "authoritative_database_id": {
+          "const": "safepay-provider-ledger"
+        },
+        "authoritative_schema_id": {
+          "const": "concordia.safepay-provider-ledger.sqlite.v1"
+        },
+        "migration_sql_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "migration_sql_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "after_first_consumption": {
+          "$ref": "#/$defs/ledger_snapshot"
+        },
+        "after_exact_retry": {
+          "$ref": "#/$defs/ledger_snapshot"
+        },
+        "after_cross_binding_reuse": {
+          "$ref": "#/$defs/ledger_snapshot"
         }
       }
     },

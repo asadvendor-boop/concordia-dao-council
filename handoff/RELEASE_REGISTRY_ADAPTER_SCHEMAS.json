@@ -21,7 +21,7 @@
   "exact_json_schemas": {
     "official_x402_artifact": {
       "path": "handoff/schemas/official-x402-live-artifact.schema.json",
-      "sha256": "11475e0aeea558e20e69c997cd15ed86daf0a45e63c43c42431f2e600f29250b"
+      "sha256": "69d8bca41d46ccb9d3673460a1ad07addf0d1b6dcbcae141ad9585db21e08a19"
     },
     "official_x402_result": {
       "path": "handoff/schemas/official-x402-adapter-result.schema.json",
@@ -29,7 +29,7 @@
     },
     "safepay_artifact": {
       "path": "handoff/schemas/safepay-v2-live-artifact.schema.json",
-      "sha256": "be557c92a8d303d58321e95e6be2516e26d175b446b55a1f723dc1d5804625e3"
+      "sha256": "38620dc4e86a9f803f64baf063b5019ddfcaa2df47f6cf21eaf9b5979a9860d4"
     },
     "safepay_result": {
       "path": "handoff/schemas/safepay-v2-adapter-result.schema.json",
@@ -203,7 +203,7 @@
       {
         "check": "settlement_transaction_finalized_without_execution_error",
         "id": "OX-ADAPTER-16",
-        "mutation": "/settlement_chain_evidence/providers/0/info_get_deploy/response_body_base64"
+        "mutation": "/settlement_chain_evidence/providers/0/info_get_transaction/response_body_base64"
       },
       {
         "check": "active_wcspr_v8_post_settle_target_and_args_readback_passed",
@@ -223,7 +223,7 @@
       {
         "check": "exact_retry_returned_stored_fulfillment_without_second_settlement",
         "id": "OX-ADAPTER-20",
-        "mutation": "/fulfillment/exact_retry/response_body_base64"
+        "mutation": "/fulfillment/exact_retry/payment_response_raw_value_base64"
       },
       {
         "check": "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission",
@@ -233,7 +233,7 @@
       {
         "check": "protected_report_released_only_after_finalized_state",
         "id": "OX-ADAPTER-22",
-        "mutation": "/release_order/report_released_at"
+        "mutation": "/fulfillment/first_release/observed_at"
       }
     ],
     "required_top_level_fields": [
@@ -259,12 +259,17 @@
         "sanitized_settle_request",
         "sanitized_settle_response"
       ],
-      "finality": [
-        "two_named_rpc_endpoint_identities",
-        "exact_info_get_deploy_requests_and_responses",
-        "exact_chain_get_block_requests_and_responses",
-        "block_hash",
-        "block_height",
+    "finality": [
+      "two_named_rpc_endpoint_identities",
+      "two_release_pinned_rpc_origins",
+      "exact_info_get_transaction_requests_and_responses",
+      "exact_chain_get_block_requests_and_responses",
+      "exact_info_get_status_requests_and_responses",
+      "valid_unique_casper_block_proof_signers",
+      "distinct_node_signing_identities",
+      "minimum_eight_confirmation_depth",
+      "block_hash",
+      "block_height",
         "state_root_hash",
         "block_timestamp",
         "execution_result",
@@ -273,9 +278,12 @@
       "fulfillment": [
         "first_persisted_row",
         "post_restart_row",
-        "exact_retry_request_and_response",
-        "cross_binding_request_and_terminal_409_response",
-        "upstream_call_count_before_and_after_rejected_reuse"
+        "first_paid_resource_request_and_response_with_payment_headers",
+        "exact_retry_paid_resource_request_and_response_with_payment_headers",
+        "cross_binding_request_and_terminal_409_without_payment_response",
+        "three_sqlite_upstream_settle_journal_snapshots",
+        "canonical_journal_rows_and_root_recomputed_from_each_snapshot",
+        "single_settle_attempt_as_two_append_only_events_bound_to_transcript_and_finalized_fulfillment"
       ],
       "signature": [
         "payment_requirements_canonical_bytes",
@@ -285,11 +293,12 @@
         "public_key",
         "recovered_payer_account_hash"
       ],
-      "wcspr_v8": [
-        "pre_verify_package_contract_version_entry_point_and_args",
-        "pre_settle_package_contract_version_entry_point_and_args",
-        "post_settle_package_contract_version_entry_point_and_args"
-      ]
+    "wcspr_v8": [
+      "pre_verify_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "pre_settle_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "post_settle_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "v8_is_latest_enabled_version"
+    ]
     }
   },
   "safepay_v2": {
@@ -405,6 +414,7 @@
       "issued_quote_rows",
       "chain_evidence",
       "consumption_rows",
+      "ledger_evidence",
       "redemption_observations",
       "protected_report"
     ],
@@ -414,13 +424,24 @@
         "issued_quote_row_after_restart",
         "consumption_row_before_restart",
         "consumption_row_after_restart",
+        "capture_tool_commit_equals_source_commit",
+        "two_ordered_provider_runtime_identities",
+        "runtime_identity_bound_quote_consumption_and_snapshot_observations",
         "unique_network_payment_hash_key",
-        "exact_consumption_count"
+        "no_second_consumption_sharing_payment_quote_hash_or_correlation",
+        "repository_migration_bytes_and_digest",
+        "three_progressive_sqlite_backup_snapshots",
+        "sqlite_integrity_and_schema_match",
+        "exact_target_consumption_query_and_observation_sequence",
+        "durable_and_http_observation_chronology"
       ],
       "finality": [
         "two_named_rpc_endpoint_identities",
+        "exact_rpc_exchange_url_equals_provider_origin",
         "exact_info_get_deploy_requests_and_responses",
         "exact_chain_get_block_requests_and_responses",
+        "exact_info_get_status_requests_and_responses",
+        "minimum_eight_block_confirmation_depth_from_each_node",
         "block_hash",
         "block_height",
         "state_root_hash",

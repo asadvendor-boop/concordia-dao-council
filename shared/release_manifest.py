@@ -46,6 +46,7 @@ from urllib.parse import urljoin, urlsplit
 
 import bcrypt
 
+from shared import release_proof_adapters
 from shared.bound_command import (
     BoundCommandError,
     BoundCommandResult,
@@ -725,6 +726,7 @@ class _Artifact:
     source_commit: str
     deployment_commit: str
     observation_mode: str
+    adapter_result: Mapping[str, Any] | None = None
 
 
 def _utc_now() -> datetime:
@@ -2816,21 +2818,27 @@ _REQUIRED_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
         "bounded_transfer_scan",
     ),
     "official_x402_settlement_v1": (
+        "capture_identity",
         "governance_binding",
-        "payment_requirements",
-        "signed_payment_payload",
-        "facilitator_verification",
-        "settlement",
-        "finality",
-        "protected_report",
+        "resource_and_payment",
+        "authorization",
+        "facilitator",
+        "wcspr_readbacks",
+        "settlement_chain_evidence",
         "fulfillment",
+        "protected_report",
+        "release_order",
     ),
     "proof_registry_v1": ("public_items", "internal_records", "card_chain_roots"),
     "safepay_v2": (
+        "capture_identity",
         "quote",
-        "consumption",
+        "issued_quote_rows",
+        "chain_evidence",
+        "consumption_rows",
+        "ledger_evidence",
         "redemption_observations",
-        "verification",
+        "protected_report",
     ),
 }
 
@@ -2842,6 +2850,187 @@ def _require_nonempty_proof(artifact_id: str, document: Mapping[str, Any]) -> No
             raise ReleaseManifestError(
                 f"{artifact_id} proof artifact has empty required evidence: {field}"
             )
+
+
+_ADAPTER_RESULT_CONTRACTS: dict[str, tuple[str, frozenset[str]]] = {
+    "safepay_v2": (
+        "concordia.safepay_v2_adapter_result.v1",
+        frozenset(
+            {
+                "schema_version",
+                "proof_type",
+                "artifact_sha256",
+                "derived_facts",
+                "checks",
+            }
+        ),
+    ),
+    "official_x402_settlement_v1": (
+        "concordia.official_x402_adapter_result.v1",
+        frozenset(
+            {
+                "schema_version",
+                "proof_type",
+                "artifact_sha256",
+                "derived_facts",
+                "internal_record",
+                "checks",
+            }
+        ),
+    ),
+}
+
+
+def _run_release_adapter(
+    *,
+    artifact_id: str,
+    document: dict[str, Any],
+    raw: bytes,
+    metadata: tuple[str, str, str, str, str],
+) -> dict[str, Any] | None:
+    """Run the pinned raw-evidence adapter before registry parity is considered."""
+
+    contract = _ADAPTER_RESULT_CONTRACTS.get(artifact_id)
+    if contract is None:
+        return None
+    try:
+        if artifact_id == "safepay_v2":
+            value = release_proof_adapters.verify_safepay_v2_artifact(
+                document, raw
+            )
+        else:
+            value = release_proof_adapters.verify_official_x402_artifact(
+                document, raw
+            )
+    except release_proof_adapters.ReleaseProofAdapterError as exc:
+        raise ReleaseManifestError(
+            f"{artifact_id} independent adapter rejected its bound artifact"
+        ) from exc
+    result = _mapping(value, f"{artifact_id} independent adapter result")
+    expected_schema, expected_fields = contract
+    if (
+        set(result) != expected_fields
+        or result.get("schema_version") != expected_schema
+        or result.get("proof_type") != artifact_id
+        or result.get("artifact_sha256") != hashlib.sha256(raw).hexdigest()
+    ):
+        raise ReleaseManifestError(
+            f"{artifact_id} independent adapter result identity differs"
+        )
+    facts = _mapping(
+        result.get("derived_facts"),
+        f"{artifact_id} independent adapter derived facts",
+    )
+    captured_text, captured_instant = _parse_timestamp(
+        facts.get("captured_at"),
+        f"{artifact_id} adapter captured_at",
+    )
+    if (
+        captured_text != metadata[1]
+        or captured_instant > datetime.now(UTC) + timedelta(minutes=5)
+        or _git40(
+            facts.get("source_commit"),
+            f"{artifact_id} adapter source_commit",
+        )
+        != metadata[2]
+        or _git40(
+            facts.get("deployment_commit"),
+            f"{artifact_id} adapter deployment_commit",
+        )
+        != metadata[3]
+    ):
+        raise ReleaseManifestError(
+            f"{artifact_id} independent adapter release identity differs"
+        )
+    _adapter_registry_checks(result, artifact_id)
+    if artifact_id == "official_x402_settlement_v1":
+        _mapping(
+            result.get("internal_record"),
+            "official-x402 adapter internal record",
+        )
+    return dict(result)
+
+
+def _adapter_registry_checks(
+    result: Mapping[str, Any],
+    artifact_id: str,
+) -> list[dict[str, object]]:
+    """Project independently recomputed adapter evidence into registry checks."""
+
+    raw_checks = _sequence(
+        result.get("checks"),
+        f"{artifact_id} independent adapter checks",
+    )
+    projected: list[dict[str, object]] = []
+    for raw_check in raw_checks:
+        check = _mapping(
+            raw_check,
+            f"{artifact_id} independent adapter check",
+        )
+        if set(check) != {
+            "name",
+            "passed",
+            "source",
+            "observed_at",
+            "evidence_paths",
+            "evidence_sha256",
+        }:
+            raise ReleaseManifestError(
+                f"{artifact_id} independent adapter check schema differs"
+            )
+        if check.get("passed") is not True:
+            raise ReleaseManifestError(
+                f"{artifact_id} independent adapter returned a failed check"
+            )
+        name = _text(
+            check.get("name"),
+            f"{artifact_id} independent adapter check name",
+        )
+        source = _text(
+            check.get("source"),
+            f"{artifact_id} independent adapter check source",
+        )
+        observed_at, observed_instant = _parse_timestamp(
+            check.get("observed_at"),
+            f"{artifact_id} independent adapter check observed_at",
+        )
+        if observed_instant > datetime.now(UTC) + timedelta(minutes=5):
+            raise ReleaseManifestError(
+                f"{artifact_id} independent adapter check is future-dated"
+            )
+        paths = _sequence(
+            check.get("evidence_paths"),
+            f"{artifact_id} independent adapter evidence paths",
+        )
+        if (
+            not paths
+            or any(
+                type(path) is not str or not path.startswith("/")
+                for path in paths
+            )
+            or len(set(paths)) != len(paths)
+        ):
+            raise ReleaseManifestError(
+                f"{artifact_id} independent adapter evidence paths differ"
+            )
+        _hash32(
+            check.get("evidence_sha256"),
+            f"{artifact_id} independent adapter evidence SHA-256",
+        )
+        projected.append(
+            {
+                "name": name,
+                "required": True,
+                "passed": True,
+                "source": source,
+                "observed_at": observed_at,
+            }
+        )
+    if not projected:
+        raise ReleaseManifestError(
+            f"{artifact_id} independent adapter returned no checks"
+        )
+    return projected
 
 
 def _load_artifacts(root: Path) -> dict[str, _Artifact]:
@@ -2865,6 +3054,12 @@ def _load_artifacts(root: Path) -> dict[str, _Artifact]:
             historical=result.get("historical_odra_receipt_v1"),
             artifact_commit=bound.artifact_commit,
         )
+        adapter_result = _run_release_adapter(
+            artifact_id=artifact_id,
+            document=document,
+            raw=bound.raw,
+            metadata=metadata,
+        )
         artifact = _Artifact(
             artifact_id=artifact_id,
             bound=bound,
@@ -2875,6 +3070,7 @@ def _load_artifacts(root: Path) -> dict[str, _Artifact]:
             source_commit=metadata[2],
             deployment_commit=metadata[3],
             observation_mode=metadata[4],
+            adapter_result=adapter_result,
         )
         _require_ordered_ancestry(
             root,
@@ -3017,6 +3213,14 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
     for proof_type, artifact_id in _REGISTRY_BINDINGS.items():
         item = by_type[proof_type]
         artifact = artifacts[artifact_id]
+        _, artifact_captured_at = _parse_timestamp(
+            artifact.captured_at,
+            f"{proof_type} artifact captured_at",
+        )
+        if artifact_captured_at > datetime.now(UTC) + timedelta(minutes=5):
+            raise ReleaseManifestError(
+                f"registry artifact is future-dated: {proof_type}"
+            )
         expected = {
             "schema_version": artifact.schema_version,
             "captured_at": artifact.captured_at,
@@ -3072,49 +3276,58 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
             "registry native-transfer claim differs from its artifact"
         )
     safepay_item = by_type["safepay_v2"]
-    safepay_artifact = artifacts["safepay_v2"].document
-    safepay_verification = _mapping(
-        safepay_artifact.get("verification"),
-        "SafePay verification",
+    safepay_adapter = _mapping(
+        artifacts["safepay_v2"].adapter_result,
+        "SafePay independent adapter result",
     )
-    if safepay_item.get("report_hash") != safepay_verification.get("report_hash"):
-        raise ReleaseManifestError("registry SafePay report hash differs")
-    official_item = by_type["official_x402_settlement_v1"]
-    official_artifact = artifacts["official_x402_settlement_v1"].document
-    official_governance = _mapping(
-        official_artifact.get("governance_binding"),
-        "official x402 governance binding",
-    )
-    official_requirements = _mapping(
-        official_artifact.get("payment_requirements"),
-        "official x402 payment requirements",
-    )
-    official_payload = _mapping(
-        official_artifact.get("signed_payment_payload"),
-        "official x402 signed payload",
-    )
-    official_report = _mapping(
-        official_artifact.get("protected_report"),
-        "official x402 protected report",
-    )
-    official_settlement = _mapping(
-        official_artifact.get("settlement"),
-        "official x402 settlement",
+    safepay_facts = _mapping(
+        safepay_adapter.get("derived_facts"),
+        "SafePay independent adapter derived facts",
     )
     if (
-        official_item.get("action_id") != official_governance.get("action_id")
-        or official_item.get("envelope_hash")
-        != official_governance.get("envelope_hash")
-        or official_item.get("payment_requirements_hash")
-        != official_requirements.get("payment_requirements_hash")
-        or official_item.get("signed_payment_payload_hash")
-        != official_payload.get("signed_payment_payload_hash")
-        or official_item.get("report_hash") != official_report.get("report_hash")
-        or official_item.get("settlement_transaction")
-        != official_settlement.get("transaction_hash")
+        safepay_item.get("proposal_id") != safepay_facts.get("proposal_id")
+        or safepay_item.get("network") != safepay_facts.get("network")
+        or safepay_item.get("report_hash") != safepay_facts.get("report_hash")
+        or safepay_item.get("checks")
+        != _adapter_registry_checks(safepay_adapter, "safepay_v2")
     ):
         raise ReleaseManifestError(
-            "registry official-x402 claim differs from its artifact"
+            "registry SafePay claim differs from its independent adapter"
+        )
+    official_item = by_type["official_x402_settlement_v1"]
+    official_adapter = _mapping(
+        artifacts["official_x402_settlement_v1"].adapter_result,
+        "official-x402 independent adapter result",
+    )
+    official_facts = _mapping(
+        official_adapter.get("derived_facts"),
+        "official-x402 independent adapter derived facts",
+    )
+    if (
+        official_item.get("proposal_id") != official_facts.get("proposal_id")
+        or official_item.get("action_id") != official_facts.get("action_id")
+        or official_item.get("envelope_hash")
+        != official_facts.get("envelope_hash")
+        or official_item.get("network") != official_facts.get("network")
+        or official_item.get("package_hash") != official_facts.get("package_hash")
+        or official_item.get("contract_hash") != official_facts.get("contract_hash")
+        or official_item.get("deployment_domain")
+        != official_facts.get("deployment_domain")
+        or official_item.get("payment_requirements_hash")
+        != official_facts.get("payment_requirements_hash")
+        or official_item.get("signed_payment_payload_hash")
+        != official_facts.get("signed_payment_payload_hash")
+        or official_item.get("report_hash") != official_facts.get("report_hash")
+        or official_item.get("settlement_transaction")
+        != official_facts.get("settlement_transaction")
+        or official_item.get("checks")
+        != _adapter_registry_checks(
+            official_adapter,
+            "official_x402_settlement_v1",
+        )
+    ):
+        raise ReleaseManifestError(
+            "registry official-x402 claim differs from its independent adapter"
         )
     internal_records = _sequence(
         registry.get("internal_records"),
@@ -3191,49 +3404,52 @@ def _validate_registry_parity(artifacts: Mapping[str, _Artifact]) -> None:
             "registry native internal record is not the exact artifact projection"
         )
 
+    verified_official_record = _mapping(
+        official_adapter.get("internal_record"),
+        "official-x402 independent adapter internal record",
+    )
     official_action_id = _hash32(
-        official_governance.get("action_id"),
-        "official x402 action ID",
+        verified_official_record.get("action_id"),
+        "official-x402 adapter action ID",
     )
     official_record = internal_by_action.get(official_action_id)
     if official_record is None:
         raise ReleaseManifestError(
             "registry lacks the official-x402 internal record"
         )
-    expected_official_record = {
-        "schema_version": 1,
-        "proposal_id": official_governance.get("proposal_id"),
-        "proposal_hash": official_governance.get("proposal_hash"),
-        "proposal_nonce": official_governance.get("proposal_nonce"),
-        "action_id": official_action_id,
-        "action_kind": official_governance.get("action_kind"),
-        "action_version": official_governance.get("action_version"),
-        "envelope_hash": official_governance.get("envelope_hash"),
-        "deployment_domain": official_governance.get("deployment_domain"),
-        "network": official_governance.get("network"),
-        "package_hash": official_governance.get("package_hash"),
-        "contract_hash": official_governance.get("contract_hash"),
-        "v3_finalized_exact": official_governance.get("v3_finalized_exact"),
-        "finalization_transaction": official_governance.get(
-            "finalization_transaction"
-        ),
-        "finalized_at": official_governance.get("finalized_at"),
-        "resource_url_hash": official_governance.get("resource_url_hash"),
-        "report_hash": official_report.get("report_hash"),
-        "payment_requirements_hash": official_requirements.get(
-            "payment_requirements_hash"
-        ),
-        "signed_payment_payload_hash": official_payload.get(
-            "signed_payment_payload_hash"
-        ),
-        "settlement_transaction": official_settlement.get("transaction_hash"),
-        "verification_status": "verified",
-        "observed_at": official_governance.get("observed_at"),
-        "checks": official_governance.get("checks"),
-    }
-    if official_record != expected_official_record:
+    fact_bound_fields = (
+        "proposal_id",
+        "proposal_hash",
+        "proposal_nonce",
+        "action_id",
+        "action_kind",
+        "action_version",
+        "envelope_hash",
+        "deployment_domain",
+        "network",
+        "package_hash",
+        "contract_hash",
+        "v3_finalized_exact",
+        "finalization_transaction",
+        "finalized_at",
+        "resource_url_hash",
+        "report_hash",
+        "payment_requirements_hash",
+        "signed_payment_payload_hash",
+        "settlement_transaction",
+        "observed_at",
+    )
+    if any(
+        verified_official_record.get(field) != official_facts.get(field)
+        for field in fact_bound_fields
+    ):
         raise ReleaseManifestError(
-            "registry official-x402 internal record is not the exact artifact projection"
+            "official-x402 adapter internal record differs from its derived facts"
+        )
+    if official_record != verified_official_record:
+        raise ReleaseManifestError(
+            "registry official-x402 internal record is not the exact "
+            "independent adapter projection"
         )
     if set(internal_by_action) != {
         str(exact_prepared.get("action_id")),
@@ -5135,6 +5351,34 @@ def _public_release_graph(
     }
 
 
+def _probe_adapter_result(
+    root: Path,
+    artifact_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recompute one public-route binding from its bound raw proof artifact."""
+
+    bound = _load_bound_file(root, ARTIFACT_PATHS[artifact_id], _ARTIFACT_LIMIT)
+    document, _ = _strict_json(bound.raw, f"committed {artifact_id} artifact")
+    _require_nonempty_proof(artifact_id, document)
+    metadata = _artifact_metadata(
+        artifact_id,
+        document,
+        historical=None,
+        artifact_commit=bound.artifact_commit,
+    )
+    adapter = _run_release_adapter(
+        artifact_id=artifact_id,
+        document=document,
+        raw=bound.raw,
+        metadata=metadata,
+    )
+    if adapter is None:
+        raise ReleaseManifestError(
+            f"{artifact_id} has no independent public-binding adapter"
+        )
+    return document, adapter
+
+
 def _probe_semantic_checks(
     *,
     root: Path,
@@ -5174,17 +5418,15 @@ def _probe_semantic_checks(
             raise ReleaseManifestError("public SafePay state is not verified")
         payment_hash = _hash32(document.get("payment_hash"), "public SafePay payment")
         report_hash = _hash32(document.get("report_hash"), "public SafePay report")
-        bound = _load_bound_file(root, ARTIFACT_PATHS["safepay_v2"], _ARTIFACT_LIMIT)
-        artifact, _ = _strict_json(bound.raw, "committed SafePay artifact")
+        _, adapter = _probe_adapter_result(root, "safepay_v2")
+        facts = _mapping(
+            adapter.get("derived_facts"),
+            "SafePay independent adapter derived facts",
+        )
         if (
-            _mapping(artifact.get("consumption"), "SafePay consumption").get(
-                "payment_hash"
-            )
-            != payment_hash
-            or _mapping(artifact.get("verification"), "SafePay verification").get(
-                "report_hash"
-            )
-            != report_hash
+            facts.get("proposal_id") != _PROPOSAL
+            or facts.get("payment_hash") != payment_hash
+            or facts.get("report_hash") != report_hash
         ):
             raise ReleaseManifestError("public SafePay response differs from artifact")
         return ["proposal_binding", "payment_binding", "report_binding", "replay_safe"]
@@ -5231,11 +5473,10 @@ def _probe_semantic_checks(
         expected_root = _mapping(roots.get("roots"), "committed card-chain roots").get(
             _PROPOSAL
         )
-        safepay_bound = _load_bound_file(
-            root, ARTIFACT_PATHS["safepay_v2"], _ARTIFACT_LIMIT
-        )
-        safepay_artifact, _ = _strict_json(
-            safepay_bound.raw, "committed SafePay artifact"
+        _, safepay_adapter = _probe_adapter_result(root, "safepay_v2")
+        safepay_facts = _mapping(
+            safepay_adapter.get("derived_facts"),
+            "SafePay independent adapter derived facts",
         )
         historical_bound = _load_bound_file(
             root,
@@ -5274,12 +5515,8 @@ def _probe_semantic_checks(
             "terminal_card_hash": expected_root,
         } or safepay != {
             "schema_version": "safepay-v2",
-            "payment_hash": _mapping(
-                safepay_artifact.get("consumption"), "SafePay consumption"
-            ).get("payment_hash"),
-            "report_hash": _mapping(
-                safepay_artifact.get("verification"), "SafePay verification"
-            ).get("report_hash"),
+            "payment_hash": safepay_facts.get("payment_hash"),
+            "report_hash": safepay_facts.get("report_hash"),
             "replay_safety": "no_double_consumption",
         } or (
             set(canonical_manifest)
@@ -5372,16 +5609,15 @@ def _probe_semantic_checks(
             document.get("settlement_transaction_hash"),
             "official x402 settlement transaction",
         )
-        bound = _load_bound_file(
-            root, ARTIFACT_PATHS["official_x402_settlement_v1"], _ARTIFACT_LIMIT
+        _, adapter = _probe_adapter_result(
+            root,
+            "official_x402_settlement_v1",
         )
-        artifact, _ = _strict_json(bound.raw, "official x402 settlement artifact")
-        if (
-            _mapping(artifact.get("settlement"), "official x402 settlement").get(
-                "transaction_hash"
-            )
-            != settlement_hash
-        ):
+        facts = _mapping(
+            adapter.get("derived_facts"),
+            "official-x402 independent adapter derived facts",
+        )
+        if facts.get("settlement_transaction") != settlement_hash:
             raise ReleaseManifestError(
                 "official x402 health differs from settlement artifact"
             )

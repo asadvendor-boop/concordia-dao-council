@@ -170,7 +170,7 @@ def test_invariant_runner_ignores_caller_supplied_safepay_success(
     replay = next(
         check
         for check in result["checks"]
-        if check["id"] == "duplicate_x402_proof_rejected"
+        if check["id"] == "x402_replay_safety_verified"
     )
 
     assert replay["passed"] is False

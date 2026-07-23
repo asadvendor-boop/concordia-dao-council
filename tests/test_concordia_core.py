@@ -458,7 +458,7 @@ def test_invariant_runner_covers_required_checks_without_trusting_caller_success
     assert checks["allocation_cap"]["passed"]
     assert checks["quorum_required"]["passed"] is False
     assert checks["tampered_envelope_rejected"]["passed"]
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
+    assert checks["x402_replay_safety_verified"]["passed"] is False
     assert checks["old_nonce_rejected"]["passed"]
     assert checks["llm_numeric_mutation_ignored"]["passed"]
     assert checks["policy_hash_mismatch_rejected"]["passed"]
@@ -488,7 +488,7 @@ def test_invariant_runner_fails_if_safepay_duplicate_proof_not_rejected():
     checks = {check["id"]: check for check in invariants["checks"]}
 
     assert invariants["status"] == "failed"
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
+    assert checks["x402_replay_safety_verified"]["passed"] is False
 
 
 def test_invariant_runner_missing_policy_hash_is_incomplete_not_failed():
@@ -581,7 +581,7 @@ def test_invariant_runner_rejects_caller_asserted_duplicate_x402_proof():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
+    assert checks["x402_replay_safety_verified"]["passed"] is False
 
 
 def test_certificate_pdf_bytes_is_real_downloadable_pdf():

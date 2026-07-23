@@ -4,6 +4,8 @@ import base64
 import copy
 import hashlib
 import json
+import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,23 +28,33 @@ from shared.x402_payments import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ROOT / "handoff" / "schemas"
-UTC = "2026-07-23T01:02:03Z"
+UTC = "2026-07-23T01:05:00Z"
+BLOCK_TIMESTAMP = "2026-07-23T01:02:03Z"
 SOURCE_COMMIT = "11" * 20
 DEPLOYMENT_COMMIT = "22" * 20
 PAYMENT_HASH = "33" * 32
 BLOCK_HASH = "44" * 32
 STATE_ROOT_HASH = "55" * 32
-SOURCE_ACCOUNT = "66" * 32
-PAYEE_ACCOUNT = "77" * 32
+TIP_HASH = "aa" * 32
+TIP_STATE_ROOT_HASH = "bb" * 32
+SOURCE_PUBLIC_KEY = "01" + ("66" * 32)
+PAYEE_PUBLIC_KEY = "01" + ("77" * 32)
+SOURCE_ACCOUNT = hashlib.blake2b(
+    b"ed25519\x00" + bytes.fromhex(SOURCE_PUBLIC_KEY)[1:], digest_size=32
+).hexdigest()
+PAYEE_ACCOUNT = hashlib.blake2b(
+    b"ed25519\x00" + bytes.fromhex(PAYEE_PUBLIC_KEY)[1:], digest_size=32
+).hexdigest()
 QUOTE_ID = "123e4567-e89b-42d3-a456-426614174000"
 PROPOSAL_ID = "DAO-PROP-TEST-1"
 RESOURCE_ID = "risk-report:test"
 AMOUNT_MOTES = "2500000000"
 QUOTE_NONCE = bytes.fromhex("88" * 32)
-ISSUED_AT = 1_753_230_000
-CONSUMED_AT = ISSUED_AT + 30
+ISSUED_AT = 1_784_768_400
+CONSUMED_AT = ISSUED_AT + 180
 EXPIRES_AT = ISSUED_AT + 600
 BLOCK_HEIGHT = 8_400_001
+MIGRATION_PATH = ROOT / "x402_provider/migrations/0001_safepay_v2.sql"
 
 
 def _canonical(value: object) -> bytes:
@@ -53,6 +65,44 @@ def _canonical(value: object) -> bytes:
         ensure_ascii=True,
         allow_nan=False,
     ).encode("ascii")
+
+
+PROVIDER_DEPLOYMENT_ID = "provider-release-1"
+PROVIDER_IMAGE_DIGEST = f"sha256:{'99' * 32}"
+
+
+def _provider_runtime_identity(
+    *,
+    container_id: str,
+    started_at: str,
+    observed_at: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "container_id": container_id,
+        "deployment_id": PROVIDER_DEPLOYMENT_ID,
+        "image_digest": PROVIDER_IMAGE_DIGEST,
+        "started_at": started_at,
+        "observed_at": observed_at,
+        "restart_count": 0,
+    }
+    payload["instance_id"] = hashlib.sha256(
+        b"CONCORDIA_SAFEPAY_PROVIDER_INSTANCE_V1\x00" + _canonical(payload)
+    ).hexdigest()
+    return payload
+
+
+BEFORE_RUNTIME_IDENTITY = _provider_runtime_identity(
+    container_id="90" * 32,
+    started_at="2026-07-23T00:50:00Z",
+    observed_at="2026-07-23T01:03:55Z",
+)
+AFTER_RUNTIME_IDENTITY = _provider_runtime_identity(
+    container_id="91" * 32,
+    started_at="2026-07-23T01:04:00Z",
+    observed_at="2026-07-23T01:04:50Z",
+)
+BEFORE_INSTANCE_ID = str(BEFORE_RUNTIME_IDENTITY["instance_id"])
+AFTER_INSTANCE_ID = str(AFTER_RUNTIME_IDENTITY["instance_id"])
 
 
 def _b64(value: bytes) -> str:
@@ -81,10 +131,13 @@ def _exchange(
     }
 
 
-def _rpc_exchange(request: object, response: object) -> dict[str, object]:
+def _rpc_exchange(
+    url: str, request: object, response: object
+) -> dict[str, object]:
     request_bytes = _canonical(request)
     response_bytes = _canonical(response)
     return {
+        "url": url,
         "request_body_base64": _b64(request_bytes),
         "request_body_sha256": hashlib.sha256(request_bytes).hexdigest(),
         "response_status": 200,
@@ -113,24 +166,63 @@ def _rpc_provider(
         "result": {
             "deploy": {
                 "hash": PAYMENT_HASH,
-                "header": {"account": SOURCE_ACCOUNT},
+                "header": {"account": SOURCE_PUBLIC_KEY},
                 "session": {
                     "Transfer": {
                         "args": [
-                            ["target", {"parsed": PAYEE_ACCOUNT}],
-                            ["amount", {"parsed": AMOUNT_MOTES}],
-                            ["id", {"parsed": str(correlation_id)}],
+                            [
+                                "amount",
+                                {
+                                    "cl_type": "U512",
+                                    "bytes": "0400f90295",
+                                    "parsed": AMOUNT_MOTES,
+                                },
+                            ],
+                            [
+                                "target",
+                                {
+                                    "cl_type": "PublicKey",
+                                    "bytes": PAYEE_PUBLIC_KEY,
+                                    "parsed": PAYEE_PUBLIC_KEY,
+                                },
+                            ],
+                            [
+                                "id",
+                                {
+                                    "cl_type": {"Option": "U64"},
+                                    "bytes": "01"
+                                    + correlation_id.to_bytes(8, "little").hex(),
+                                    "parsed": correlation_id,
+                                },
+                            ],
                         ]
                     }
                 },
             },
-            "execution_results": [
-                {
-                    "block_hash": BLOCK_HASH,
-                    "block_height": BLOCK_HEIGHT,
-                    "result": {"Success": {"cost": "100000000"}},
+            "execution_info": {
+                "block_hash": BLOCK_HASH,
+                "block_height": BLOCK_HEIGHT,
+                "execution_result": {
+                    "Version2": {
+                        "initiator": {"PublicKey": SOURCE_PUBLIC_KEY},
+                        "error_message": None,
+                        "transfers": [
+                            {
+                                "Version2": {
+                                    "transaction_hash": {"Deploy": PAYMENT_HASH},
+                                    "from": {
+                                        "AccountHash": f"account-hash-{SOURCE_ACCOUNT}"
+                                    },
+                                    "to": f"account-hash-{PAYEE_ACCOUNT}",
+                                    "amount": AMOUNT_MOTES,
+                                    "gas": "100000000",
+                                    "id": correlation_id,
+                                }
+                            }
+                        ],
+                    }
                 }
-            ],
+            },
         },
     }
     block_request = {
@@ -143,25 +235,203 @@ def _rpc_provider(
         "jsonrpc": "2.0",
         "id": 2,
         "result": {
-            "block": {
-                "hash": BLOCK_HASH,
-                "header": {
-                    "height": BLOCK_HEIGHT,
-                    "state_root_hash": STATE_ROOT_HASH,
-                    "timestamp": UTC,
+            "block_with_signatures": {
+                "block": {
+                    "Version2": {
+                        "hash": BLOCK_HASH,
+                        "header": {
+                            "height": BLOCK_HEIGHT,
+                            "state_root_hash": STATE_ROOT_HASH,
+                            "timestamp": BLOCK_TIMESTAMP,
+                        },
+                        "body": {
+                            "transactions": {
+                                "0": [{"Deploy": PAYMENT_HASH}],
+                            }
+                        },
+                    }
                 },
-                "body": {
-                    "deploy_hashes": [PAYMENT_HASH],
-                    "transfer_hashes": [],
-                },
+                "proofs": [],
             }
+        },
+    }
+    status_request = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "info_get_status",
+        "params": [],
+    }
+    status_response = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+            "api_version": "2.0.0",
+            "chainspec_name": "casper-test",
+            "last_added_block_info": {
+                "hash": TIP_HASH,
+                "height": BLOCK_HEIGHT + 8,
+                "state_root_hash": TIP_STATE_ROOT_HASH,
+                "timestamp": UTC,
+            },
+            "starting_state_root_hash": TIP_STATE_ROOT_HASH,
         },
     }
     return {
         "endpoint_id": endpoint_id,
         "origin": origin,
-        "info_get_deploy": _rpc_exchange(deploy_request, deploy_response),
-        "chain_get_block": _rpc_exchange(block_request, block_response),
+        "info_get_deploy": _rpc_exchange(origin, deploy_request, deploy_response),
+        "chain_get_block": _rpc_exchange(origin, block_request, block_response),
+        "info_get_status": _rpc_exchange(origin, status_request, status_response),
+    }
+
+
+def _sqlite_backup(connection: sqlite3.Connection, path: Path) -> bytes:
+    destination = sqlite3.connect(path)
+    try:
+        connection.backup(destination)
+    finally:
+        destination.close()
+    return path.read_bytes()
+
+
+def _ledger_snapshot(
+    raw: bytes,
+    instance_id: str,
+    observed_at: str,
+) -> dict[str, object]:
+    return {
+        "sqlite_backup_base64": _b64(raw),
+        "sqlite_backup_sha256": hashlib.sha256(raw).hexdigest(),
+        "observed_at": observed_at,
+        "provider_instance_id": instance_id,
+    }
+
+
+def _ledger_evidence(
+    *,
+    quote_row: dict[str, Any],
+    consumption_row: dict[str, Any],
+    protected_report: dict[str, Any],
+    redemptions: dict[str, Any],
+) -> dict[str, Any]:
+    migration = MIGRATION_PATH.read_bytes()
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        connection = sqlite3.connect(directory / "provider.sqlite3")
+        try:
+            connection.executescript(migration.decode("utf-8"))
+            connection.execute(
+                "INSERT INTO safepay_reports("
+                "report_hash, report_media_type, report_bytes, decoded_length, created_at"
+                ") VALUES(?, ?, ?, ?, ?)",
+                (
+                    protected_report["report_hash"],
+                    protected_report["media_type"],
+                    base64.b64decode(protected_report["content_base64"]),
+                    protected_report["decoded_length"],
+                    quote_row["issued_at"],
+                ),
+            )
+            connection.execute(
+                "INSERT INTO safepay_quotes("
+                "quote_id, proposal_id, resource_id, network, payee_account_hash, "
+                "amount_motes, correlation_id, report_version, report_hash, issued_at, "
+                "expires_at, quote_nonce, quote_hash"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(
+                    quote_row[field]
+                    for field in (
+                        "quote_id",
+                        "proposal_id",
+                        "resource_id",
+                        "network",
+                        "payee_account_hash",
+                        "amount_motes",
+                        "correlation_id",
+                        "report_version",
+                        "report_hash",
+                        "issued_at",
+                        "expires_at",
+                        "quote_nonce",
+                        "quote_hash",
+                    )
+                ),
+            )
+            connection.execute(
+                "INSERT INTO payment_consumptions("
+                "network, payment_hash, quote_id, proposal_id, resource_id, quote_hash, "
+                "report_hash, correlation_id, fulfillment_json, response_hash, consumed_at"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(
+                    consumption_row[field]
+                    for field in (
+                        "network",
+                        "payment_hash",
+                        "quote_id",
+                        "proposal_id",
+                        "resource_id",
+                        "quote_hash",
+                        "report_hash",
+                        "correlation_id",
+                        "fulfillment_json",
+                        "response_hash",
+                        "consumed_at",
+                    )
+                ),
+            )
+
+            def add_observation(name: str) -> None:
+                row = redemptions[name]
+                connection.execute(
+                    "INSERT INTO safepay_redemption_observations("
+                    "kind, http_status, network, payment_hash, quote_id, resource_id, "
+                    "observed_at, response_digest, consumed_response_hash"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    tuple(
+                        row[field]
+                        for field in (
+                            "kind",
+                            "http_status",
+                            "network",
+                            "payment_hash",
+                            "quote_id",
+                            "resource_id",
+                            "observed_at",
+                            "response_digest",
+                            "consumed_response_hash",
+                        )
+                    ),
+                )
+                connection.commit()
+
+            add_observation("first_consumption")
+            after_first = _sqlite_backup(connection, directory / "after-first.sqlite3")
+            add_observation("exact_retry")
+            after_retry = _sqlite_backup(connection, directory / "after-retry.sqlite3")
+            add_observation("cross_binding_reuse")
+            after_cross = _sqlite_backup(connection, directory / "after-cross.sqlite3")
+        finally:
+            connection.close()
+    return {
+        "authoritative_database_id": "safepay-provider-ledger",
+        "authoritative_schema_id": "concordia.safepay-provider-ledger.sqlite.v1",
+        "migration_sql_base64": _b64(migration),
+        "migration_sql_sha256": hashlib.sha256(migration).hexdigest(),
+        "after_first_consumption": _ledger_snapshot(
+            after_first,
+            BEFORE_INSTANCE_ID,
+            "2026-07-23T01:03:10Z",
+        ),
+        "after_exact_retry": _ledger_snapshot(
+            after_retry,
+            BEFORE_INSTANCE_ID,
+            "2026-07-23T01:03:20Z",
+        ),
+        "after_cross_binding_reuse": _ledger_snapshot(
+            after_cross,
+            AFTER_INSTANCE_ID,
+            "2026-07-23T01:04:30Z",
+        ),
     }
 
 
@@ -235,7 +505,7 @@ def safepay_artifact() -> dict[str, Any]:
         "block_hash": BLOCK_HASH,
         "block_height": BLOCK_HEIGHT,
         "state_root_hash": STATE_ROOT_HASH,
-        "block_timestamp": UTC,
+        "block_timestamp": BLOCK_TIMESTAMP,
         "execution_status": "processed",
         "finality_status": "finalized",
         "execution_error": None,
@@ -265,9 +535,18 @@ def safepay_artifact() -> dict[str, Any]:
     fulfillment = {
         "quote": quote,
         "payment_observation": {
-            key: value
-            for key, value in parsed_transfer.items()
-            if key != "native_transfer_count"
+            "network": parsed_transfer["network"],
+            "payment_hash": parsed_transfer["payment_hash"],
+            "block_hash": parsed_transfer["block_hash"],
+            "block_height": parsed_transfer["block_height"],
+            "execution_status": parsed_transfer["execution_status"],
+            "finality_status": parsed_transfer["finality_status"],
+            "from_account_hash": parsed_transfer["source_account_hash"],
+            "to_account_hash": parsed_transfer["payee_account_hash"],
+            "amount_motes": parsed_transfer["amount_motes"],
+            "transfer_id": parsed_transfer["transfer_id"],
+            "execution_error": parsed_transfer["execution_error"],
+            "observed_at": UTC,
         },
         "consumption": {
             "network": "casper:casper-test",
@@ -280,7 +559,7 @@ def safepay_artifact() -> dict[str, Any]:
         },
         "report": report_object,
         "binding_checks": {name: True for name in SAFEPAY_V2_BINDING_CHECK_FIELDS},
-        "observed_at": str(CONSUMED_AT),
+        "observed_at": UTC,
         "response_hash": response_hash,
     }
     fulfillment_json = json.dumps(
@@ -328,6 +607,7 @@ def safepay_artifact() -> dict[str, Any]:
         status: int,
         response_digest: str,
         body: dict[str, Any],
+        observed_at: int,
     ) -> dict[str, Any]:
         request = {
             "network": "casper:casper-test",
@@ -342,7 +622,7 @@ def safepay_artifact() -> dict[str, Any]:
             "quote_id": quote_id,
             "resource_id": resource_id,
             "http_status": status,
-            "observed_at": CONSUMED_AT + 1,
+            "observed_at": observed_at,
             "response_digest": response_digest,
             "consumed_response_hash": response_hash,
             "exchange": _exchange(
@@ -353,30 +633,34 @@ def safepay_artifact() -> dict[str, Any]:
             ),
         }
 
-    return {
+    artifact = {
         "schema_version": "safepay-v2",
         "captured_at": UTC,
         "source_commit": SOURCE_COMMIT,
         "deployment_commit": DEPLOYMENT_COMMIT,
         "capture_identity": {
             "provider_url": "https://provider.example",
-            "provider_deployment_id": "provider-release-1",
-            "provider_image_digest": f"sha256:{'99' * 32}",
+            "provider_deployment_id": PROVIDER_DEPLOYMENT_ID,
+            "provider_image_digest": PROVIDER_IMAGE_DIGEST,
             "capture_tool_commit": SOURCE_COMMIT,
+            "provider_instances": {
+                "before_restart": copy.deepcopy(BEFORE_RUNTIME_IDENTITY),
+                "after_restart": copy.deepcopy(AFTER_RUNTIME_IDENTITY),
+            },
         },
         "quote": quote,
         "issued_quote_rows": {
             "before_restart": {
                 "row": quote_row,
                 "row_canonical_json_sha256": quote_row_hash,
-                "observed_at": UTC,
-                "provider_instance_id": "provider-before",
+                "observed_at": "2026-07-23T01:03:30Z",
+                "provider_instance_id": BEFORE_INSTANCE_ID,
             },
             "after_restart": {
                 "row": copy.deepcopy(quote_row),
                 "row_canonical_json_sha256": quote_row_hash,
-                "observed_at": UTC,
-                "provider_instance_id": "provider-after",
+                "observed_at": "2026-07-23T01:04:40Z",
+                "provider_instance_id": AFTER_INSTANCE_ID,
             },
         },
         "chain_evidence": {
@@ -400,16 +684,15 @@ def safepay_artifact() -> dict[str, Any]:
             "before_restart": {
                 "row": consumption_row,
                 "row_canonical_json_sha256": consumption_row_hash,
-                "observed_at": UTC,
-                "provider_instance_id": "provider-before",
+                "observed_at": "2026-07-23T01:03:30Z",
+                "provider_instance_id": BEFORE_INSTANCE_ID,
             },
             "after_restart": {
                 "row": copy.deepcopy(consumption_row),
                 "row_canonical_json_sha256": consumption_row_hash,
-                "observed_at": UTC,
-                "provider_instance_id": "provider-after",
+                "observed_at": "2026-07-23T01:04:40Z",
+                "provider_instance_id": AFTER_INSTANCE_ID,
             },
-            "exact_count": 1,
         },
         "redemption_observations": {
             "first_consumption": redemption(
@@ -419,6 +702,7 @@ def safepay_artifact() -> dict[str, Any]:
                 status=200,
                 response_digest=response_hash,
                 body=first_body,
+                observed_at=CONSUMED_AT + 1,
             ),
             "exact_retry": redemption(
                 kind="idempotent_replay",
@@ -427,6 +711,7 @@ def safepay_artifact() -> dict[str, Any]:
                 status=200,
                 response_digest=response_hash,
                 body=retry_body,
+                observed_at=CONSUMED_AT + 2,
             ),
             "cross_binding_reuse": redemption(
                 kind="cross_binding_rejected",
@@ -435,6 +720,7 @@ def safepay_artifact() -> dict[str, Any]:
                 status=409,
                 response_digest=safepay_v2_body_digest(cross_body),
                 body=cross_body,
+                observed_at=CONSUMED_AT + 70,
             ),
         },
         "protected_report": {
@@ -445,6 +731,13 @@ def safepay_artifact() -> dict[str, Any]:
             "released_at": UTC,
         },
     }
+    artifact["ledger_evidence"] = _ledger_evidence(
+        quote_row=quote_row,
+        consumption_row=consumption_row,
+        protected_report=artifact["protected_report"],
+        redemptions=artifact["redemption_observations"],
+    )
+    return artifact
 
 
 def _load_schema(name: str) -> dict[str, Any]:

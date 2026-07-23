@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "concordia.official_x402_settlement.v1"
+      "const": "concordia.official_x402_settlement.v2"
     },
     "captured_at": {
       "$ref": "#/$defs/utc"
@@ -215,7 +215,7 @@
         },
         "public_key_hex": {
           "type": "string",
-          "pattern": "^(01[0-9a-f]{64}|02[0-9a-f]{66})$"
+          "pattern": "^01[0-9a-f]{64}$"
         },
         "recovered_payer_account_hash": {
           "$ref": "#/$defs/hex32"
@@ -409,10 +409,10 @@
       "required": [
         "first_row",
         "post_restart_row",
+        "first_release",
         "exact_retry",
         "cross_binding_reuse",
-        "upstream_settle_call_count_before_reuse",
-        "upstream_settle_call_count_after_reuse"
+        "upstream_settle_journal"
       ],
       "properties": {
         "first_row": {
@@ -421,17 +421,17 @@
         "post_restart_row": {
           "$ref": "#/$defs/row_observation"
         },
+        "first_release": {
+          "$ref": "#/$defs/paid_resource_success_exchange"
+        },
         "exact_retry": {
-          "$ref": "#/$defs/http_exchange"
+          "$ref": "#/$defs/paid_resource_success_exchange"
         },
         "cross_binding_reuse": {
-          "$ref": "#/$defs/http_exchange"
+          "$ref": "#/$defs/paid_resource_rejection_exchange"
         },
-        "upstream_settle_call_count_before_reuse": {
-          "const": 1
-        },
-        "upstream_settle_call_count_after_reuse": {
-          "const": 1
+        "upstream_settle_journal": {
+          "$ref": "#/$defs/upstream_settle_journal"
         }
       }
     },
@@ -518,6 +518,12 @@
       "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
       "maxLength": 5592408
     },
+    "sqlite_base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+      "minLength": 1368,
+      "maxLength": 69905068
+    },
     "u64_decimal": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,19})$"
@@ -580,10 +586,139 @@
         }
       }
     },
+    "paid_resource_exchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "url",
+        "request_headers_canonical_json_base64",
+        "request_headers_canonical_json_sha256",
+        "request_body_base64",
+        "request_body_sha256",
+        "payment_signature_raw_value_base64",
+        "payment_signature_raw_value_sha256",
+        "payment_signature_decoded_payload_base64",
+        "payment_signature_decoded_payload_sha256",
+        "response_status",
+        "response_headers_canonical_json_base64",
+        "response_headers_canonical_json_sha256",
+        "response_content_type",
+        "response_body_base64",
+        "response_body_sha256",
+        "observed_at"
+      ],
+      "properties": {
+        "method": {
+          "const": "GET"
+        },
+        "url": {
+          "$ref": "#/$defs/https_url"
+        },
+        "request_headers_canonical_json_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "request_headers_canonical_json_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "request_body_base64": {
+          "const": ""
+        },
+        "request_body_sha256": {
+          "const": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "payment_signature_raw_value_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "payment_signature_raw_value_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "payment_signature_decoded_payload_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "payment_signature_decoded_payload_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "response_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "response_headers_canonical_json_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "response_headers_canonical_json_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "response_content_type": {
+          "const": "application/json"
+        },
+        "response_body_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "response_body_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "payment_response_raw_value_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "payment_response_raw_value_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "payment_response_decoded_settlement_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "payment_response_decoded_settlement_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    },
+    "paid_resource_success_exchange": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/paid_resource_exchange"
+        },
+        {
+          "required": [
+            "payment_response_raw_value_base64",
+            "payment_response_raw_value_sha256",
+            "payment_response_decoded_settlement_base64",
+            "payment_response_decoded_settlement_sha256"
+          ],
+          "properties": {
+            "response_status": {
+              "const": 200
+            }
+          }
+        }
+      ]
+    },
+    "paid_resource_rejection_exchange": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/paid_resource_exchange"
+        },
+        {
+          "properties": {
+            "response_status": {
+              "const": 409
+            },
+            "payment_response_raw_value_base64": false,
+            "payment_response_raw_value_sha256": false,
+            "payment_response_decoded_settlement_base64": false,
+            "payment_response_decoded_settlement_sha256": false
+          }
+        }
+      ]
+    },
     "rpc_exchange": {
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "url",
         "request_body_base64",
         "request_body_sha256",
         "response_status",
@@ -593,6 +728,9 @@
         "observed_at"
       ],
       "properties": {
+        "url": {
+          "$ref": "#/$defs/https_url"
+        },
         "request_body_base64": {
           "$ref": "#/$defs/base64"
         },
@@ -622,8 +760,9 @@
       "required": [
         "endpoint_id",
         "origin",
-        "info_get_deploy",
-        "chain_get_block"
+        "info_get_transaction",
+        "chain_get_block",
+        "info_get_status"
       ],
       "properties": {
         "endpoint_id": {
@@ -633,10 +772,13 @@
         "origin": {
           "$ref": "#/$defs/https_url"
         },
-        "info_get_deploy": {
+        "info_get_transaction": {
           "$ref": "#/$defs/rpc_exchange"
         },
         "chain_get_block": {
+          "$ref": "#/$defs/rpc_exchange"
+        },
+        "info_get_status": {
           "$ref": "#/$defs/rpc_exchange"
         }
       }
@@ -842,6 +984,87 @@
         },
         "service_instance_id": {
           "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "journal_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sqlite_backup_base64",
+        "sqlite_backup_sha256",
+        "rows_canonical_json_base64",
+        "rows_canonical_json_sha256",
+        "journal_root_sha256",
+        "observed_at",
+        "service_instance_id"
+      ],
+      "properties": {
+        "sqlite_backup_base64": {
+          "$ref": "#/$defs/sqlite_base64"
+        },
+        "sqlite_backup_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "rows_canonical_json_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "rows_canonical_json_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "journal_root_sha256": {
+          "$ref": "#/$defs/hex32"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc"
+        },
+        "service_instance_id": {
+          "$ref": "#/$defs/bounded_text"
+        }
+      }
+    },
+    "upstream_settle_journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_id",
+        "authoritative_database_id",
+        "migration_sql_base64",
+        "migration_sql_sha256",
+        "snapshots"
+      ],
+      "properties": {
+        "schema_id": {
+          "const": "concordia.x402_upstream_settle_journal.v1"
+        },
+        "authoritative_database_id": {
+          "$ref": "#/$defs/bounded_text"
+        },
+        "migration_sql_base64": {
+          "$ref": "#/$defs/base64"
+        },
+        "migration_sql_sha256": {
+          "const": "c660abcce78e05edfebb475661dd8ee636a699e822956ac05a990cbe1fb51c5f"
+        },
+        "snapshots": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "after_first_release",
+            "after_exact_retry",
+            "after_cross_binding_reuse"
+          ],
+          "properties": {
+            "after_first_release": {
+              "$ref": "#/$defs/journal_snapshot"
+            },
+            "after_exact_retry": {
+              "$ref": "#/$defs/journal_snapshot"
+            },
+            "after_cross_binding_reuse": {
+              "$ref": "#/$defs/journal_snapshot"
+            }
+          }
         }
       }
     }

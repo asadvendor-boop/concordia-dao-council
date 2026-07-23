@@ -431,8 +431,8 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
             "evidence": "shared.approval.compute_action_hash differs for poisoned 30% envelope",
         },
         {
-            "id": "duplicate_x402_proof_rejected",
-            "label": "duplicate x402 proof rejected",
+            "id": "x402_replay_safety_verified",
+            "label": "x402 replay safety verified",
             "passed": bool(safepay.get("duplicate_proof_rejected")),
             "evidence": safepay.get("duplicate_rejection_reason"),
         },
