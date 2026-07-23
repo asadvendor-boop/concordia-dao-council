@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import mc_support
+
 from mc_support import build_valid_plan, make_key_inventory, write_json
 from tools.mainnet_canary.cli import main
 from tools.mainnet_canary.errors import CanaryRefusal
@@ -70,6 +72,7 @@ def test_all_lane_outputs_are_secret_free_after_full_stage(
         measured_costs_path=plan_inputs["measured"],
         journal_path=tmp_path / "journal.jsonl",
         output_dir=tmp_path / "staged",
+        **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
     )
     written: list[Path] = [tmp_path / "journal.jsonl"]
     written.extend(sorted((tmp_path / "staged").glob("*")))

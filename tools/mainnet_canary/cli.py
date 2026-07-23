@@ -10,6 +10,7 @@ or submit anything.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -28,16 +29,23 @@ from tools.mainnet_canary.constants import (
 from tools.mainnet_canary.cost_model import build_estimate
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.keys import load_key_inventory
-from tools.mainnet_canary.plan import build_plan, plan_document_hash
+from tools.mainnet_canary.plan import (
+    build_plan,
+    canonical_json,
+    plan_document_hash,
+)
 from tools.mainnet_canary.rc_gate import load_rc_declaration
 from tools.mainnet_canary.secret_guard import refuse_if_secret_material
 from tools.mainnet_canary.stage import run_stage
-from tools.mainnet_canary.verify import (
-    evaluate_expected_prequorum_refusal,
-    evaluate_expected_success,
-    evaluate_native_transfer_readback,
-    evaluate_step_observations,
-    require_finalized_membership,
+from tools.mainnet_canary.finality_v2 import evaluate_dual_provider
+from tools.mainnet_canary.path_policy import CanaryPathPolicy
+from tools.mainnet_canary.proof_bundle import (
+    REQUIRED_STATEMENT,
+    build_proof_bundle_document,
+)
+from tools.mainnet_canary.economic_manifest import (
+    build_economic_manifest,
+    required_funding_motes,
 )
 
 REFUSAL_EXIT_CODE = 2
@@ -183,8 +191,53 @@ def _cmd_stage(args: argparse.Namespace) -> dict[str, object]:
         ),
         journal_path=Path(args.journal),
         output_dir=Path(args.out_dir),
+        attestation_path=Path(args.attestation),
+        calibration_path=Path(args.calibration),
+        authorization_path=Path(args.authorization),
+        clock_unix=int(args.clock_unix),
+        operator_ceilings_path=(
+            Path(args.operator_ceilings) if args.operator_ceilings else None
+        ),
     )
     return {"mode": "stage", **report}
+
+
+def _cmd_funding(args: argparse.Namespace) -> dict[str, object]:
+    """Exact maximum funding the operator must provision — and nothing else.
+
+    Puts :mod:`tools.mainnet_canary.economic_manifest` on a user-facing path
+    without any purchase, transfer, bridge, swap, or exchange step: it prints
+    one number derived from the plan's own economic steps.
+    """
+
+    plan_document = _read_json_file(Path(args.plan), context="plan-document")
+    if plan_document.get("canary_plan_sha256") != plan_document_hash(plan_document):
+        raise CanaryRefusal(
+            RefusalCode.PLAN_HASH_MISMATCH, "plan document hash does not recompute"
+        )
+    calibration = _read_json_file(
+        Path(args.calibration), context="testnet-calibration"
+    )
+    operator_ceilings: dict[str, object] = {}
+    if args.operator_ceilings:
+        operator_ceilings = _read_json_file(
+            Path(args.operator_ceilings), context="operator-ceilings"
+        )
+    manifest = build_economic_manifest(
+        plan_document, calibration=calibration, operator_ceilings=operator_ceilings
+    )
+    return {
+        "mode": "funding",
+        "plan_hash": plan_document["canary_plan_sha256"],
+        "required_funding_motes": required_funding_motes(manifest),
+        "transfer_principal_motes": manifest["transfer_principal_motes"],
+        "max_fees_motes": manifest["max_fees_motes"],
+        "acquisition": (
+            "This lane never purchases, transfers, bridges, swaps, or "
+            "exchanges CSPR; provisioning is a human action performed "
+            "entirely outside this tooling."
+        ),
+    }
 
 
 def _cmd_verify(args: argparse.Namespace) -> dict[str, object]:
@@ -213,76 +266,114 @@ def _cmd_verify(args: argparse.Namespace) -> dict[str, object]:
             RefusalCode.OBSERVATION_MALFORMED, "observation bundle must be a list"
         )
 
+    # Finality v2 is ON this path: every economic step needs TWO agreeing
+    # observations from disjoint Mainnet providers, each carrying raw
+    # response evidence. A single-source bundle refuses with
+    # NODE_SET_INVALID rather than being quietly accepted.
     results: list[dict[str, object]] = []
-    installed_package: str | None = None
-    installed_contract: str | None = None
     envelope = plan_document["envelope"]
     derived = envelope["derived"]
     for step in plan_document["steps"]:
         step_id = str(step["step_id"])
         if not step["economic"]:
             continue
-        observation = evaluate_step_observations(bundle, step_id=step_id)
         expected = step["expected_outcome"]
-        typed_args = {
-            str(arg["name"]): arg["value"] for arg in step["typed_args"]
-        }
-        if step_id == "B-install-rc-wasm":
-            # Install target hashes are only knowable from the readback.
-            require_finalized_membership(observation)
-            execution = observation["execution"]
-            if execution["success"] is not True or (
-                execution["error_message"] is not None
-            ):
-                raise CanaryRefusal(
-                    RefusalCode.EXECUTION_FAILED, "install did not succeed"
-                )
-            target = observation["target"]
-            installed_package = str(target["package_hash"])
-            installed_contract = str(target["contract_hash"])
-        elif step["kind"] == "native_transfer":
-            evaluate_native_transfer_readback(
-                observation,
-                source_account=str(expected["source_account"]),
-                recipient_account=str(expected["recipient_account"]),
-                amount_motes=str(expected["amount_motes"]),
-                transfer_id=str(derived["transfer_id"]),
-            )
+        if step["kind"] == "native_transfer":
+            expectation: dict[str, object] = {
+                "type": "native_transfer",
+                "source_account": str(expected["source_account"]),
+                "recipient_account": str(expected["recipient_account"]),
+                "amount_motes": str(expected["amount_motes"]),
+                "transfer_id": str(derived["transfer_id"]),
+            }
+        elif expected.get("execution") == "failure":
+            expectation = {
+                "type": "exact_refusal",
+                "error_message": str(expected["exact_error_message"]),
+            }
         else:
-            if installed_package is None or installed_contract is None:
-                raise CanaryRefusal(
-                    RefusalCode.WRONG_CONTRACT,
-                    "no verified install precedes this contract call",
-                )
-            if expected.get("execution") == "failure":
-                evaluate_expected_prequorum_refusal(
-                    observation,
-                    package_hash=installed_package,
-                    contract_hash=installed_contract,
-                    entry_point=str(step["entry_point"]),
-                    typed_args=typed_args,
-                    expected_error_message=str(expected["exact_error_message"]),
-                )
-            else:
-                evaluate_expected_success(
-                    observation,
-                    package_hash=installed_package,
-                    contract_hash=installed_contract,
-                    entry_point=str(step["entry_point"]),
-                    typed_args=typed_args,
-                )
+            expectation = {"type": "expected_success"}
+        consensus = evaluate_dual_provider(
+            bundle, step_id=step_id, expectation=expectation
+        )
         results.append(
-            {"step_id": step_id, "status": "observation_consistent"}
+            {
+                "step_id": step_id,
+                "status": "observation_consistent",
+                "providers": consensus["providers"],
+                "consensus_block_hash": consensus["consensus_block_hash"],
+                "raw_response_sha256s": consensus["raw_response_sha256s"],
+            }
         )
 
     return {
         "mode": "verify",
         "plan_hash": plan_document["canary_plan_sha256"],
         "steps": results,
+        "finality_policy": {
+            "providers_required": 2,
+            "disjoint_hosts_required": True,
+            "upstream_booleans_trusted": False,
+        },
         # Release/registry claims stay with Codex; this lane never asserts a
         # Mainnet-verified state.
         "canary_release_claim": BLOCKED_PENDING_LIVE_PROOF,
     }
+
+
+def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
+    """Emit the canary proof bundle through the confined path policy.
+
+    Puts :mod:`tools.mainnet_canary.proof_bundle` on the enforcement path: the
+    lineage, the verbatim required statement, and the forbidden-claims scan
+    all run before anything is written, and the write itself goes through
+    :class:`CanaryPathPolicy` (never overwriting evidence, never reaching a
+    protected namespace).
+    """
+
+    plan_document = _read_json_file(Path(args.plan), context="plan-document")
+    plan_hash = plan_document.get("canary_plan_sha256")
+    if plan_hash != plan_document_hash(plan_document):
+        raise CanaryRefusal(
+            RefusalCode.PLAN_HASH_MISMATCH, "plan document hash does not recompute"
+        )
+    verification = _read_json_file(
+        Path(args.verification), context="verification-report"
+    )
+    manifest = _read_json_file(
+        Path(args.economic_manifest), context="economic-manifest"
+    )
+    attestation = _read_json_file(Path(args.attestation), context="build-attestation")
+    document = build_proof_bundle_document(
+        plan_hash=str(plan_hash),
+        rc_tag=str(plan_document.get("rc", {}).get("tag")),
+        economic_manifest_sha256=hashlib.sha256(
+            canonical_json(manifest).encode("ascii")
+        ).hexdigest(),
+        attestations={
+            "testnet_wasm_sha256": attestation.get("network_artifacts", {})
+            .get("testnet", {})
+            .get("wasm_sha256"),
+            "mainnet_wasm_sha256": attestation.get("network_artifacts", {})
+            .get("mainnet-native", {})
+            .get("wasm_sha256"),
+        },
+        step_verifications={
+            str(entry["step_id"]): entry
+            for entry in verification.get("steps", [])
+            if isinstance(entry, dict) and "step_id" in entry
+        },
+        journal_head_hash=str(args.journal_head_hash),
+        narrative=REQUIRED_STATEMENT,
+    )
+    policy = CanaryPathPolicy(
+        Path(args.repo_root),
+        Path(args.out_dir),
+        canary_id=str(plan_hash)[:24] + "-prep",
+        live_capture_authorized=False,
+    )
+    written = policy.exclusive_write_json("proof-bundle.json", document)
+    return {"mode": "bundle", "bundle_path": str(written), **document}
 
 
 def _cmd_broadcast(args: argparse.Namespace) -> dict[str, object]:
@@ -349,12 +440,40 @@ def build_parser() -> argparse.ArgumentParser:
     stage.add_argument("--measured-costs", default=None)
     stage.add_argument("--journal", required=True)
     stage.add_argument("--out-dir", required=True)
+    # Every gate below is REQUIRED: staging cannot proceed on an unattested
+    # artifact, an ungrounded cost model, or an unsigned/expired authorization.
+    stage.add_argument("--attestation", required=True)
+    stage.add_argument("--calibration", required=True)
+    stage.add_argument("--authorization", required=True)
+    stage.add_argument("--clock-unix", required=True, type=int)
+    stage.add_argument("--operator-ceilings", default=None)
     stage.set_defaults(handler=_cmd_stage)
 
-    verify = subparsers.add_parser("verify", help="read-only observation checks")
+    funding = subparsers.add_parser(
+        "funding", help="exact maximum funding required (no acquisition)"
+    )
+    funding.add_argument("--plan", required=True)
+    funding.add_argument("--calibration", required=True)
+    funding.add_argument("--operator-ceilings", default=None)
+    funding.set_defaults(handler=_cmd_funding)
+
+    verify = subparsers.add_parser(
+        "verify", help="read-only dual-provider observation checks"
+    )
     verify.add_argument("--plan", required=True)
     verify.add_argument("--observations", required=True)
     verify.set_defaults(handler=_cmd_verify)
+
+    bundle = subparsers.add_parser(
+        "bundle", help="emit the canary proof bundle through the path policy"
+    )
+    bundle.add_argument("--plan", required=True)
+    bundle.add_argument("--verification", required=True)
+    bundle.add_argument("--economic-manifest", required=True)
+    bundle.add_argument("--attestation", required=True)
+    bundle.add_argument("--journal-head-hash", required=True)
+    bundle.add_argument("--out-dir", required=True)
+    bundle.set_defaults(handler=_cmd_bundle)
 
     broadcast = subparsers.add_parser(
         "broadcast",

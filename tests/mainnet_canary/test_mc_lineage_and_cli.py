@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import mc_support
+
 from mc_support import build_valid_plan, make_observation
 from tools.mainnet_canary.cli import main
 from tools.mainnet_canary.constants import (
@@ -45,6 +47,7 @@ def test_live_artifact_namespace_is_unavailable_in_preparation(
             measured_costs_path=plan_inputs["measured"],
             journal_path=tmp_path / "journal.jsonl",
             output_dir=repo / "artifacts" / "mainnet-canary" / "v3" / "x",
+            **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
         )
     assert refusal.value.code == RefusalCode.LIVE_ARTIFACTS_UNAVAILABLE_IN_PREP
 
@@ -214,6 +217,7 @@ def test_cli_plan_and_stage_round_trip(
     assert output["live_proof_status"] == BLOCKED_PENDING_LIVE_PROOF
     assert plan_path.is_file()
 
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
     exit_code, staged = _run_cli(
         capsys,
         [
@@ -236,11 +240,115 @@ def test_cli_plan_and_stage_round_trip(
             str(tmp_path / "journal.jsonl"),
             "--out-dir",
             str(tmp_path / "staged"),
+            # The CLI itself now requires the hardening gates.
+            "--attestation",
+            str(gates["attestation_path"]),
+            "--calibration",
+            str(gates["calibration_path"]),
+            "--authorization",
+            str(gates["authorization_path"]),
+            "--clock-unix",
+            str(gates["clock_unix"]),
         ],
     )
     assert exit_code == 0
     assert staged["broadcast_enabled"] is False
     assert len(staged["staged_steps"]) >= 6
+    # The wired modules must show up in the CLI's own output, proving they
+    # ran on this path rather than merely existing beside it.
+    assert staged["build_attestation"]["double_built"] is True
+    assert staged["economic_manifest"]["max_total_outlay_motes"]
+    assert staged["human_authorization_nonce"]
+
+
+def test_cli_stage_refuses_without_the_build_attestation(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """The attestation gate is on the CLI path, not just in a unit test."""
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(build_valid_plan(plan_inputs), sort_keys=True), encoding="utf-8"
+    )
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
+    exit_code, output = _run_cli(
+        capsys,
+        [
+            "--repo-root",
+            str(plan_inputs["repo"]),
+            "stage",
+            "--plan",
+            str(plan_path),
+            "--rc-declaration",
+            str(plan_inputs["rc"]),
+            "--snapshot",
+            str(plan_inputs["snapshot"]),
+            "--status",
+            str(plan_inputs["status"]),
+            "--ceiling",
+            str(plan_inputs["ceiling"]),
+            "--measured-costs",
+            str(plan_inputs["measured"]),
+            "--journal",
+            str(tmp_path / "journal2.jsonl"),
+            "--out-dir",
+            str(tmp_path / "staged2"),
+            "--attestation",
+            str(tmp_path / "no-such-attestation.json"),
+            "--calibration",
+            str(gates["calibration_path"]),
+            "--authorization",
+            str(gates["authorization_path"]),
+            "--clock-unix",
+            str(gates["clock_unix"]),
+        ],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] == RefusalCode.ARTIFACT_HASH_UNBACKED
+
+
+def test_cli_stage_refuses_an_expired_human_authorization(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
+    exit_code, output = _run_cli(
+        capsys,
+        [
+            "--repo-root",
+            str(plan_inputs["repo"]),
+            "stage",
+            "--plan",
+            str(plan_path),
+            "--rc-declaration",
+            str(plan_inputs["rc"]),
+            "--snapshot",
+            str(plan_inputs["snapshot"]),
+            "--status",
+            str(plan_inputs["status"]),
+            "--ceiling",
+            str(plan_inputs["ceiling"]),
+            "--measured-costs",
+            str(plan_inputs["measured"]),
+            "--journal",
+            str(tmp_path / "journal3.jsonl"),
+            "--out-dir",
+            str(tmp_path / "staged3"),
+            "--attestation",
+            str(gates["attestation_path"]),
+            "--calibration",
+            str(gates["calibration_path"]),
+            "--authorization",
+            str(gates["authorization_path"]),
+            # Clock advanced well past the authorization's expiry.
+            "--clock-unix",
+            str(int(gates["clock_unix"]) + 999_999),
+        ],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] == RefusalCode.AUTHORIZATION_EXPIRED
 
 
 def test_cli_verify_refuses_without_observations(
@@ -293,7 +401,21 @@ def test_cli_verify_refuses_prequorum_success_end_to_end(
         if not step["economic"]:
             continue
         # Adversarial: the pre-quorum step "succeeds" on chain.
-        bundle.append(observed(step))
+        # Emitted as a disjoint provider PAIR — verify refuses single-source.
+        base = observed(step)
+        for provider_id, host in (("provider-a", "node-a.example"),
+                                  ("provider-b", "node-b.example")):
+            doc = json.loads(json.dumps(base))
+            doc["schema_id"] = "concordia.mainnet-canary.step-observation.v2"
+            doc["provider"] = {
+                "provider_id": provider_id, "endpoint_host": host,
+                "method": "info_get_deploy", "request_sha256": "11" * 32,
+                "response_sha256": "22" * 32,
+                "retrieved_at_unix": mc_support.CLOCK_UNIX,
+                "api_version": "2.0.0", "chainspec_name": "casper",
+            }
+            doc.setdefault("state_readback", None)
+            bundle.append(doc)
     (tmp_path / "observations.json").write_text(
         json.dumps(bundle), encoding="utf-8"
     )
@@ -344,8 +466,8 @@ def test_cli_verify_never_claims_mainnet_verified(
                 "amount_motes": expected["amount_motes"],
                 "transfer_id": expected["transfer_id"],
             }
-        bundle.append(
-            make_observation(
+        bundle.extend(
+            mc_support.make_v2_pair(
                 step_id,
                 target={
                     "package_hash": package,
@@ -376,3 +498,202 @@ def test_cli_verify_never_claims_mainnet_verified(
     assert output["canary_release_claim"] == BLOCKED_PENDING_LIVE_PROOF
     statuses = {step["status"] for step in output["steps"]}
     assert statuses == {"observation_consistent"}
+
+
+# --- the hardening modules are ON the CLI path, not merely beside it ---------
+#
+# The audit finding these cover: attestation, finality_v2, economic_manifest
+# and proof_bundle were unit-tested in isolation while the CLI never imported
+# them, so they enforced nothing at runtime. Each test below drives the CLI
+# itself and asserts the refusal that only the wired module can produce.
+
+
+def test_cli_verify_refuses_single_source_observations(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """finality_v2 on the path: one provider is never sufficient evidence."""
+
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    single = [
+        mc_support.make_v2_pair(str(step["step_id"]))[0]
+        for step in plan["steps"]
+        if step["economic"]
+    ]
+    (tmp_path / "single.json").write_text(json.dumps(single), encoding="utf-8")
+    exit_code, output = _run_cli(
+        capsys,
+        ["verify", "--plan", str(plan_path), "--observations", str(tmp_path / "single.json")],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] == RefusalCode.NODE_SET_INVALID
+
+
+def test_cli_verify_refuses_a_v1_observation_bundle(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """Bundles without raw provider evidence can no longer be verified."""
+
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    legacy = [
+        make_observation(str(step["step_id"]))
+        for step in plan["steps"]
+        if step["economic"]
+        for _ in (0, 1)
+    ]
+    (tmp_path / "legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+    exit_code, output = _run_cli(
+        capsys,
+        ["verify", "--plan", str(plan_path), "--observations", str(tmp_path / "legacy.json")],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] in (
+        RefusalCode.OBSERVATION_MALFORMED,
+        RefusalCode.NODE_SET_INVALID,
+    )
+
+
+def test_cli_funding_reports_the_exact_maximum_only(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """economic_manifest on the path: one number, and no acquisition step."""
+
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
+    exit_code, output = _run_cli(
+        capsys,
+        [
+            "funding",
+            "--plan",
+            str(plan_path),
+            "--calibration",
+            str(gates["calibration_path"]),
+        ],
+    )
+    assert exit_code == 0
+    total = int(output["required_funding_motes"])
+    assert total == int(output["transfer_principal_motes"]) + int(
+        output["max_fees_motes"]
+    )
+    assert "never purchases" in output["acquisition"]
+
+
+def test_cli_funding_refuses_without_calibration(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    empty = tmp_path / "empty-calibration.json"
+    empty.write_text(
+        json.dumps(
+            {"schema_id": "concordia.mainnet-canary.testnet-calibration.v1", "lines": {}}
+        ),
+        encoding="utf-8",
+    )
+    exit_code, output = _run_cli(
+        capsys,
+        ["funding", "--plan", str(plan_path), "--calibration", str(empty)],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] == RefusalCode.CALIBRATION_RECEIPT_ABSENT
+
+
+def test_cli_bundle_emits_lineage_and_required_statement(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """proof_bundle on the path: lineage, verbatim statement, confined write."""
+
+    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+    from tools.mainnet_canary.proof_bundle import BUNDLE_LINEAGE, REQUIRED_STATEMENT
+
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
+    manifest = build_economic_manifest(
+        plan,
+        calibration=mc_support.make_calibration(plan),
+        operator_ceilings={},
+    )
+    manifest_path = mc_support.write_json(tmp_path / "manifest.json", manifest)
+    verification_path = mc_support.write_json(
+        tmp_path / "verification.json",
+        {"mode": "verify", "steps": [{"step_id": "G-finalize-exact-envelope"}]},
+    )
+    exit_code, output = _run_cli(
+        capsys,
+        [
+            "--repo-root",
+            str(plan_inputs["repo"]),
+            "bundle",
+            "--plan",
+            str(plan_path),
+            "--verification",
+            str(verification_path),
+            "--economic-manifest",
+            str(manifest_path),
+            "--attestation",
+            str(gates["attestation_path"]),
+            "--journal-head-hash",
+            "ee" * 32,
+            "--out-dir",
+            str(tmp_path / "bundle-out"),
+        ],
+    )
+    assert exit_code == 0
+    assert output["lineage"] == BUNDLE_LINEAGE == "concordia-mainnet-canary-v1"
+    assert output["required_statement"] == REQUIRED_STATEMENT
+    assert Path(output["bundle_path"]).is_file()
+
+
+def test_cli_bundle_refuses_to_write_into_a_protected_namespace(
+    plan_inputs: dict[str, Path], tmp_path: Path, capsys
+) -> None:
+    """path_policy still fences the bundle writer."""
+
+    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+
+    plan = build_valid_plan(plan_inputs)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
+    manifest_path = mc_support.write_json(
+        tmp_path / "manifest2.json",
+        build_economic_manifest(
+            plan, calibration=mc_support.make_calibration(plan), operator_ceilings={}
+        ),
+    )
+    verification_path = mc_support.write_json(
+        tmp_path / "verification2.json", {"mode": "verify", "steps": []}
+    )
+    exit_code, output = _run_cli(
+        capsys,
+        [
+            "--repo-root",
+            str(plan_inputs["repo"]),
+            "bundle",
+            "--plan",
+            str(plan_path),
+            "--verification",
+            str(verification_path),
+            "--economic-manifest",
+            str(manifest_path),
+            "--attestation",
+            str(gates["attestation_path"]),
+            "--journal-head-hash",
+            "ee" * 32,
+            "--out-dir",
+            str(plan_inputs["repo"] / "artifacts" / "live" / "x"),
+        ],
+    )
+    assert exit_code == 2
+    assert output["refusal"]["code"] in (
+        RefusalCode.CANONICAL_NAMESPACE_PROTECTED,
+        RefusalCode.LIVE_ARTIFACTS_UNAVAILABLE_IN_PREP,
+    )

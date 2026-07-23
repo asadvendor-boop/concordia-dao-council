@@ -120,6 +120,7 @@ class TestPathPolicy:
             measured_costs_path=plan_inputs["measured"],
             journal_path=tmp_path / "stage-out" / "journal.jsonl",
             output_dir=tmp_path / "stage-out" / "intents",
+            **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
         )
         assert report["path_policy"] == {
             "canary_id": plan["canary_plan_sha256"][:24] + "-prep",

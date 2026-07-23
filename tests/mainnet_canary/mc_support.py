@@ -234,6 +234,132 @@ def make_ceiling(**overrides: object) -> dict[str, object]:
     return document
 
 
+CLOCK_UNIX = 1_700_000_000
+
+
+def make_attestation(**overrides: object) -> dict[str, object]:
+    """A double-built two-profile attestation backing the RC declaration."""
+
+    def artifact(sha: str, profile: str) -> dict[str, object]:
+        return {
+            "schema_id": "concordia.mainnet-canary.rc-attestation.v1",
+            "tag": "concordia-testnet-rc-v3.0-test",
+            "tag_object_sha": "ab" * 20,
+            "peeled_commit_sha": "cd" * 20,
+            "profile": profile,
+            "build_env_delta": {"CONCORDIA_V3_NETWORK_PROFILE": profile},
+            "builds": 2,
+            "artifact_relpath": "wasm/GovernanceReceiptV3.wasm",
+            "wasm_sha256": sha,
+            "wasm_size_bytes": 4096,
+            "toolchain": {
+                "rustc_version": "rustc 1.94.1 (test)",
+                "cargo_odra_version": "cargo-odra 0.1.7",
+                "cargo_lock_sha256": "ef" * 32,
+            },
+        }
+
+    document: dict[str, object] = {
+        "network_artifacts": {
+            "testnet": artifact(TESTNET_WASM_SHA, "testnet"),
+            "mainnet-native": artifact(MAINNET_WASM_SHA, "mainnet-native"),
+        }
+    }
+    document.update(overrides)
+    return document
+
+
+def make_calibration(plan: dict[str, object], **overrides: object) -> dict[str, object]:
+    """Finalized Testnet calibration receipts for every economic plan step."""
+
+    lines: dict[str, object] = {}
+    for step in plan["steps"]:
+        if not step["economic"]:
+            continue
+        lines[str(step["step_id"])] = {
+            "payment_motes": "5000000000",
+            "receipt": {
+                "deploy_hash": "1f" * 32,
+                "block_hash": "2e" * 32,
+                "finalized": True,
+                "chain_name": "casper-test",
+            },
+        }
+    document: dict[str, object] = {
+        "schema_id": "concordia.mainnet-canary.testnet-calibration.v1",
+        "lines": lines,
+    }
+    document.update(overrides)
+    return document
+
+
+def make_authorization(
+    plan: dict[str, object], manifest: dict[str, object], **overrides: object
+) -> dict[str, object]:
+    """A signed human authorization binding the manifest exactly."""
+
+    document: dict[str, object] = {
+        "schema_id": "concordia.mainnet-canary.human-authorization.v1",
+        "plan_hash": plan["canary_plan_sha256"],
+        "chain_name": "casper",
+        "treasury_source_account_hash": manifest["treasury_source_account_hash"],
+        "recipient_account_hash": manifest["recipient_account_hash"],
+        "transfer_principal_motes": manifest["transfer_principal_motes"],
+        "max_fees_motes": manifest["max_fees_motes"],
+        "max_total_outlay_motes": manifest["max_total_outlay_motes"],
+        "expiry_unix": CLOCK_UNIX + 3600,
+        "nonce": "9d" * 32,
+        "authorized_by": ["asad-public-approval"],
+    }
+    document.update(overrides)
+    return document
+
+
+def build_economic_inputs(
+    plan: dict[str, object], tmp_path: Path
+) -> dict[str, Path]:
+    """Attestation + calibration + authorization written to disk for staging."""
+
+    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+
+    calibration = make_calibration(plan)
+    manifest = build_economic_manifest(
+        plan, calibration=calibration, operator_ceilings={}
+    )
+    return {
+        "attestation": write_json(
+            tmp_path / "inputs" / "attestation.json", make_attestation()
+        ),
+        "calibration": write_json(
+            tmp_path / "inputs" / "calibration.json", calibration
+        ),
+        "authorization": write_json(
+            tmp_path / "inputs" / "authorization.json",
+            make_authorization(plan, manifest),
+        ),
+    }
+
+
+def stage_gate_kwargs(
+    plan_inputs: dict[str, Path], tmp_path: Path
+) -> dict[str, object]:
+    """The hardening gates every ``run_stage`` call must now satisfy.
+
+    Derived from a PRISTINE plan built from the same inputs, so a test that
+    deliberately tampers with its plan still reaches ``run_stage``'s own
+    plan-hash guard instead of tripping the manifest builder first.
+    """
+
+    pristine = build_valid_plan(plan_inputs)
+    economic = build_economic_inputs(pristine, tmp_path)
+    return {
+        "attestation_path": economic["attestation"],
+        "calibration_path": economic["calibration"],
+        "authorization_path": economic["authorization"],
+        "clock_unix": CLOCK_UNIX,
+    }
+
+
 def build_plan_inputs(hermetic_repo: Path, tmp_path: Path) -> dict[str, Path]:
     """All valid plan inputs written to disk for the hermetic repo."""
 
@@ -272,6 +398,35 @@ def build_valid_plan(plan_inputs: dict[str, Path]) -> dict[str, object]:
         snapshot_path=plan_inputs["snapshot"],
         status_path=plan_inputs["status"],
     )
+
+
+def make_v2_pair(step_id: str, **overrides: object) -> list[dict[str, object]]:
+    """Two agreeing observations from disjoint providers (finality v2).
+
+    ``verify`` now refuses single-source evidence, so every CLI-level
+    observation bundle must supply a disjoint pair per economic step.
+    """
+
+    pair: list[dict[str, object]] = []
+    for provider_id, host in (
+        ("provider-a", "node-a.example"),
+        ("provider-b", "node-b.example"),
+    ):
+        document = make_observation(step_id, **overrides)
+        document["schema_id"] = "concordia.mainnet-canary.step-observation.v2"
+        document["provider"] = {
+            "provider_id": provider_id,
+            "endpoint_host": host,
+            "method": "info_get_deploy",
+            "request_sha256": "11" * 32,
+            "response_sha256": "22" * 32,
+            "retrieved_at_unix": CLOCK_UNIX,
+            "api_version": "2.0.0",
+            "chainspec_name": "casper",
+        }
+        document.setdefault("state_readback", None)
+        pair.append(document)
+    return pair
 
 
 def make_observation(step_id: str, **overrides: object) -> dict[str, object]:

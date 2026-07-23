@@ -20,13 +20,24 @@ protected outright.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from tools.mainnet_canary.constants import (
     MAINNET_CHAIN_NAME,
     PROTECTED_CANONICAL_PREFIXES,
 )
+from tools.mainnet_canary.attestation import (
+    RC_ATTESTATION_SCHEMA_ID,
+    require_disjoint_network_artifacts,
+    verify_declared_artifact_hash,
+)
 from tools.mainnet_canary.cost_model import require_approved_estimate
+from tools.mainnet_canary.economic_manifest import (
+    build_economic_manifest,
+    require_within_authorization,
+    validate_human_authorization,
+)
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.journal import CanaryJournal
 from tools.mainnet_canary.path_policy import CanaryPathPolicy
@@ -38,6 +49,7 @@ from tools.mainnet_canary.plan import (
     require_fresh_snapshot,
 )
 from tools.mainnet_canary.rc_gate import validate_rc_gate
+from tools.mainnet_canary.secret_guard import refuse_if_secret_material
 
 UNSIGNED_INTENT_DOMAIN = b"CONCORDIA_MAINNET_CANARY_UNSIGNED_INTENT_V1\x00"
 
@@ -97,6 +109,60 @@ def build_unsigned_intent(step: dict[str, object], *, plan_hash: str) -> bytes:
     return UNSIGNED_INTENT_DOMAIN + canonical_json(intent).encode("ascii")
 
 
+def _load_json(path: Path, *, context: str, code: str) -> dict[str, object]:
+    if not path.is_file():
+        raise CanaryRefusal(code, f"{context} is not present at {path.name}")
+    raw = path.read_text(encoding="utf-8")
+    refuse_if_secret_material(raw, context=context)
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CanaryRefusal(code, f"{context} is not valid JSON") from exc
+    if not isinstance(document, dict):
+        raise CanaryRefusal(code, f"{context} must be a JSON object")
+    return document
+
+
+def require_build_attestation(
+    attestation_path: Path, *, rc_mainnet_wasm_sha256: str
+) -> dict[str, object]:
+    """The declared Mainnet Wasm must be backed by a double-built artifact.
+
+    Puts :mod:`tools.mainnet_canary.attestation` on the enforcement path: a
+    hash asserted in the RC declaration is worthless unless some reproducible
+    build actually produced it, and the Mainnet artifact must be disjoint from
+    the Testnet one (a `casper-test`-chained Wasm cannot initialise on
+    Mainnet).
+    """
+
+    document = _load_json(
+        attestation_path,
+        context="build-attestation",
+        code=RefusalCode.ARTIFACT_HASH_UNBACKED,
+    )
+    pair = document.get("network_artifacts")
+    if not isinstance(pair, dict):
+        raise CanaryRefusal(
+            RefusalCode.ARTIFACT_HASH_UNBACKED,
+            "attestation must carry `network_artifacts` for both profiles",
+        )
+    testnet = pair.get("testnet")
+    mainnet = pair.get("mainnet-native")
+    for label, entry in (("testnet", testnet), ("mainnet-native", mainnet)):
+        if (
+            not isinstance(entry, dict)
+            or entry.get("schema_id") != RC_ATTESTATION_SCHEMA_ID
+            or entry.get("builds") != 2
+        ):
+            raise CanaryRefusal(
+                RefusalCode.ARTIFACT_HASH_UNBACKED,
+                f"{label} attestation is absent or was not double-built",
+            )
+    require_disjoint_network_artifacts(testnet, mainnet)
+    verify_declared_artifact_hash(mainnet, rc_mainnet_wasm_sha256)
+    return document
+
+
 def run_stage(
     repo_root: Path,
     *,
@@ -108,11 +174,25 @@ def run_stage(
     measured_costs_path: Path | None,
     journal_path: Path,
     output_dir: Path,
+    attestation_path: Path,
+    calibration_path: Path,
+    authorization_path: Path,
+    clock_unix: int,
+    operator_ceilings_path: Path | None = None,
 ) -> dict[str, object]:
-    """Re-validate everything, then persist unsigned intents + journal."""
+    """Re-validate everything, then persist unsigned intents + journal.
+
+    Every safety module is on THIS path, not merely unit-tested beside it:
+    the RC gate, the reproducible-build attestation, the plan-derived
+    economic manifest, the signed human authorization, the durable journal,
+    and the output path policy each gate staging and each fails closed.
+    """
 
     plan_hash = _require_plan(plan_document)
     rc = validate_rc_gate(repo_root, rc_declaration_path)
+    attestation = require_build_attestation(
+        attestation_path, rc_mainnet_wasm_sha256=rc.mainnet_wasm_sha256
+    )
     if plan_document["rc"]["peeled_commit_sha"] != rc.peeled_commit_sha or (
         plan_document["rc"]["mainnet_wasm_sha256"] != rc.mainnet_wasm_sha256
     ):
@@ -144,6 +224,37 @@ def run_stage(
         measured_costs_path=measured_costs_path,
         ceiling_path=ceiling_path,
     )
+
+    # Economic manifest v2: cost lines derived 1:1 from THIS plan's economic
+    # steps, with the transfer principal inside a checked total, every fee
+    # maximum grounded in a finalized calibration receipt or an explicit
+    # operator ceiling, and the whole thing bound to a signed human
+    # authorization that has not expired against the trusted clock.
+    calibration = _load_json(
+        calibration_path,
+        context="testnet-calibration",
+        code=RefusalCode.CALIBRATION_RECEIPT_ABSENT,
+    )
+    operator_ceilings: dict[str, object] = {}
+    if operator_ceilings_path is not None:
+        operator_ceilings = _load_json(
+            operator_ceilings_path,
+            context="operator-ceilings",
+            code=RefusalCode.CALIBRATION_RECEIPT_ABSENT,
+        )
+    manifest = build_economic_manifest(
+        plan_document, calibration=calibration, operator_ceilings=operator_ceilings
+    )
+    authorization = validate_human_authorization(
+        _load_json(
+            authorization_path,
+            context="human-authorization",
+            code=RefusalCode.AUTHORIZATION_INVALID,
+        ),
+        manifest=manifest,
+        clock_unix=clock_unix,
+    )
+    require_within_authorization(manifest, authorization)
 
     refuse_artifact_namespace_write(output_dir, repo_root)
     # Every staged output resolves through the centralized path policy; the
@@ -218,6 +329,17 @@ def run_stage(
         "rc_tag": rc.rc_tag,
         "staged_steps": staged,
         "cost_estimate": estimate,
+        "economic_manifest": manifest,
+        "human_authorization_nonce": authorization["nonce"],
+        "build_attestation": {
+            "testnet_wasm_sha256": attestation["network_artifacts"]["testnet"][
+                "wasm_sha256"
+            ],
+            "mainnet_wasm_sha256": attestation["network_artifacts"][
+                "mainnet-native"
+            ]["wasm_sha256"],
+            "double_built": True,
+        },
         "journal_path": str(journal_path),
         "path_policy": {
             "canary_id": canary_id,

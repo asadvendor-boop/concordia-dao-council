@@ -3,6 +3,9 @@
 Producer: Claude lane, branch `claude/mainnet-canary-hardening`.
 Base: `d5d7582` (immutable rejected prototype/reference — preserved unmerged).
 Hardening commit: `93724c6de44f900197c8f26f5188b449d1882639`.
+Runtime-wiring commit: see §4b (the reviewer's "unit-tested but unwired"
+finding); the module attestations in §2 are unchanged by it — it moved no
+contract source, only Python enforcement paths and tests.
 
 **No-mutation statement.** This branch performed local code, tests, fixtures,
 and this manifest only. No VM, Caddy, DNS, npm, Testnet, Mainnet, wallet,
@@ -170,11 +173,47 @@ pin `amount == floor(balance × approved_bps / 10000)`; the plan refuses
 unless `human_authorized_amount_motes` equals that exact value (and the tiny
 cap). The implementation cannot choose an amount silently.
 
+## 4b. Runtime wiring (reviewer finding on `38866fd`)
+
+The reviewer's early audit reproduced 235/235 but found the decisive gap:
+the new safety modules were **unit-tested in isolation and not imported by
+the CLI/stage/verify path**, so at runtime they enforced nothing. Confirmed
+exactly — only `path_policy` was wired. A safety module off the enforcement
+path is documentation, not a control.
+
+Every module is now ON the path, and each has a CLI-level test that drives
+the binary and asserts the refusal only the wired module can produce:
+
+| module | where it now runs | CLI refusal proven |
+|---|---|---|
+| `attestation` | `stage` → `require_build_attestation`: the RC-declared Mainnet hash must be backed by a double-built, two-profile, disjoint attestation | `ARTIFACT_HASH_UNBACKED` |
+| `economic_manifest` | `stage` → plan-derived manifest + signed human authorization + `require_within_authorization`; new `funding` mode | `CALIBRATION_RECEIPT_ABSENT`, `AUTHORIZATION_EXPIRED` |
+| `finality_v2` | `verify` → every economic step needs two agreeing disjoint providers with raw response evidence | `NODE_SET_INVALID`, `OBSERVATION_MALFORMED` (v1 bundles) |
+| `proof_bundle` | new `bundle` mode → lineage + verbatim statement + forbidden-claims scan before any write | `FORBIDDEN_CLAIM`, namespace refusals |
+| `path_policy` | `stage` (already) and now `bundle` writes | `CANONICAL_NAMESPACE_PROTECTED` |
+
+`stage` gained four REQUIRED arguments (`--attestation`, `--calibration`,
+`--authorization`, `--clock-unix`) so staging cannot proceed on an unattested
+artifact, an ungrounded cost model, or an unsigned/expired authorization.
+CLI modes are now `inventory, estimate, plan, stage, funding, verify, bundle,
+broadcast`.
+
+`funding` prints the exact maximum outlay and nothing else, and says
+in-band that this lane never purchases, transfers, bridges, swaps, or
+exchanges CSPR — provisioning stays a human action outside the tooling.
+
+**Scope note, stated rather than glossed:** `supported_probe` is deliberately
+NOT on the prep-lane runtime path. It is a pure redaction helper (it performs
+no network I/O itself), and the preparation lane may not make authenticated
+calls or hold a token, so there is nothing for it to gate here. It remains
+unit-tested and is for the future live lane. That is a scope boundary, not a
+wired control — do not read it as one.
+
 ## 5. Test inventory and fresh results (all at `93724c6`)
 
 | Suite | Result |
 |---|---|
-| Python canary lane (`tests/mainnet_canary/`, 12 prior + 6 new hardening files) | **235/235 passed** |
+| Python canary lane (`tests/mainnet_canary/`, 12 prior + 6 new hardening files) | **243/243 passed** (235 before the runtime wiring; +8 CLI-level gate tests) |
 | Contract, `testnet` profile (encoding 18, adversarial 9, network_profile 3, lib 2) | **32/32 passed**, exit 0 (fresh at `93724c6`) |
 | Contract, `mainnet-native` profile (network_profile mainnet module) | **5/5 passed**, exit 0 (fresh at `93724c6`) |
 | Contract, profile-less | compile fails with the refusal panic (proven) |

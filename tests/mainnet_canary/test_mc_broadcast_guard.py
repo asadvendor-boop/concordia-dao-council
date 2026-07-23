@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import mc_support
+
 import tools.mainnet_canary.broadcast as broadcast_module
 from mc_support import build_valid_plan, write_json
 from tools.mainnet_canary.broadcast import run_broadcast_guard
@@ -28,6 +30,7 @@ def _staged(plan_inputs: dict[str, Path], tmp_path: Path) -> dict[str, object]:
         measured_costs_path=plan_inputs["measured"],
         journal_path=tmp_path / "journal.jsonl",
         output_dir=tmp_path / "staged",
+        **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
     )
     return plan
 

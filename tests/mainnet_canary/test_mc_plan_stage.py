@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import mc_support
 from mc_support import (
     build_valid_plan,
     make_parameters,
@@ -175,6 +176,10 @@ def _stage(
         "measured_costs_path": plan_inputs["measured"],
         "journal_path": tmp_path / "journal.jsonl",
         "output_dir": tmp_path / "staged",
+        # The hardening gates are REQUIRED arguments of run_stage: staging
+        # cannot proceed on an unattested artifact, an ungrounded cost model,
+        # or an unsigned/expired human authorization.
+        **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
     }
     arguments.update(overrides)
     return run_stage(plan_inputs["repo"], **arguments)
