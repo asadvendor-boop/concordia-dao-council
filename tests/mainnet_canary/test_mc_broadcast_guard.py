@@ -328,3 +328,69 @@ def test_broadcast_does_not_wedge_the_operators_own_journal(
     reopened = CanaryJournal.load(journal_path)
     assert reopened.plan_hash == plan["canary_plan_sha256"]
     reopened.close()
+
+
+def test_in_flight_state_created_AFTER_gate_one_is_still_caught(
+    plan_inputs: dict[str, Path], tmp_path: Path, monkeypatch
+) -> None:
+    """Gate 5 must re-read the journal, not trust a gate-1 snapshot.
+
+    Reviewer finding on 90d3c80: the lock-leak fix captured in-flight state
+    at gate 1 and checked that list at gate 5, so a transition written in
+    between was invisible and the guard walked on to the confirmation gate
+    while the journal was genuinely in flight. A stale read is not a
+    control. This writes the transition in the window the reviewer used.
+    """
+
+    from tools.mainnet_canary.journal import CanaryJournal
+
+    plan = build_valid_plan(plan_inputs)
+    plan_hash = str(plan["canary_plan_sha256"])
+    journal_path = tmp_path / "post-snapshot-journal.jsonl"
+    CanaryJournal.create(journal_path, plan_hash=plan_hash, rc_tag="rc").close()
+
+    authorization = write_json(
+        tmp_path / "live-authorization.json", _authorization_for(plan)
+    )
+    monkeypatch.setattr(
+        broadcast_module, "LIVE_AUTHORIZATION_MOUNT_PATH", str(authorization)
+    )
+
+    # Drive a step in flight AFTER gate 1 would have read the journal: the
+    # cost-estimate gate is between gate 1 and gate 5, so mutating there
+    # lands the transition inside the exact window.
+    original_estimate = broadcast_module.require_approved_estimate
+
+    def estimate_then_transition(*args: object, **kwargs: object) -> object:
+        report = original_estimate(*args, **kwargs)
+        journal = CanaryJournal.load(journal_path)
+        try:
+            step = "B-install-rc-wasm"
+            journal.transition(step, "PLANNED", plan_hash=plan_hash)
+            journal.transition(step, "STAGED", plan_hash=plan_hash)
+            journal.transition(step, "AUTHORIZATION_VALIDATED", plan_hash=plan_hash)
+            journal.transition(
+                step,
+                "SIGNED",
+                plan_hash=plan_hash,
+                deploy_hash="d0" * 32,
+                signed_bytes_sha256="b1" * 32,
+            )
+        finally:
+            journal.close()
+        return report
+
+    monkeypatch.setattr(
+        broadcast_module, "require_approved_estimate", estimate_then_transition
+    )
+
+    with pytest.raises(CanaryRefusal) as refusal:
+        run_broadcast_guard(
+            plan_inputs["repo"],
+            plan_document=plan,
+            journal_path=journal_path,
+            ceiling_path=plan_inputs["ceiling"],
+            measured_costs_path=plan_inputs["measured"],
+        )
+    # It must refuse for reconciliation — NOT walk on to confirmation.
+    assert refusal.value.code == RefusalCode.RECONCILIATION_REQUIRED

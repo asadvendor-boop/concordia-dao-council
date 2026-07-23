@@ -125,15 +125,13 @@ def run_broadcast_guard(
 
     # Gate 1 — durable journal state must exist before any broadcast.
     #
-    # The journal holds an exclusive lock for as long as it is open. Every
-    # gate below can refuse, so the read is scoped and the lock released
-    # immediately: leaving it held wedged the operator's OWN journal for the
-    # rest of the process, so an attempted broadcast (which always refuses
-    # here) made every later command fail with JOURNAL_LOCK_HELD.
+    # Only the PLAN BINDING is read here, and the lock is released straight
+    # away. In-flight state is deliberately NOT captured at this point: it
+    # is re-read at gate 5, because state observed here would already be
+    # stale by the time the decision is made (see gate 5).
     journal = CanaryJournal.load(journal_path)
     try:
         journal_plan_hash = journal.plan_hash
-        in_flight = journal.in_flight_steps()
     finally:
         journal.close()
     plan_hash = plan_document_hash(plan_document)
@@ -190,20 +188,32 @@ def run_broadcast_guard(
 
     # Gate 5 — reconcile-before-anything: an in-flight step blocks all new
     # economic actions; reconciliation uses the original deploy hash only.
-    # Uses the snapshot taken under the lock at gate 1, so the lock does not
-    # have to stay held across every gate in between.
-    if in_flight:
-        steps = sorted(status.step_id for status in in_flight)
-        raise CanaryRefusal(
-            RefusalCode.RECONCILIATION_REQUIRED,
-            f"broadcast: steps in flight after restart: {steps}; reconcile "
-            "by original deploy hash before any new action",
-        )
+    #
+    # The journal is RE-READ here, under the lock, at the moment the
+    # decision is made. An earlier revision checked a snapshot taken at
+    # gate 1: a transition written between gate 1 and this point was
+    # therefore invisible, and the guard walked on to the confirmation gate
+    # while the journal was genuinely in flight. A stale read is not a
+    # control.
+    #
+    # The lock is then HELD for the remainder of the guard, so the decision
+    # and everything that follows it happen under one lock. Releasing it
+    # here would reopen the same window one step later.
+    journal = CanaryJournal.load(journal_path)
+    try:
+        if journal.plan_hash != plan_hash:
+            raise CanaryRefusal(
+                RefusalCode.PLAN_HASH_MISMATCH,
+                "journal was rebound to a different plan mid-guard",
+            )
+        journal.require_no_in_flight(context="broadcast")
 
-    # Gate 6 — per-step interactive confirmation.
-    for step in plan_document["steps"]:
-        if step["economic"]:
-            _confirm_step_interactively(str(step["step_id"]))
+        # Gate 6 — per-step interactive confirmation, under the same lock.
+        for step in plan_document["steps"]:
+            if step["economic"]:
+                _confirm_step_interactively(str(step["step_id"]))
+    finally:
+        journal.close()
 
     # Gate 7 — submission is not implemented in the preparation lane.  This
     # refusal is unconditional while PREP_LANE is True (it always is here);
