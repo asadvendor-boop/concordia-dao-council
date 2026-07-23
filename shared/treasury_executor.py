@@ -69,6 +69,7 @@ MAX_SIGNED_DEPLOY_BYTES = 4 * 1024 * 1024
 MAX_FINALITY_EVIDENCE_BYTES = 4 * 1024 * 1024
 PROPOSAL_ID_RE = re.compile(r"^[A-Z0-9-]{1,64}$")
 DETAIL_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class TreasuryExecutorError(RuntimeError):
@@ -136,6 +137,8 @@ class JournalEntry:
     """One immutable action binding plus its durable execution progress."""
 
     authorization: VerifiedNativeAuthorization
+    source_commit: str
+    deployment_commit: str
     payment_amount_motes: int
     state: ExecutionState
     signed_bytes: bytes | None
@@ -224,7 +227,11 @@ CREATE TABLE IF NOT EXISTS treasury_execution_journal (
     typed_body_json TEXT NOT NULL,
     readback_artifact_json TEXT NOT NULL,
     readback_artifact_sha256 TEXT NOT NULL,
+    v3_proof_artifact_json TEXT NOT NULL,
+    v3_proof_artifact_sha256 TEXT NOT NULL,
     verification_seal BLOB NOT NULL CHECK(length(verification_seal) = 32),
+    source_commit TEXT NOT NULL,
+    deployment_commit TEXT NOT NULL,
     payment_amount_motes TEXT NOT NULL,
     state TEXT NOT NULL,
     signed_bytes BLOB,
@@ -267,8 +274,15 @@ def _require_bytes32(name: str, value: object, *, nonzero: bool = False) -> byte
 
 
 def _require_uint(name: str, value: object, maximum: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > maximum:
-        raise ValueError(f"{name} must be an unsigned integer no greater than {maximum}")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > maximum
+    ):
+        raise ValueError(
+            f"{name} must be an unsigned integer no greater than {maximum}"
+        )
     return value
 
 
@@ -288,7 +302,9 @@ def _canonical_json(value: object) -> str:
             allow_nan=False,
         )
     except (TypeError, ValueError) as exc:
-        raise NativeTransferFinalityError("finality evidence is not canonical JSON") from exc
+        raise NativeTransferFinalityError(
+            "finality evidence is not canonical JSON"
+        ) from exc
     if len(encoded.encode("utf-8")) > MAX_FINALITY_EVIDENCE_BYTES:
         raise NativeTransferFinalityError("finality evidence exceeds size limit")
     return encoded
@@ -309,7 +325,9 @@ def _validate_authorization(authorization: VerifiedNativeAuthorization) -> None:
     _require_bytes32("recipient_account", authorization.recipient_account, nonzero=True)
     if authorization.source_account == authorization.recipient_account:
         raise ValueError("source_account and recipient_account must differ")
-    _require_bytes32("snapshot_block_hash", authorization.snapshot_block_hash, nonzero=True)
+    _require_bytes32(
+        "snapshot_block_hash", authorization.snapshot_block_hash, nonzero=True
+    )
     _require_bytes32(
         "snapshot_state_root_hash", authorization.snapshot_state_root_hash, nonzero=True
     )
@@ -319,7 +337,9 @@ def _validate_authorization(authorization: VerifiedNativeAuthorization) -> None:
         authorization.treasury_snapshot_balance_motes,
         MAX_U512,
     )
-    bps = _require_uint("approved_allocation_bps", authorization.approved_allocation_bps, 10_000)
+    bps = _require_uint(
+        "approved_allocation_bps", authorization.approved_allocation_bps, 10_000
+    )
     if amount == 0 or balance == 0 or bps == 0:
         raise ValueError("amount, treasury snapshot, and approved bps must be non-zero")
     expected_amount = (balance * bps) // 10_000
@@ -377,7 +397,9 @@ def _parse_balance_bundle(
             expected_balance_motes=expected_balance_motes,
         )
     except CasperStateProofError as exc:
-        raise JournalConflict("persisted execution proof balance evidence is invalid") from exc
+        raise JournalConflict(
+            "persisted execution proof balance evidence is invalid"
+        ) from exc
 
 
 def _execution_proof_digest(
@@ -416,15 +438,19 @@ class TreasuryExecutor:
     ):
         self.database_path = Path(database_path)
         if str(database_path) == ":memory:":
-            raise ValueError("the treasury executor requires a durable file-backed database")
+            raise ValueError(
+                "the treasury executor requires a durable file-backed database"
+            )
         self.payment_amount_motes = _require_uint(
             "payment_amount_motes", payment_amount_motes, MAX_U512
         )
         if self.payment_amount_motes == 0:
             raise ValueError("payment_amount_motes must be non-zero")
-        if not isinstance(inflight_lease_seconds, (int, float)) or isinstance(
-            inflight_lease_seconds, bool
-        ) or inflight_lease_seconds <= 0:
+        if (
+            not isinstance(inflight_lease_seconds, (int, float))
+            or isinstance(inflight_lease_seconds, bool)
+            or inflight_lease_seconds <= 0
+        ):
             raise ValueError("inflight_lease_seconds must be positive")
         self.inflight_lease_seconds = float(inflight_lease_seconds)
         self.clock = clock
@@ -498,7 +524,9 @@ class TreasuryExecutor:
             snapshot_block_request_sha256=str(row["snapshot_block_request_sha256"]),
             snapshot_block_sha256=str(row["snapshot_block_sha256"]),
             snapshot_balance_request_sha256=str(row["snapshot_balance_request_sha256"]),
-            snapshot_balance_response_sha256=str(row["snapshot_balance_response_sha256"]),
+            snapshot_balance_response_sha256=str(
+                row["snapshot_balance_response_sha256"]
+            ),
             finalization_block_hash=bytes(row["finalization_block_hash"]),
             finalization_block_height=int(row["finalization_block_height"]),
             finalization_state_root_hash=bytes(row["finalization_state_root_hash"]),
@@ -515,9 +543,18 @@ class TreasuryExecutor:
             typed_body_json=str(row["typed_body_json"]),
             readback_artifact_json=str(row["readback_artifact_json"]),
             readback_artifact_sha256=str(row["readback_artifact_sha256"]),
+            v3_proof_artifact_json=str(row["v3_proof_artifact_json"]),
+            v3_proof_artifact_sha256=str(row["v3_proof_artifact_sha256"]),
             verification_seal=bytes(row["verification_seal"]),
         )
         _validate_authorization(authorization)
+        source_commit = str(row["source_commit"])
+        deployment_commit = str(row["deployment_commit"])
+        if (
+            COMMIT_RE.fullmatch(source_commit) is None
+            or COMMIT_RE.fullmatch(deployment_commit) is None
+        ):
+            raise JournalConflict("persisted release commit identity is invalid")
         signed_bytes = row["signed_bytes"]
         signed_bytes = None if signed_bytes is None else bytes(signed_bytes)
         state = ExecutionState(row["state"])
@@ -536,7 +573,9 @@ class TreasuryExecutor:
                 or row["deploy_hash"] is None
                 or finality_node_observations_json is None
             ):
-                raise JournalConflict("finalized journal is missing strict node evidence")
+                raise JournalConflict(
+                    "finalized journal is missing strict node evidence"
+                )
             try:
                 node_observations = json.loads(str(finality_node_observations_json))
                 if type(node_observations) is not list or any(
@@ -557,7 +596,11 @@ class TreasuryExecutor:
                 verified_finality = require_verified_finalized_native_transfer(
                     verified_finality
                 )
-            except (json.JSONDecodeError, TypeError, NativeTransferFinalityError) as exc:
+            except (
+                json.JSONDecodeError,
+                TypeError,
+                NativeTransferFinalityError,
+            ) as exc:
                 raise JournalConflict("persisted finality evidence is invalid") from exc
             stored_finality = (
                 row["block_hash"],
@@ -584,7 +627,9 @@ class TreasuryExecutor:
                 verified_finality.corroboration_count,
             )
             if stored_finality != proven_finality:
-                raise JournalConflict("persisted finality fields do not match node evidence")
+                raise JournalConflict(
+                    "persisted finality fields do not match node evidence"
+                )
         post_balance_evidence_json = row["post_balance_evidence_json"]
         no_duplicate_scan_json = row["no_duplicate_scan_json"]
         execution_proof_sha256 = row["execution_proof_sha256"]
@@ -595,7 +640,9 @@ class TreasuryExecutor:
                 or no_duplicate_scan_json is None
                 or execution_proof_sha256 is None
             ):
-                raise JournalConflict("proven journal is missing execution proof evidence")
+                raise JournalConflict(
+                    "proven journal is missing execution proof evidence"
+                )
             try:
                 post_bundle = json.loads(str(post_balance_evidence_json))
                 if type(post_bundle) is not dict or set(post_bundle) != {
@@ -694,6 +741,8 @@ class TreasuryExecutor:
                 raise JournalConflict("persisted execution proof is invalid") from exc
         return JournalEntry(
             authorization=authorization,
+            source_commit=source_commit,
+            deployment_commit=deployment_commit,
             payment_amount_motes=int(row["payment_amount_motes"]),
             state=state,
             signed_bytes=signed_bytes,
@@ -707,7 +756,9 @@ class TreasuryExecutor:
             ),
             last_detail_code=row["last_detail_code"],
             block_hash=row["block_hash"],
-            block_height=None if row["block_height"] is None else int(row["block_height"]),
+            block_height=None
+            if row["block_height"] is None
+            else int(row["block_height"]),
             state_root_hash=row["state_root_hash"],
             gas_motes=None if row["gas_motes"] is None else int(row["gas_motes"]),
             finality_rpc_method=row["finality_rpc_method"],
@@ -733,10 +784,31 @@ class TreasuryExecutor:
     def authorize(
         self,
         authorization: VerifiedNativeAuthorization,
+        *,
+        source_commit: str,
+        deployment_commit: str,
     ) -> JournalEntry:
         """Persist only factory-verified exact-envelope authorization."""
 
         _validate_authorization(authorization)
+        if (
+            type(source_commit) is not str
+            or COMMIT_RE.fullmatch(source_commit) is None
+            or type(deployment_commit) is not str
+            or COMMIT_RE.fullmatch(deployment_commit) is None
+        ):
+            raise AuthorizationMismatch("release commit identities are invalid")
+        try:
+            proof = json.loads(authorization.v3_proof_artifact_json)
+            proof_deployment_commit = proof["deployment"]["deployment_commit"]
+        except (TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise AuthorizationMismatch(
+                "exact v3 proof release identity is invalid"
+            ) from exc
+        if proof_deployment_commit != deployment_commit:
+            raise AuthorizationMismatch(
+                "deployment commit differs from exact v3 authorization proof"
+            )
         key = ExecutionKey(
             authorization.network,
             authorization.action_id,
@@ -750,9 +822,13 @@ class TreasuryExecutor:
             ).fetchone()
             if existing is not None:
                 entry = self._row_to_entry(existing)
-                if entry.authorization != authorization:
+                if (
+                    entry.authorization != authorization
+                    or entry.source_commit != source_commit
+                    or entry.deployment_commit != deployment_commit
+                ):
                     raise JournalConflict(
-                        "action_id is already bound to different immutable authorization data"
+                        "action_id is already bound to different immutable execution data"
                     )
                 return entry
             try:
@@ -773,11 +849,12 @@ class TreasuryExecutor:
                     "deployment_domain, source_sha256, wasm_sha256, schema_sha256, "
                     "header_bytes, body_bytes, action_core_bytes, typed_header_json, "
                     "typed_body_json, readback_artifact_json, readback_artifact_sha256, "
-                    "verification_seal, "
+                    "v3_proof_artifact_json, v3_proof_artifact_sha256, "
+                    "verification_seal, source_commit, deployment_commit, "
                     "payment_amount_motes, state, created_at, updated_at"
                     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                     "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                    "?, ?, ?, ?, ?, ?)",
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         authorization.network,
                         authorization.action_id,
@@ -820,7 +897,11 @@ class TreasuryExecutor:
                         authorization.typed_body_json,
                         authorization.readback_artifact_json,
                         authorization.readback_artifact_sha256,
+                        authorization.v3_proof_artifact_json,
+                        authorization.v3_proof_artifact_sha256,
                         authorization.verification_seal,
+                        source_commit,
+                        deployment_commit,
                         str(self.payment_amount_motes),
                         ExecutionState.AUTHORIZED.value,
                         now,
@@ -855,7 +936,9 @@ class TreasuryExecutor:
                     max_payment_amount_motes=entry.payment_amount_motes,
                 )
             except NativeTransferDeployError as exc:
-                raise AuthorizationMismatch(f"prepared signed deploy is invalid: {exc}") from exc
+                raise AuthorizationMismatch(
+                    f"prepared signed deploy is invalid: {exc}"
+                ) from exc
             deploy_hash = facts.deploy_hash_hex
             signed_hash = hashlib.sha256(signed_bytes).hexdigest()
             db.execute(
@@ -876,7 +959,9 @@ class TreasuryExecutor:
             )
             return self._row_to_entry(self._fetch(db, key))
 
-    def broadcast(self, key: ExecutionKey, broadcast: BroadcastCallback) -> JournalEntry:
+    def broadcast(
+        self, key: ExecutionKey, broadcast: BroadcastCallback
+    ) -> JournalEntry:
         """Broadcast only bytes already committed under the immutable replay key.
 
         The journal moves to ``AMBIGUOUS_SUBMITTED`` and commits before invoking
@@ -886,10 +971,15 @@ class TreasuryExecutor:
 
         with self._write_transaction() as db:
             entry = self._row_to_entry(self._fetch(db, key))
-            if entry.state not in {ExecutionState.PREPARED, ExecutionState.RETRYABLE_FAILURE}:
+            if entry.state not in {
+                ExecutionState.PREPARED,
+                ExecutionState.RETRYABLE_FAILURE,
+            }:
                 return entry
             if entry.signed_bytes is None or entry.deploy_hash is None:
-                raise InvalidTransition("prepared journal entry is missing signed bytes or hash")
+                raise InvalidTransition(
+                    "prepared journal entry is missing signed bytes or hash"
+                )
             if (
                 entry.signed_bytes_sha256 is None
                 or hashlib.sha256(entry.signed_bytes).hexdigest()
@@ -985,7 +1075,9 @@ class TreasuryExecutor:
             )
             return self._row_to_entry(self._fetch(db, key))
 
-    def reconcile(self, key: ExecutionKey, reconcile: ReconcileCallback) -> JournalEntry:
+    def reconcile(
+        self, key: ExecutionKey, reconcile: ReconcileCallback
+    ) -> JournalEntry:
         """Resolve an existing deploy by hash without constructing a transfer."""
 
         entry = self.get(key)
@@ -1017,7 +1109,9 @@ class TreasuryExecutor:
             return self._record_reconcile_exception(key, type(exc).__name__)
         return self._record_reconciliation(key, result)
 
-    def _record_reconcile_exception(self, key: ExecutionKey, error_name: str) -> JournalEntry:
+    def _record_reconcile_exception(
+        self, key: ExecutionKey, error_name: str
+    ) -> JournalEntry:
         with self._write_transaction() as db:
             entry = self._row_to_entry(self._fetch(db, key))
             if entry.state in {
@@ -1065,27 +1159,32 @@ class TreasuryExecutor:
             if entry.state is ExecutionState.PROVEN:
                 return entry
             if entry.state is not ExecutionState.FINALIZED:
-                raise InvalidTransition(f"cannot prove execution from {entry.state.value}")
+                raise InvalidTransition(
+                    f"cannot prove execution from {entry.state.value}"
+                )
             if entry.finality_proof is None:
-                raise JournalConflict("finalized journal is missing parser-verified finality")
+                raise JournalConflict(
+                    "finalized journal is missing parser-verified finality"
+                )
             try:
                 pre_source = require_verified_account_balance(pre_source_balance)
                 pre_recipient = require_verified_account_balance(pre_recipient_balance)
                 post_source = require_verified_account_balance(post_source_balance)
-                post_recipient = require_verified_account_balance(post_recipient_balance)
-                scan = require_verified_no_duplicate_native_transfer(
-                    no_duplicate_proof
+                post_recipient = require_verified_account_balance(
+                    post_recipient_balance
                 )
+                scan = require_verified_no_duplicate_native_transfer(no_duplicate_proof)
             except (CasperStateProofError, NativeTransferScanError) as exc:
-                raise JournalConflict("execution proof input is not parser-verified") from exc
+                raise JournalConflict(
+                    "execution proof input is not parser-verified"
+                ) from exc
 
             authorization = entry.authorization
             if (
                 pre_source.account_hash != authorization.source_account
                 or pre_source.block_hash != authorization.snapshot_block_hash
                 or pre_source.block_height != authorization.snapshot_block_height
-                or pre_source.state_root_hash
-                != authorization.snapshot_state_root_hash
+                or pre_source.state_root_hash != authorization.snapshot_state_root_hash
                 or pre_source.balance_motes
                 != authorization.treasury_snapshot_balance_motes
             ):
@@ -1112,7 +1211,9 @@ class TreasuryExecutor:
                     reparsed_scan
                 )
             except (PostTransferProofError, NativeTransferScanError) as exc:
-                raise JournalConflict("execution proof does not match finalized action") from exc
+                raise JournalConflict(
+                    "execution proof does not match finalized action"
+                ) from exc
             if (
                 reparsed_scan.authorization_block_height
                 != authorization.finalization_block_height
@@ -1182,14 +1283,18 @@ class TreasuryExecutor:
                 )
 
             if result.status != "finalized" and result.finality_evidence is not None:
-                return self._retain_unverified(db, entry, "unexpected_finality_evidence")
+                return self._retain_unverified(
+                    db, entry, "unexpected_finality_evidence"
+                )
 
             if result.status == "pending":
                 target_state = ExecutionState.SUBMITTED
                 detail = _safe_detail_code(result.detail_code, "deploy_pending")
             elif result.status == "retryable_absent":
                 target_state = ExecutionState.RETRYABLE_FAILURE
-                detail = _safe_detail_code(result.detail_code, "deploy_confirmed_absent")
+                detail = _safe_detail_code(
+                    result.detail_code, "deploy_confirmed_absent"
+                )
             elif result.status == "terminal_failure":
                 return self._retain_unverified(
                     db,
@@ -1198,7 +1303,9 @@ class TreasuryExecutor:
                 )
             elif result.status == "finalized":
                 if result.finality_evidence is None:
-                    return self._retain_unverified(db, entry, "finality_evidence_missing")
+                    return self._retain_unverified(
+                        db, entry, "finality_evidence_missing"
+                    )
                 if entry.signed_bytes is None:
                     return self._set_failure(db, entry, "signed_bytes_missing")
                 try:
@@ -1215,13 +1322,17 @@ class TreasuryExecutor:
                     )
                     proof = require_verified_finalized_native_transfer(proof)
                 except NativeTransferFinalityError:
-                    return self._retain_unverified(db, entry, "finality_evidence_invalid")
+                    return self._retain_unverified(
+                        db, entry, "finality_evidence_invalid"
+                    )
                 try:
                     finality_node_observations_json = _canonical_json(
                         list(result.finality_evidence.node_observations)
                     )
                 except NativeTransferFinalityError:
-                    return self._retain_unverified(db, entry, "finality_evidence_invalid")
+                    return self._retain_unverified(
+                        db, entry, "finality_evidence_invalid"
+                    )
                 db.execute(
                     "UPDATE treasury_execution_journal SET state=?, "
                     "broadcast_inflight_until=NULL, last_detail_code=?, "
@@ -1342,7 +1453,10 @@ class TreasuryExecutor:
             return entry if prepare is None else self.prepare(key, prepare)
         if entry.state in {ExecutionState.PREPARED, ExecutionState.RETRYABLE_FAILURE}:
             return entry if broadcast is None else self.broadcast(key, broadcast)
-        if entry.state in {ExecutionState.SUBMITTED, ExecutionState.AMBIGUOUS_SUBMITTED}:
+        if entry.state in {
+            ExecutionState.SUBMITTED,
+            ExecutionState.AMBIGUOUS_SUBMITTED,
+        }:
             return entry if reconcile is None else self.reconcile(key, reconcile)
         raise InvalidTransition(f"unknown journal state {entry.state.value}")
 
@@ -1353,7 +1467,9 @@ class TreasuryExecutor:
 
     def count(self) -> int:
         with closing(self._connect()) as db:
-            row = db.execute("SELECT COUNT(*) FROM treasury_execution_journal").fetchone()
+            row = db.execute(
+                "SELECT COUNT(*) FROM treasury_execution_journal"
+            ).fetchone()
             return int(row[0])
 
     def integrity_check(self) -> str:

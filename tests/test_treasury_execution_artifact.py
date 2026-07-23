@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import replace
+from datetime import timedelta, datetime
 from pathlib import Path
 
 import pytest
@@ -18,22 +19,20 @@ from tests.test_treasury_execution_proof import _proof_inputs
 from tests.test_treasury_executor import _key
 
 
-SOURCE_COMMIT = "1" * 40
-DEPLOYMENT_COMMIT = "2" * 40
-CAPTURED_AT = "2026-07-23T00:00:00Z"
-
-
 def _proven(tmp_path: Path):
     executor, authorization, proofs = _proof_inputs(tmp_path)
     return executor.prove_execution(_key(authorization), **proofs)
 
 
+def _captured_after(entry: object) -> str:
+    updated = datetime.fromisoformat(str(entry.updated_at).replace("Z", "+00:00"))
+    return (updated + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+
+
 def _build(entry):
     return build_native_treasury_execution_artifact(
         entry,
-        source_commit=SOURCE_COMMIT,
-        deployment_commit=DEPLOYMENT_COMMIT,
-        captured_at=CAPTURED_AT,
+        captured_at=_captured_after(entry),
     )
 
 
@@ -83,7 +82,9 @@ def test_native_treasury_artifact_has_exact_outer_contract_and_is_canonical(
         "artifact_sha256_scope",
     }
     assert artifact["schema_version"] == "concordia.native_treasury_execution.v1"
-    assert artifact["artifact_sha256_scope"] == "canonical_json_without_release_manifest"
+    assert (
+        artifact["artifact_sha256_scope"] == "canonical_json_without_release_manifest"
+    )
     assert set(artifact["release_identity"]) == {
         "network",
         "package_hash",
@@ -102,6 +103,7 @@ def test_native_treasury_artifact_has_exact_outer_contract_and_is_canonical(
         "header_bytes_hex",
         "body_bytes_hex",
         "action_core_bytes_hex",
+        "exact_v3_proof",
         "v3_readback",
         "snapshot",
     }
@@ -130,7 +132,10 @@ def test_native_treasury_artifact_has_exact_outer_contract_and_is_canonical(
     assert artifact["bounded_transfer_scan"]["observed_through_block_height"]
     assert artifact["bounded_transfer_scan"]["observed_through_block_hash"]
     assert artifact["bounded_transfer_scan"]["matched_transfer_count"] == 1
-    assert artifact["authorization"]["typed_header"]["proposal_id"] == entry.authorization.proposal_id
+    assert (
+        artifact["authorization"]["typed_header"]["proposal_id"]
+        == entry.authorization.proposal_id
+    )
     assert artifact["authorization"]["v3_readback"]
     assert artifact["balance_evidence"]["post_recipient"]
     assert "passed" not in artifact
@@ -235,14 +240,13 @@ def test_native_treasury_artifact_rejects_invalid_release_metadata(
     value: str,
 ) -> None:
     entry = _proven(tmp_path)
-    kwargs = {
-        "source_commit": SOURCE_COMMIT,
-        "deployment_commit": DEPLOYMENT_COMMIT,
-        "captured_at": CAPTURED_AT,
-    }
-    kwargs[field] = value
+    candidate = entry if field == "captured_at" else replace(entry, **{field: value})
+    captured_at = value if field == "captured_at" else _captured_after(entry)
     with pytest.raises(TreasuryExecutionArtifactError):
-        build_native_treasury_execution_artifact(entry, **kwargs)
+        build_native_treasury_execution_artifact(
+            candidate,
+            captured_at=captured_at,
+        )
 
 
 def test_native_treasury_artifact_rejects_capture_before_journal_update(
@@ -253,8 +257,6 @@ def test_native_treasury_artifact_rejects_capture_before_journal_update(
     with pytest.raises(TreasuryExecutionArtifactError, match="capture timestamp"):
         build_native_treasury_execution_artifact(
             entry,
-            source_commit=SOURCE_COMMIT,
-            deployment_commit=DEPLOYMENT_COMMIT,
             captured_at="2000-01-01T00:00:00Z",
         )
 
@@ -263,7 +265,5 @@ def test_native_treasury_artifact_rejects_caller_constructed_lookalike() -> None
     with pytest.raises(TreasuryExecutionArtifactError, match="journal entry"):
         build_native_treasury_execution_artifact(
             object(),
-            source_commit=SOURCE_COMMIT,
-            deployment_commit=DEPLOYMENT_COMMIT,
-            captured_at=CAPTURED_AT,
+            captured_at="2000-01-01T00:00:00Z",
         )
