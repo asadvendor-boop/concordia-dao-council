@@ -118,6 +118,47 @@ The evidence-safe details and owner actions are recorded in
   `value`; automatic fallback between runtime names is forbidden.
 - CAIP/EIP-712 domain is `casper:casper-test`, not `casper-test`.
 
+## Current integration evidence
+
+- The untouched fallback checkout is clean at
+  `b79b42c974daa6ba4b8d904573f6c321ecef1a98` and equals `origin/main`.
+- Independently approved isolated commits are: core v3/release tooling
+  `3d51406873ec89e73aabe22a6fc1bfa842422c30`, pypdf 6.14.2 lock
+  `ead9b7323a9b1556ff758ef75286a5f5a8bcb661`, production Compose scope
+  `7a8b9e1`, staged Caddy routing `8956f97`, and finals scope control
+  `d56ce599af6ad3f9cbb7de9010c583cba2863135` plus independently approved
+  hygiene follow-up `6fae99199728035902e850ba64b4c2923a4dd76a`.
+- The disposable integration preview contains those approved batches through
+  `837dbdc`. Its fresh combined evidence is 972 Python tests, 29 Rust tests,
+  149 verifier-package tests, verifier lint, npm audit with zero findings,
+  exact v3 Wasm/schema reproduction, historical Odra inventory preservation,
+  canonical consistency, public redaction, and clean tracked status. The
+  repository-hygiene gate still correctly blocks on three Claude-owned public
+  files; it is not being relabelled green.
+- The original direct locked-Wasm command is invalid for cargo-odra 0.1.7.
+  Moving Cargo's lock flag before the plugin still does not propagate it to the
+  plugin's internal build, and cargo-odra can return zero after a fatal build
+  diagnostic. The fresh-archive wrapper remains uncommitted while its
+  ANSI-diagnostic, dependency-isolation and provenance regressions are fixed.
+- The command-gate runner/receipt batch remains uncommitted while every review
+  finding is corrected: isolated uv/npm environments, complete G2/G9 commands,
+  full mounted-secret canaries, receipt-last crash durability, complete
+  behavior/executable hashing, fresh dashboard outputs, annotated G1 identity,
+  and descriptor-safe final rechecks. G11 also requires a Codex-owned
+  whole-document claim policy with exact semantic proof compatibility; a
+  self-selected map cannot complete the gate.
+- The replacement release collector remains uncommitted. Its focused suite is
+  at 88 passing tests, but it must import the final approved command contract,
+  bind screenshot claims to real browser traces, and pass another independent
+  adversarial review.
+- Claude's branch is clean at `9839032606fbde1b8683172b7ee0332d7c3e0179`.
+  None of WP2/WP3/WP5/WP7/WP9/WP11 has a corrective implementation commit
+  after the six first-pass hashes. Independent re-audit remains NO-GO despite
+  green focused tests; the exact correction gates are recorded above.
+- No production, VM, Caddy, DNS, Testnet, npm, Pages, canonical database, or
+  live-artifact mutation has occurred. Codex remains the sole merger and live
+  release operator.
+
 ## Historical checkpoint narrative (non-operative)
 
 The text below is preserved as an append-only audit trail. It contains older
