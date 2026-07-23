@@ -21,6 +21,7 @@ from shared.historical_odra_artifact import (
     HistoricalOdraArtifactUnavailable,
     verify_historical_odra_artifact,
 )
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
 
 
 PROPOSAL_ID = "DAO-PROP-HIST-001"
@@ -142,7 +143,7 @@ def _fixture(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, object], bytes,
         ),
     )
     deploy.approve(SIGNER)
-    deploy_json = serializer.to_json(deploy)
+    deploy_json = exact_deploy_rpc_json(deploy)
     deploy_hash = deploy.hash.hex()
     inventory = {
         "schema_version": "concordia.historical_odra_inventory.v1",

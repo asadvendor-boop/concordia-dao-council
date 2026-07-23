@@ -31,6 +31,7 @@ from scripts.install_governance_receipt_v3 import (
 )
 from scripts.run_v3_live_proof import build_live_parser, choose_negative_allocation_bps
 from shared.casper_rpc_transport import RpcRemoteError
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
 
 
 DEPLOY_HASH = "ab" * 32
@@ -47,7 +48,7 @@ def _signed_journal_deploy() -> dict[str, object]:
         DeployOfModuleBytes(module_bytes=b"\x00asm", args={}),
     )
     deploy.approve(private)
-    return serializer.to_json(deploy)
+    return exact_deploy_rpc_json(deploy)
 
 
 def _resolver(host: str) -> tuple[str, ...]:

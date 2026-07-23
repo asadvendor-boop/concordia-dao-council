@@ -63,6 +63,7 @@ from scripts.run_v3_live_proof import (
     validate_and_stage_browser_import,
 )
 from scripts.verify_v3_proof import ProofVerificationError, verify_v3_proof_document
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -342,7 +343,7 @@ def test_wasm_07_finalized_install_deploy_reproves_wasm_locked_args_and_signatur
         DeployOfModuleBytes(module_bytes=wasm, args=args),
     )
     deploy.approve(private)
-    deploy_json = serializer.to_json(deploy)
+    deploy_json = exact_deploy_rpc_json(deploy)
     manifest = {
         "installer_public_key": public.account_key.hex(),
         "installer_account_hash": public.to_account_hash().hex(),
@@ -776,7 +777,7 @@ def _deployment_evidence(
         DeployOfModuleBytes(module_bytes=wasm, args=install_args),
     )
     install.approve(installer)
-    install_json = serializer.to_json(install)
+    install_json = exact_deploy_rpc_json(install)
     state_root = ids["state_root"]
     block_hash = "09" * 32
     package_state = {
@@ -1741,7 +1742,7 @@ def test_mixed_custody_browser_resume_is_checkpoint_bound_single_use_and_fail_cl
     )
     deploy = serializer.from_json(unsigned, Deploy)
     deploy.approve(browser_private)
-    signed = serializer.to_json(deploy)
+    signed = exact_deploy_rpc_json(deploy)
     imported = build_browser_signature_import(checkpoint, signed)
     now_seconds = deploy.header.timestamp.value + 1
 
@@ -1870,7 +1871,7 @@ def test_mixed_custody_browser_resume_accepts_exact_signed_deploy_and_seals_cons
     )
     deploy = serializer.from_json(unsigned, Deploy)
     deploy.approve(browser_private)
-    signed = serializer.to_json(deploy)
+    signed = exact_deploy_rpc_json(deploy)
     imported = build_browser_signature_import(checkpoint, signed)
 
     staged = validate_and_stage_browser_import(
@@ -2073,7 +2074,7 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
     signed_deploy = serializer.from_json(unsigned, Deploy)
     signed_deploy.approve(role_keys["proposer"])
     import_path.write_text(
-        json.dumps(serializer.to_json(signed_deploy)),
+        json.dumps(exact_deploy_rpc_json(signed_deploy)),
         encoding="utf-8",
     )
     args.resume_checkpoint = checkpoint_path
@@ -2121,7 +2122,10 @@ async def test_live_runner_resumes_one_browser_step_and_checkpoints_next_without
     with pytest.raises(LiveProofError, match="completed run prefix"):
         validate_and_stage_browser_import(
             broken,
-            build_browser_signature_import(broken, serializer.to_json(next_signed)),
+            build_browser_signature_import(
+                broken,
+                exact_deploy_rpc_json(next_signed),
+            ),
             now_seconds=next_signed.header.timestamp.value + 1,
         )
 

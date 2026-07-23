@@ -45,29 +45,14 @@ def _exact_timestamp(value: object) -> str:
     return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _normalized_timestamp_text(value: str) -> str:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
-        return value
-    return _exact_timestamp(parsed.timestamp())
-
-
 def normalize_deploy_rpc_json(value: object) -> object:
-    """Normalize semantically identical deploy JSON for strict comparison."""
+    """Normalize hex casing while preserving strict JSON spellings."""
 
     if isinstance(value, Mapping):
-        normalized: dict[str, object] = {}
-        for key, item in value.items():
-            name = str(key)
-            normalized[name] = (
-                _normalized_timestamp_text(item)
-                if name == "timestamp" and isinstance(item, str)
-                else normalize_deploy_rpc_json(item)
-            )
-        return normalized
+        return {
+            str(key): normalize_deploy_rpc_json(item)
+            for key, item in value.items()
+        }
     if isinstance(value, Sequence) and not isinstance(
         value,
         (str, bytes, bytearray),

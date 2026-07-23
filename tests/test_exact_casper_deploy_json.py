@@ -22,6 +22,7 @@ from pycspr.types.crypto import KeyAlgorithm
 from pycspr.types.node.rpc import Deploy, DeployOfModuleBytes
 
 from scripts.run_v3_live_proof import _build_call
+from scripts.verify_v3_proof import ProofVerificationError, _validated_deploy
 from shared.exact_casper_deploy_json import exact_deploy_rpc_json
 
 
@@ -92,6 +93,34 @@ def test_v3_call_builder_survives_pycspr_whole_second_timestamp(
 
     assert value["header"]["timestamp"] == "2026-07-24T04:06:37.000Z"
     assert decoded.hash == create_digest_of_deploy(decoded.header)
+
+
+@pytest.mark.parametrize(
+    "noncanonical",
+    (
+        "2026-07-24T04:06:37Z",
+        "2026-07-24T04:06:37.000000Z",
+        "2026-07-24T04:06:37.000+00:00",
+        "2026-07-24T04:06:37.000-00:00",
+    ),
+)
+def test_v3_verifier_rejects_noncanonical_timestamp_spellings(
+    noncanonical: str,
+) -> None:
+    timestamp = datetime(2026, 7, 24, 4, 6, 37, tzinfo=UTC).timestamp()
+    deploy = _signed_deploy(timestamp)
+    value = exact_deploy_rpc_json(deploy)
+    value["header"]["timestamp"] = noncanonical
+
+    with pytest.raises(
+        ProofVerificationError,
+        match="parsed fields disagree",
+    ):
+        _validated_deploy(
+            value,
+            expected_hash=deploy.hash.hex(),
+            expected_public_key=deploy.header.account.account_key.hex(),
+        )
 
 
 def test_every_production_deploy_json_path_uses_the_exact_serializer() -> None:
