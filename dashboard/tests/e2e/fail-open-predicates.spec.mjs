@@ -167,6 +167,46 @@ test.describe("affirmative approval requires an explicit decision", () => {
     await expect(page.getByText(/refused authorization/).first()).toBeVisible();
     await expect(page.getByText(/issued a bounded low-risk authorization/)).toHaveCount(0);
   });
+
+  // Reviewer truth pass #2: the DETAIL rows previously hardcoded
+  // "Decision: Policy authorized" for every PolicyAuthorization card. The row
+  // must render the strictly validated decision or a neutral unavailable
+  // state — never an authorization claim for a missing/denied decision.
+  test("policy detail rows: NO decision renders a neutral Decision row, never Policy authorized", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText("No explicit decision recorded")).toBeVisible();
+    await expect(page.getByText("Policy authorized")).toHaveCount(0);
+  });
+
+  test("policy detail rows: an explicit refusal renders the refusal decision, never Policy authorized", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { decision: "REJECT", policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText("Refused · REJECT")).toBeVisible();
+    await expect(page.getByText("Policy authorized")).toHaveCount(0);
+  });
+
+  test("policy detail rows positive control: an explicit affirmative decision renders Policy authorized with its decision", async ({ page }) => {
+    await mockGateway(page, {
+      proposals: [{ proposal_id: CANONICAL, state: "EXECUTED", created_at: "2026-06-29T00:00:00Z" }],
+      evidenceById: { [CANONICAL]: { chain_valid: true, proposal_id: CANONICAL, cards: [
+        { card_type: "PolicyAuthorization", sequence: 1, hash: "policy-hash-1", data: { decision: "AUTHORIZED", policy_id: "policy-low-risk" } },
+      ] } },
+    });
+    await page.goto("/dashboard/runs", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText("Policy authorized · AUTHORIZED")).toBeVisible();
+    await expect(page.getByText("No explicit decision recorded")).toHaveCount(0);
+  });
 });
 
 test.describe("approval binding requires explicit proposal + plan-hash equality", () => {
@@ -384,7 +424,7 @@ test.describe("proof center predicates each require their own asserting field", 
 
   test("an incomplete live-read object never claims Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
-      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC" } },
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC / CSPR.live public status" } },
     });
     // exact: the page subtitle mentions "live data sources" as prose; only the
     // asserting StatusPill is the claim under test.
@@ -407,7 +447,7 @@ test.describe("proof center predicates each require their own asserting field", 
 
   test("a live read with the WRONG network never claims Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
-      proofPayload: { mercer_live_casper_read: { network: "casper", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+      proofPayload: { mercer_live_casper_read: { network: "casper", status: "visible_in_evidence", source: "Casper Node RPC / CSPR.live public status", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
     });
     await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Live read incomplete")).toBeVisible();
@@ -415,7 +455,7 @@ test.describe("proof center predicates each require their own asserting field", 
 
   test("a live read with a STRING block height never claims Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
-      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: "8340490", state_root_hash: "a".repeat(64) } },
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC / CSPR.live public status", latest_block_height: "8340490", state_root_hash: "a".repeat(64) } },
     });
     await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Live read incomplete")).toBeVisible();
@@ -423,7 +463,7 @@ test.describe("proof center predicates each require their own asserting field", 
 
   test("a live read with a malformed (uppercase) state root never claims Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
-      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC", latest_block_height: 8340490, state_root_hash: "A".repeat(64) } },
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "Casper Node RPC / CSPR.live public status", latest_block_height: 8340490, state_root_hash: "A".repeat(64) } },
     });
     await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Live read incomplete")).toBeVisible();
@@ -432,6 +472,25 @@ test.describe("proof center predicates each require their own asserting field", 
   test("a live read without observation provenance (source) never claims Live data source", async ({ page }) => {
     await openProofTab(page, "data", {
       proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
+  });
+
+  // Reviewer truth pass #2: arbitrary non-empty provenance strings must not
+  // satisfy the live-read predicate — only the exact producer-emitted success
+  // status and recognized source are complete.
+  test("a live read with a NON-SUCCESS status (failed) never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "failed", source: "Casper Node RPC / CSPR.live public status", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
+    });
+    await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Live read incomplete")).toBeVisible();
+  });
+
+  test("a live read with unrecognized provenance text never claims Live data source", async ({ page }) => {
+    await openProofTab(page, "data", {
+      proofPayload: { mercer_live_casper_read: { network: "casper-test", status: "visible_in_evidence", source: "x", latest_block_height: 8340490, state_root_hash: "a".repeat(64) } },
     });
     await expect(page.getByText("Live data source", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Live read incomplete")).toBeVisible();

@@ -178,6 +178,6 @@ export function ProofActionButton({ actionId, proposalId = DEFAULT_REVIEW_PROPOS
   </PrimaryButton>;
 }
 
-export function ProofActionBar({ actionIds = [], proposalId = DEFAULT_REVIEW_PROPOSAL_ID, className = "", compact = false }) {
-  return <div className={cx("proof-action-bar", compact && "compact", className)}>{actionIds.map((actionId) => <ProofActionButton key={actionId} actionId={actionId} proposalId={proposalId} />)}</div>;
+export function ProofActionBar({ actionIds = [], proposalId = DEFAULT_REVIEW_PROPOSAL_ID, className = "", compact = false, overridesById = {} }) {
+  return <div className={cx("proof-action-bar", compact && "compact", className)}>{actionIds.map((actionId) => <ProofActionButton key={actionId} actionId={actionId} proposalId={proposalId} overrides={overridesById[actionId]} />)}</div>;
 }

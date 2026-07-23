@@ -524,6 +524,11 @@ export function isAuthorizedApproval(card, proposalId, planCard) {
 // (non-empty source and status). Presence alone, or any malformed value,
 // never produces the green "Live data source" state.
 const STATE_ROOT_HEX_RE = /^[0-9a-f]{64}$/;
+// Exact producer-emitted provenance only (shared/proof_pack.py
+// mercer_live_casper_read): arbitrary non-empty strings — including failure
+// statuses — must never satisfy the live-read predicate.
+const LIVE_READ_SUCCESS_STATUSES = new Set(["visible_in_evidence"]);
+const LIVE_READ_RECOGNIZED_SOURCES = new Set(["Casper Node RPC / CSPR.live public status"]);
 export function isCasperLiveReadComplete(liveRead) {
   return Boolean(liveRead)
     && liveRead.network === "casper-test"
@@ -531,8 +536,8 @@ export function isCasperLiveReadComplete(liveRead) {
     && liveRead.latest_block_height >= 0
     && typeof liveRead.state_root_hash === "string"
     && STATE_ROOT_HEX_RE.test(liveRead.state_root_hash)
-    && typeof liveRead.source === "string" && liveRead.source.trim() !== ""
-    && typeof liveRead.status === "string" && liveRead.status.trim() !== "";
+    && LIVE_READ_RECOGNIZED_SOURCES.has(liveRead.source)
+    && LIVE_READ_SUCCESS_STATUSES.has(liveRead.status);
 }
 
 export function cardSummary(card) {
@@ -738,11 +743,19 @@ export function humanizeCardData(card) {
       push("Reasoning", data.reasoning, { wide: true });
       push("Plan hash", data.plan_hash, { mono: true });
       break;
-    case "PolicyAuthorization":
-      push("Decision", "Policy authorized");
+    case "PolicyAuthorization": {
+      // The strictly validated decision, or a neutral unavailable state — a
+      // missing/denied decision must never read as "Policy authorized".
+      const policyDecision = String(data.decision || "").trim().toUpperCase();
+      push("Decision", isDeniedApproval(card)
+        ? `Refused · ${policyDecision || "DENIED"}`
+        : isAffirmativeApproval(card)
+          ? `Policy authorized · ${policyDecision}`
+          : "No explicit decision recorded");
       push("Policy", data.policy_id);
       push("Scope", data.scope, { wide: true });
       break;
+    }
     case "CasperExecutionReceipt": {
       const verified = isReceiptVerified(card);
       push("Outcome", verified ? "Executed and receipt verified" : "Executed; receipt verification not positively confirmed");

@@ -555,4 +555,73 @@ describe("validator boundary agreement: Python and the dashboard draw the SAME l
     expect(registryItemErrors(item)).toEqual([]);
     expect(itemGreenVerified(item)).toBe(true);
   });
+
+  it("year 0000 is rejected by BOTH validators (Python's calendar starts at 0001)", () => {
+    // Date.parse happily represents year 0; datetime.fromisoformat raises
+    // `year 0 is out of range`. Both sides must refuse it.
+    const item = realEmittedItem();
+    (item as { captured_at: string }).captured_at = "0000-01-01T00:00:00Z";
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toContain("captured_at_invalid");
+    expect(verdict.green).toBe(false);
+    expect(registryItemErrors(item)).toContain("captured_at_invalid");
+    expect(itemGreenVerified(item)).toBe(false);
+  });
+
+  it("Python-valid low years (0001 and 0099) are accepted by BOTH validators", () => {
+    // Positive controls bracketing the year-0000 rejection: these are real
+    // fromisoformat-valid instants and chronology (observed <= captured)
+    // still holds, so neither validator may over-reject them.
+    for (const ancient of ["0001-01-01T00:00:00Z", "0099-12-31T23:59:59Z"]) {
+      const item = realEmittedItem();
+      item.checks[0]!.observed_at = ancient;
+      const verdict = pythonVerdict(item);
+      expect(verdict.errors).toEqual([]);
+      expect(verdict.green).toBe(true);
+      expect(registryItemErrors(item)).toEqual([]);
+      expect(itemGreenVerified(item)).toBe(true);
+    }
+  });
+
+  it("microsecond chronology is compared exactly by BOTH validators (no millisecond collapse)", () => {
+    // Python compares full-microsecond datetimes; collapsing the fraction to
+    // Date's milliseconds would make .000999Z equal to .000001Z and silently
+    // drop the observed-after-capture violation on the dashboard side.
+    const item = realEmittedItem();
+    (item as { captured_at: string }).captured_at = "2026-07-22T20:05:00.000001Z";
+    item.checks[0]!.observed_at = "2026-07-22T20:05:00.000999Z";
+    const verdict = pythonVerdict(item);
+    expect(verdict.errors).toContain("check_observed_after_capture");
+    expect(verdict.green).toBe(false);
+    expect(registryItemErrors(item)).toContain("check_observed_after_capture");
+    expect(itemGreenVerified(item)).toBe(false);
+
+    // Inverse positive control: observed one microsecond BEFORE capture is
+    // fine on both sides — the exact comparison must not over-reject either.
+    const ordered = realEmittedItem();
+    (ordered as { captured_at: string }).captured_at = "2026-07-22T20:05:00.000999Z";
+    ordered.checks[0]!.observed_at = "2026-07-22T20:05:00.000001Z";
+    const orderedVerdict = pythonVerdict(ordered);
+    expect(orderedVerdict.errors).toEqual([]);
+    expect(orderedVerdict.green).toBe(true);
+    expect(registryItemErrors(ordered)).toEqual([]);
+    expect(itemGreenVerified(ordered)).toBe(true);
+  });
+
+  it("prototype-key proof types fail closed as invalid on BOTH validators (never a crash)", () => {
+    // `proofType in REQUIRED_CHECKS_BY_PROOF_TYPE` reaches the prototype
+    // chain: "toString"/"__proto__" would resolve to Object.prototype members
+    // and crash the check walker. Python dict membership never had this
+    // hazard; the dashboard must degrade identically to proof_type_invalid.
+    for (const hostile of ["toString", "__proto__", "hasOwnProperty", "constructor"]) {
+      const item = realEmittedItem();
+      (item as { proof_type: string }).proof_type = hostile;
+      const verdict = pythonVerdict(item);
+      expect(verdict.errors).toContain("proof_type_invalid");
+      expect(verdict.green).toBe(false);
+      const dashboardErrors = registryItemErrors(item); // must not throw
+      expect(dashboardErrors).toContain("proof_type_invalid");
+      expect(itemGreenVerified(item)).toBe(false);
+    }
+  });
 });

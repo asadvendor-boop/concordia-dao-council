@@ -199,16 +199,23 @@ const CHECK_NAME_RE = /^[a-z][a-z0-9_]{0,95}$/;
 const RFC3339_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
 function isHex32(value) { return typeof value === "string" && HEX32_RE.test(value); }
+// Returns MICROSECONDS since the Unix epoch (not milliseconds): Python
+// compares full-microsecond datetimes, so a millisecond return value would
+// collapse .000001Z and .000999Z into the same instant and silently skip
+// chronology violations Python reports.
 export function parseRfc3339Utc(value) {
   if (typeof value !== "string" || !RFC3339_UTC_RE.test(value)) return null;
-  const ms = Date.parse(value);
+  // Python's calendar starts at 0001; Date.parse happily represents year 0.
+  if (value.slice(0, 4) === "0000") return null;
+  const ms = Date.parse(value.slice(0, 19) + "Z");
   if (Number.isNaN(ms)) return null;
   // Round-trip guard: Date.parse silently rolls impossible calendar dates
   // over (e.g. 2026-02-30 becomes March 2) while Python's fromisoformat
   // rejects them. The parsed instant must render back to the exact same
   // YYYY-MM-DDTHH:MM:SS prefix or the value is not a real calendar date.
   if (!new Date(ms).toISOString().startsWith(value.slice(0, 19))) return null;
-  return ms;
+  const fraction = value.length > 20 ? value.slice(20, -1) : "";
+  return ms * 1000 + Number(fraction.padEnd(6, "0") || "0");
 }
 function isRfc3339Utc(value) { return parseRfc3339Utc(value) !== null; }
 function safeRepositoryPath(value) {
@@ -262,7 +269,12 @@ export function registryItemErrors(item) {
   }
   const proofType = item.proof_type;
   let requiredChecks = [];
-  if (!(proofType in REQUIRED_CHECKS_BY_PROOF_TYPE)) errors.push("proof_type_invalid");
+  // Own-property lookup only: `in` reaches the prototype chain, so a hostile
+  // proof_type of "toString"/"__proto__" would resolve to Object.prototype
+  // members and crash the check walker instead of failing closed.
+  const knownProofType =
+    typeof proofType === "string" && Object.hasOwn(REQUIRED_CHECKS_BY_PROOF_TYPE, proofType);
+  if (!knownProofType) errors.push("proof_type_invalid");
   else requiredChecks = REQUIRED_CHECKS_BY_PROOF_TYPE[proofType];
   if (typeof item.proof_id !== "string" || !IDENTIFIER_RE.test(item.proof_id || "")) errors.push("proof_id_invalid");
   const proposalId = item.proposal_id;
@@ -274,7 +286,7 @@ export function registryItemErrors(item) {
   for (const [field, allowedSet] of enums) {
     if (!allowedSet.has(item[field])) errors.push(`${field}_invalid`);
   }
-  const provenance = PROVENANCE_BY_PROOF_TYPE[proofType];
+  const provenance = knownProofType ? PROVENANCE_BY_PROOF_TYPE[proofType] : undefined;
   if (provenance) {
     for (const [field, allowedSet] of Object.entries(provenance)) {
       if (!allowedSet.has(item[field])) errors.push(`provenance_invalid:${field}`);
@@ -339,7 +351,10 @@ export function itemGreenVerified(item) {
   if (item.observation_mode === "unavailable") return false;
   if (!GREEN_OUTCOMES.has(item.execution_outcome)) return false;
   const checks = Array.isArray(item.checks) ? item.checks : [];
-  const required = REQUIRED_CHECKS_BY_PROOF_TYPE[item.proof_type] || [];
+  const required =
+    typeof item.proof_type === "string" && Object.hasOwn(REQUIRED_CHECKS_BY_PROOF_TYPE, item.proof_type)
+      ? REQUIRED_CHECKS_BY_PROOF_TYPE[item.proof_type]
+      : [];
   if (!required.length) return false; // unknown proof type => never green
   const byName = new Map(checks.map((check) => [check?.name, check]));
   for (const name of required) {

@@ -150,7 +150,11 @@ function healthRow(page, label) {
 // DELIBERATE MIGRATION (reviewer truth-contract pass): a "complete" live read
 // now also requires explicit observation provenance — a non-empty status
 // alongside the source — matching the strengthened isCasperLiveReadComplete.
-const COMPLETE_LIVE_READ = { network: "casper-test", status: "visible_in_evidence", latest_block_height: 8340490, state_root_hash: "a".repeat(64), source: "Casper Node RPC" };
+// DELIBERATE MIGRATION (reviewer truth pass #2): the live-read predicate now
+// allowlists the exact producer-emitted status and source strings
+// (shared/proof_pack.py mercer_live_casper_read); arbitrary non-empty
+// provenance text no longer satisfies it.
+const COMPLETE_LIVE_READ = { network: "casper-test", status: "visible_in_evidence", latest_block_height: 8340490, state_root_hash: "a".repeat(64), source: "Casper Node RPC / CSPR.live public status" };
 
 test.describe("1. overview unobserved/initial state never renders positive protocol cues", () => {
   test("with every payload still pending, health pills read Checking and nothing is Operational/Connected/Healthy/LIVE", async ({ page }) => {
@@ -503,17 +507,79 @@ test.describe("5. verified/complete label families require real predicates", () 
     await expect(page.getByText("Verified handoff")).toHaveCount(0);
   });
 
-  test("recording mode: unverified replay shows Recorded Run Replay and NO Canonical receipt chip", async ({ page }) => {
-    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true } });
+  // Reviewer truth pass #2: the recording receipt chip previously rendered
+  // the static DEFAULT_CASPER_DEPLOY_HASH literal. It must now carry a
+  // validated, payload-derived receipt hash (verified CasperExecutionReceipt
+  // with a 64-hex transaction hash) and never the literal.
+  const PAYLOAD_RECEIPT_TX = "cafe".repeat(16);
+  const boundVerifiedReceipt = (transactionHash = PAYLOAD_RECEIPT_TX, extraData = { receipt_verified: true }) => ({
+    card_type: "CasperExecutionReceipt",
+    sequence: 6,
+    hash: "receipt-hash",
+    data: {
+      ...extraData,
+      actions_taken: [{ action_id: "execute_casper_governance_receipt", status: "success", transaction_hash: transactionHash }],
+      timeline: [],
+    },
+  });
+
+  test("recording mode: unverified replay shows Recorded Run Replay and NO receipt chip", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard(), boundVerifiedReceipt()], evidenceExtra: { chain_valid: true } });
     await expect(page.getByText("Recorded Run Replay")).toBeVisible();
     await expect(page.getByText("Verified Run Replay")).toHaveCount(0);
+    await expect(page.getByText("Casper receipt")).toHaveCount(0);
     await expect(page.getByText("Canonical receipt")).toHaveCount(0);
   });
 
-  test("positive control: verified bound canonical replay in recording mode shows the Canonical receipt chip", async ({ page }) => {
+  test("recording mode (MIGRATED positive control): the receipt chip carries the payload receipt hash, never the static literal", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard(), boundVerifiedReceipt()], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
+    await expect(page.getByText("Verified Run Replay")).toBeVisible();
+    await expect(page.locator(`a[href="https://testnet.cspr.live/deploy/${PAYLOAD_RECEIPT_TX}"]`).first()).toBeVisible();
+    // The old static literal (constants DEFAULT_CASPER_DEPLOY_HASH) must
+    // never appear as a receipt claim again.
+    await expect(page.locator('a[href*="e926582f3dacd05d"]')).toHaveCount(0);
+    await expect(page.getByText("Canonical receipt")).toHaveCount(0);
+  });
+
+  test("recording mode: a verified bound replay WITHOUT a payload receipt shows no receipt chip", async ({ page }) => {
     await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard()], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
     await expect(page.getByText("Verified Run Replay")).toBeVisible();
-    await expect(page.getByText("Canonical receipt")).toBeVisible();
+    await expect(page.getByText("Casper receipt")).toHaveCount(0);
+    await expect(page.locator('a[href*="cspr.live/deploy"]')).toHaveCount(0);
+  });
+
+  test("recording mode: an UNVERIFIED payload receipt never renders the receipt chip", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard(), boundVerifiedReceipt(PAYLOAD_RECEIPT_TX, {})], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
+    await expect(page.getByText("Casper receipt")).toHaveCount(0);
+  });
+
+  test("recording mode: a verified receipt with a NON-HEX transaction hash never renders the receipt chip", async ({ page }) => {
+    await openWith(page, "/dashboard/runs?recording=1", { cards: [proposalCard(), planCard(), boundVerifiedReceipt("tx-hash")], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
+    await expect(page.getByText("Casper receipt")).toHaveCount(0);
+    await expect(page.locator('a[href*="cspr.live/deploy"]')).toHaveCount(0);
+  });
+
+  // Reviewer truth pass #2: execution/anchoring telemetry must use the SAME
+  // bound replay predicate — a verified receipt alone (no bound valid chain)
+  // must never claim "Execution verified" or "evidence chain valid".
+  test("execution telemetry: a verified receipt WITHOUT a bound chain never claims Execution verified", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard(), boundVerifiedReceipt()], evidenceExtra: {} });
+    await expect(page.getByText("Execution verified")).toHaveCount(0);
+    await expect(page.getByText(/evidence chain valid/)).toHaveCount(0);
+    await expect(page.getByText("Receipt recorded")).toBeVisible();
+    await expect(page.getByText("Proposal → anchored")).toHaveCount(0);
+  });
+
+  test("execution telemetry: chain_valid bound to a DIFFERENT proposal never claims Execution verified", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard(), boundVerifiedReceipt()], evidenceExtra: { chain_valid: true, proposal_id: "DAO-PROP-UNRELATED" } });
+    await expect(page.getByText("Execution verified")).toHaveCount(0);
+    await expect(page.getByText(/evidence chain valid/)).toHaveCount(0);
+  });
+
+  test("positive control: a bound valid chain plus a verified receipt claims Execution verified", async ({ page }) => {
+    await openWith(page, "/dashboard/runs", { cards: [proposalCard(), planCard(), boundVerifiedReceipt()], evidenceExtra: { chain_valid: true, proposal_id: CANONICAL } });
+    await expect(page.getByText("Execution verified")).toBeVisible();
+    await expect(page.getByText(/evidence chain valid/).first()).toBeVisible();
   });
 });
 

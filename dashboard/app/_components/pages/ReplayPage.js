@@ -4,8 +4,6 @@ import {
   CARD_LABELS,
   CARD_ROLE,
   CONCORDIA_MODE,
-  DEFAULT_CASPER_DEPLOY_HASH,
-  DEFAULT_CASPER_EXPLORER_URL,
   DEFAULT_REVIEW_PROPOSAL_ID,
   TERMINAL_STATES,
   cardBadge,
@@ -23,6 +21,7 @@ import {
   getCardData,
   getProfile,
   humanizeCardData,
+  isReceiptVerified,
   publicJson,
   replayEventTitle,
   replayStageLabel,
@@ -62,6 +61,17 @@ export function ReplayPage({ data }) {
   // payload proves nothing about the proposal on screen.
   const evidenceBound = Boolean(data.selectedId) && data.evidence?.proposal_id === data.selectedId;
   const replayVerified = chainValid && evidenceBound;
+  // Payload-derived receipt claim: a receipt chip may only cite a receipt
+  // that is positively verified inside THIS bound payload, with a
+  // well-formed 64-hex deploy hash — never a static literal.
+  const receiptClaimCard = cards.find((card) => card.card_type === "CasperExecutionReceipt");
+  const receiptClaimTx = receiptClaimCard ? getCardData(receiptClaimCard).actions_taken?.[0]?.transaction_hash : undefined;
+  const boundReceiptHash = replayVerified
+    && isReceiptVerified(receiptClaimCard)
+    && typeof receiptClaimTx === "string"
+    && /^[0-9a-f]{64}$/.test(receiptClaimTx)
+    ? receiptClaimTx
+    : null;
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -83,6 +93,10 @@ export function ReplayPage({ data }) {
   const card = cards[index] || null;
   const profile = getProfile(CARD_ROLE[card?.card_type]);
   const facts = deriveProposalFacts(data.selectedProposal, data.evidence);
+  // Execution/anchoring telemetry uses the SAME bound replay predicate as
+  // every other verified label: a verified receipt alone (no bound valid
+  // evidence chain for the selected proposal) never claims verification.
+  const executionVerified = replayVerified && facts.receiptVerified;
   const run = data.runSummary?.runs?.find((item) => item.proposal_id === data.selectedId) || null;
   const proposalFamily = firstDefined(run?.proposal_family, data.evidence?.proposal_family);
   const progress = cards.length > 1 ? (index / (cards.length - 1)) * 100 : 0;
@@ -113,7 +127,14 @@ export function ReplayPage({ data }) {
           ? "Cinema mode shows one sealed evidence card at a time for clean demo recording."
           : "Cinema mode shows one recorded evidence card at a time. Verification labels appear only when the gateway reports a valid chain for this proposal."}
         meta={<div className="page-meta-pills"><StatusPill tone={replayVerified ? "success" : "info"} icon="shield">Recording mode</StatusPill><StatusPill tone="info">{index + 1} / {cards.length}</StatusPill></div>}
-        actions={<ProofActionBar compact proposalId={data.selectedId || DEFAULT_REVIEW_PROPOSAL_ID} actionIds={["canonical_receipt", "certificate_html"]} />}
+        actions={<ProofActionBar
+          compact
+          proposalId={data.selectedId || DEFAULT_REVIEW_PROPOSAL_ID}
+          // The receipt shortcut may only cite a receipt verified inside THIS
+          // bound payload — the static canonical literal never renders here.
+          actionIds={boundReceiptHash ? ["canonical_receipt", "certificate_html"] : ["certificate_html"]}
+          overridesById={boundReceiptHash ? { canonical_receipt: { label: "Casper Receipt", tooltip: "Open this recording's verified Casper receipt on Casper Testnet.", href: () => `https://testnet.cspr.live/deploy/${boundReceiptHash}` } } : {}}
+        />}
       />
       <section className="recording-story-board replay-recording">
         <div className="recording-progress-rail" aria-label="Replay progress">
@@ -130,7 +151,7 @@ export function ReplayPage({ data }) {
               canonical-receipt chip renders ONLY for the verified canonical
               proposal — an unverified or non-canonical replay shows no
               receipt claim at all. */}
-          <div className="recording-proof-chips">{card.hash ? <HashChip label="Evidence chain" value={card.hash} /> : null}{replayVerified && data.selectedId === DEFAULT_REVIEW_PROPOSAL_ID ? <HashChip label="Canonical receipt" value={DEFAULT_CASPER_DEPLOY_HASH} href={DEFAULT_CASPER_EXPLORER_URL} tone="success" /> : null}</div>
+          <div className="recording-proof-chips">{card.hash ? <HashChip label="Evidence chain" value={card.hash} /> : null}{boundReceiptHash ? <HashChip label="Casper receipt" value={boundReceiptHash} href={`https://testnet.cspr.live/deploy/${boundReceiptHash}`} tone="success" /> : null}</div>
           <div className="recording-controls">
             <PrimaryButton tone="secondary" icon="previous" onClick={() => setIndex((current) => Math.max(0, current - 1))} disabled={index === 0}>Previous</PrimaryButton>
             <PrimaryButton icon="next" onClick={() => setIndex((current) => Math.min(cards.length - 1, current + 1))} disabled={index >= cards.length - 1}>Next sealed card</PrimaryButton>
@@ -152,7 +173,7 @@ export function ReplayPage({ data }) {
               proposal; otherwise the handoff is honestly recorded. */}<div className="eyebrow">{replayVerified ? "Verified handoff" : "Recorded handoff"} · sequence {card.sequence}</div><h2>{replayEventTitle(card)}</h2><p className="replay-event-summary"><RichText value={cardSummary(card)} /></p>{rows.length ? <div className="replay-detail-list">{rows.map((row) => <div key={row.label}><span>{row.label}</span><strong>{Array.isArray(row.value) ? row.value.join(" · ") : typeof row.value === "object" ? publicJson(row.value, 0) : <RichText value={String(row.value)} hashChips />}</strong></div>)}</div> : null}<div className="replay-integrity-note"><Icon name={replayVerified ? "shield" : "clock"} size={18} /><span><strong>{replayVerified ? "Publication and identity verified" : "Reconstructed from recorded evidence"}</strong><small>{replayVerified ? "This event is reconstructed from sealed Gateway evidence, not a fabricated animation." : "This event is reconstructed from recorded Gateway evidence. Verification is asserted only when the gateway reports a valid chain for this proposal."}</small></span></div></div></div>
         <aside className="replay-right-rail"><div className="replay-rail-card"><span>Current workflow state</span><strong>{CARD_LABELS[card.card_type] || titleCaseAction(card.card_type)}</strong><small>{formatDateTime(firstDefined(getCardData(card).created_at, getCardData(card).timestamp))}</small></div><div className="replay-rail-card"><span>Proposal family</span><strong>{displayFamily(proposalFamily)}</strong><small>Baseline proof uses same-family runs</small></div><div className="replay-rail-card"><span>Proposal duration</span><strong>{formatDuration(run?.total_resolution_secs)}</strong><small>{run?.handoffs ?? deriveHandoffs(cards).length} {replayVerified ? "verified" : "recorded"} handoffs</small></div><div className="replay-rail-card"><span>Evidence-chain status</span><strong className={replayVerified ? "success-text" : ""}>{data.evidence?.chain_valid === false ? "Verification failed" : replayVerified ? "Valid and sealed" : "Validity unavailable"}</strong><small>{cards.length} ordered cards</small></div><div className="replay-rail-card"><span>Execution conflict resolution</span><strong>Exact action only</strong><small>Altered requests are blocked before side effects</small></div></aside></div>
       </Panel>
-      <Panel title="Execution telemetry" eyebrow="Before → after · measured during the recorded run"><div className="replay-metrics"><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.errorRate === undefined && "telemetry-neutral")}><span><Icon name="activity" size={18} />Risk exposure</span><div><strong>{formatPercent(facts.preMetrics.errorRate)}</strong><Icon name="arrowRight" size={18} /><strong>{formatPercent(facts.postMetrics.errorRate)}</strong></div><small>Proposal → anchored</small></div><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.volatility === undefined && "telemetry-neutral")}><span><Icon name="clock" size={18} />Treasury volatility</span><div><strong>{facts.preMetrics.volatility !== undefined ? `${facts.preMetrics.volatility} bps` : "—"}</strong><Icon name="arrowRight" size={18} /><strong>{facts.postMetrics.volatility !== undefined ? `${facts.postMetrics.volatility} bps` : "—"}</strong></div><small>risk exposure delta</small></div><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.uptime === undefined && "telemetry-neutral")}><span><Icon name="shield" size={18} />Policy compliance</span><div><strong>{formatPercent(facts.preMetrics.uptime)}</strong><Icon name="arrowRight" size={18} /><strong>{formatPercent(facts.postMetrics.uptime)}</strong></div><small>Before → verified</small></div><div className={cx("receipt-final-card", !facts.receiptVerified && "receipt-final-pending")}><Icon name={facts.receiptVerified ? "check" : "clock"} size={26} /><span><strong>{facts.receiptVerified ? "Execution verified" : "Verification pending"}</strong><small>{facts.receiptVerified ? "Casper receipt anchored · evidence chain valid" : "The recorded receipt verification has not positively confirmed recovery in this payload."}</small></span></div></div></Panel>
+      <Panel title="Execution telemetry" eyebrow="Before → after · measured during the recorded run"><div className="replay-metrics"><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.errorRate === undefined && "telemetry-neutral")}><span><Icon name="activity" size={18} />Risk exposure</span><div><strong>{formatPercent(facts.preMetrics.errorRate)}</strong><Icon name="arrowRight" size={18} /><strong>{formatPercent(facts.postMetrics.errorRate)}</strong></div><small>{replayVerified ? "Proposal → anchored" : "Proposal → recorded"}</small></div><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.volatility === undefined && "telemetry-neutral")}><span><Icon name="clock" size={18} />Treasury volatility</span><div><strong>{facts.preMetrics.volatility !== undefined ? `${facts.preMetrics.volatility} bps` : "—"}</strong><Icon name="arrowRight" size={18} /><strong>{facts.postMetrics.volatility !== undefined ? `${facts.postMetrics.volatility} bps` : "—"}</strong></div><small>risk exposure delta</small></div><div className={cx("metric-comparison", "danger-to-success", facts.postMetrics.uptime === undefined && "telemetry-neutral")}><span><Icon name="shield" size={18} />Policy compliance</span><div><strong>{formatPercent(facts.preMetrics.uptime)}</strong><Icon name="arrowRight" size={18} /><strong>{formatPercent(facts.postMetrics.uptime)}</strong></div><small>{replayVerified ? "Before → verified" : "Before → recorded"}</small></div><div className={cx("receipt-final-card", !executionVerified && "receipt-final-pending")}><Icon name={executionVerified ? "check" : "clock"} size={26} /><span><strong>{executionVerified ? "Execution verified" : facts.receiptVerified ? "Receipt recorded" : "Verification pending"}</strong><small>{executionVerified ? "Casper receipt anchored · evidence chain valid" : facts.receiptVerified ? "A receipt verification is recorded, but the gateway reports no bound valid evidence chain for this proposal in this payload." : "The recorded receipt verification has not positively confirmed recovery in this payload."}</small></span></div></div></Panel>
     </>}
   </>;
 }
