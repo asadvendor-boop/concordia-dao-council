@@ -624,4 +624,58 @@ describe("validator boundary agreement: Python and the dashboard draw the SAME l
       expect(itemGreenVerified(item)).toBe(false);
     }
   });
+
+  // Sol's rejection of 7137674: microsecond ordinals were `number`s, so past
+  // Number.MAX_SAFE_INTEGER (9007199254740991 µs — about 285 years either
+  // side of 1970) two adjacent microseconds landed on ONE double. These pins
+  // drive the collapse through the REAL item validators, not just the
+  // parsers: at each boundary year an observation one microsecond AFTER
+  // capture must be caught, and one microsecond BEFORE must stay green.
+  const BOUNDARY_YEARS: readonly (readonly [string, string, string])[] = [
+    ["far future (year 9999)", "9999-12-31T23:59:59.000001Z", "9999-12-31T23:59:59.000002Z"],
+    ["just past the safe-integer boundary (2256)", "2256-01-01T00:00:00.000001Z", "2256-01-01T00:00:00.000002Z"],
+    ["at the safe-integer boundary (2255)", "2255-06-05T23:47:34.000001Z", "2255-06-05T23:47:34.000002Z"],
+    ["ancient (year 0001, negative ordinal)", "0001-01-01T00:00:00.000001Z", "0001-01-01T00:00:00.000002Z"],
+  ];
+
+  for (const [label, earlier, later] of BOUNDARY_YEARS) {
+    it(`adjacent-microsecond chronology is enforced by BOTH validators — ${label}`, () => {
+      // Every check moves to the boundary year, so the ONLY difference
+      // between the two items below is a single microsecond on checks[0].
+      // (Leaving the other checks at their fixture dates would make an
+      // ancient captured_at fail for an unrelated reason.)
+      const violating = realEmittedItem();
+      (violating as { captured_at: string }).captured_at = earlier;
+      for (const check of violating.checks) check.observed_at = earlier;
+      violating.checks[0]!.observed_at = later; // one microsecond AFTER capture
+      const verdict = pythonVerdict(violating);
+      expect(verdict.errors).toContain("check_observed_after_capture");
+      expect(verdict.green).toBe(false);
+      expect(registryItemErrors(violating)).toContain("check_observed_after_capture");
+      expect(itemGreenVerified(violating)).toBe(false);
+
+      // Inverse control: one microsecond BEFORE capture stays green on both,
+      // so the exact comparison cannot be passing by over-rejecting.
+      const ordered = realEmittedItem();
+      (ordered as { captured_at: string }).captured_at = later;
+      for (const check of ordered.checks) check.observed_at = earlier;
+      const orderedVerdict = pythonVerdict(ordered);
+      expect(orderedVerdict.errors).toEqual([]);
+      expect(orderedVerdict.green).toBe(true);
+      expect(registryItemErrors(ordered)).toEqual([]);
+      expect(itemGreenVerified(ordered)).toBe(true);
+    });
+  }
+
+  it("validator output stays JSON-serializable (no BigInt ordinal escapes)", () => {
+    // The dashboard ordinal is a BigInt; JSON.stringify throws on one. These
+    // validators run inside a React render path, so a leaked ordinal would
+    // break serialization at runtime rather than in a type check.
+    const item = realEmittedItem();
+    (item as { captured_at: string }).captured_at = "9999-12-31T23:59:59.000001Z";
+    item.checks[0]!.observed_at = "9999-12-31T23:59:59.000002Z";
+    expect(() => JSON.stringify(registryItemErrors(item))).not.toThrow();
+    expect(() => JSON.stringify(itemGreenVerified(item))).not.toThrow();
+    expect(() => JSON.stringify(registryItemErrors(realEmittedItem()))).not.toThrow();
+  });
 });

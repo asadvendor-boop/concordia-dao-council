@@ -19,7 +19,7 @@ import {
   REFUSAL_CODES,
 } from "./errors.js";
 import { readBoundedJson } from "./http.js";
-import { parseRfc3339Utc } from "./time.js";
+import { rfc3339UtcOrdinal } from "./time.js";
 import type { ServiceConfig } from "./config.js";
 import type {
   GovernanceBinding,
@@ -190,9 +190,13 @@ function requireNonEmptyString(value: unknown): string {
   return value;
 }
 
-/** Strict RFC3339 UTC timestamp → epoch ms; anything else fails closed (WP5-6). */
-function requireRfc3339Utc(value: unknown): number {
-  const epoch = parseRfc3339Utc(value);
+/**
+ * Strict RFC3339 UTC timestamp → EXACT microsecond ordinal (BigInt); anything
+ * else fails closed (WP5-6). The ordinal, not milliseconds, is what makes
+ * these chronology comparisons agree with Python to the microsecond.
+ */
+function requireRfc3339Utc(value: unknown): bigint {
+  const epoch = rfc3339UtcOrdinal(value);
   if (epoch === null) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   return epoch;
 }
@@ -239,7 +243,12 @@ export function validateProofSource(value: unknown): string {
 
 interface ValidatedChecks {
   names: Set<string>;
-  maxObservedAtEpoch: number;
+  /**
+   * Latest check observation as an exact microsecond ordinal, or null when
+   * there were no checks. BigInt has no -Infinity, so absence is an explicit
+   * null rather than a sentinel value.
+   */
+  maxObservedAtEpoch: bigint | null;
 }
 
 const CHECK_NAME_GRAMMAR = /^[a-z][a-z0-9_]{0,63}$/;
@@ -248,7 +257,7 @@ function validateChecks(value: unknown): ValidatedChecks {
   if (!Array.isArray(value)) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   const names = new Set<string>();
   const allowed = new Set<string>([...CHECK_FIELDS, ...CHECK_OPTIONAL_FIELDS]);
-  let maxObservedAtEpoch = Number.NEGATIVE_INFINITY;
+  let maxObservedAtEpoch: bigint | null = null;
   for (const check of value) {
     if (!isPlainObject(check)) fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
     for (const key of Object.keys(check)) {
@@ -269,7 +278,9 @@ function validateChecks(value: unknown): ValidatedChecks {
     }
     validateProofSource(check["source"]);
     const checkEpoch = requireRfc3339Utc(check["observed_at"]);
-    if (checkEpoch > maxObservedAtEpoch) maxObservedAtEpoch = checkEpoch;
+    if (maxObservedAtEpoch === null || checkEpoch > maxObservedAtEpoch) {
+      maxObservedAtEpoch = checkEpoch;
+    }
     if (
       "detail_code" in check &&
       check["detail_code"] !== undefined &&
@@ -375,10 +386,7 @@ export function validateGovernanceRecord(
   const { maxObservedAtEpoch } = validateChecks(record["checks"]);
   // Chronology: no check may claim an observation after the record itself was
   // observed (forged future-dated checks fail closed, WP5-6).
-  if (
-    maxObservedAtEpoch !== Number.NEGATIVE_INFINITY &&
-    maxObservedAtEpoch > observedAtEpoch
-  ) {
+  if (maxObservedAtEpoch !== null && maxObservedAtEpoch > observedAtEpoch) {
     fail(REFUSAL_CODES.GOVERNANCE_RECORD_INVALID);
   }
   return {

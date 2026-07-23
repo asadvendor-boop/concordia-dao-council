@@ -51,7 +51,7 @@
  * observation-URL field.
  */
 
-import { parseRfc3339Utc } from "./time.js";
+import { rfc3339UtcOrdinal } from "./time.js";
 
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const GIT_SHA40_RE = /^[0-9a-f]{40}$/;
@@ -289,15 +289,16 @@ function requireCommit40(value: string, code: string): string {
 }
 
 /**
- * Registry-compatible strict UTC-Z instant. Returns epoch ms; throws with the
- * caller's code otherwise. Stricter than parseRfc3339Utc alone: at most six
- * fractional digits and no leap second, matching shared/proof_registry.py.
+ * Registry-compatible strict UTC-Z instant. Returns the EXACT microsecond
+ * ordinal (BigInt) so chronology matches Python to the microsecond; throws
+ * with the caller's code otherwise. Stricter than the parser alone: at most
+ * six fractional digits and no leap second, matching shared/proof_registry.py.
  */
-function requireRegistryUtc(value: unknown, code: string): number {
+function requireRegistryUtc(value: unknown, code: string): bigint {
   if (typeof value !== "string") throw new SettlementItemError(code);
   const m = REGISTRY_UTC_RE.exec(value);
   if (m === null || m[1] === "60") throw new SettlementItemError(code);
-  const epoch = parseRfc3339Utc(value);
+  const epoch = rfc3339UtcOrdinal(value);
   if (epoch === null) throw new SettlementItemError(code);
   return epoch;
 }
@@ -417,7 +418,7 @@ function requireLink(value: unknown): SettlementItemLink {
  */
 function validateCheckObservations(
   checks: unknown,
-  capturedAtEpoch: number,
+  capturedAtEpoch: bigint,
 ): SettlementItemCheck[] {
   if (!Array.isArray(checks)) {
     throw new SettlementItemError("invalid_check_observations");

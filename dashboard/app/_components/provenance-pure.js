@@ -199,10 +199,18 @@ const CHECK_NAME_RE = /^[a-z][a-z0-9_]{0,95}$/;
 const RFC3339_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
 function isHex32(value) { return typeof value === "string" && HEX32_RE.test(value); }
-// Returns MICROSECONDS since the Unix epoch (not milliseconds): Python
-// compares full-microsecond datetimes, so a millisecond return value would
-// collapse .000001Z and .000999Z into the same instant and silently skip
-// chronology violations Python reports.
+// Returns an EXACT BigInt count of MICROSECONDS since the Unix epoch, or
+// null. Python compares full-microsecond datetimes, so a millisecond value
+// would collapse .000001Z and .000999Z into one instant — but a `number` of
+// microseconds is no better: microseconds-since-epoch pass
+// Number.MAX_SAFE_INTEGER (9007199254740991) about 285 years either side of
+// 1970, so in any year before ~1684 or after ~2255 two adjacent microseconds
+// land on the SAME double. 9999-12-31T23:59:59.000001Z and .000002Z both
+// became 253402300799000000, hiding a chronology violation Python reports.
+// A BigInt is lossless at every representable year.
+//
+// The result is NOT JSON-serializable (JSON.stringify of a BigInt throws), so
+// it must stay inside comparison logic — never a rendered value or a prop.
 export function parseRfc3339Utc(value) {
   if (typeof value !== "string" || !RFC3339_UTC_RE.test(value)) return null;
   // Python's calendar starts at 0001; Date.parse happily represents year 0.
@@ -215,7 +223,9 @@ export function parseRfc3339Utc(value) {
   // YYYY-MM-DDTHH:MM:SS prefix or the value is not a real calendar date.
   if (!new Date(ms).toISOString().startsWith(value.slice(0, 19))) return null;
   const fraction = value.length > 20 ? value.slice(20, -1) : "";
-  return ms * 1000 + Number(fraction.padEnd(6, "0") || "0");
+  // `ms` is second-granular here (|ms| < 2.6e14, exact in a double); the
+  // fraction is padded to whole microseconds before it joins the ordinal.
+  return BigInt(ms) * 1000n + BigInt(fraction.padEnd(6, "0"));
 }
 function isRfc3339Utc(value) { return parseRfc3339Utc(value) !== null; }
 function safeRepositoryPath(value) {
