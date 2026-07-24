@@ -85,10 +85,42 @@ from scripts.verify_v3_proof import verify_v3_proof_document
 PREPARE_REQUEST_SCHEMA = "concordia.official_x402_prepare_request.v1"
 PREPARED_AUTHORIZATION_SCHEMA = "concordia.official_x402_prepared_authorization.v1"
 IMPORTED_AUTHORIZATION_SCHEMA = "concordia.official_x402_imported_authorization.v1"
+_PREPARE_REQUEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "accepted",
+        "resource",
+        "report_base64",
+        "body",
+        "payer_account_hash",
+        "payee_account_hash",
+        "value",
+        "valid_after",
+        "valid_before",
+        "nonce",
+    }
+)
 # The frozen capture bundle the ``capture`` subcommand consumes and the exact
 # live-artifact schema version it emits. The bundle references/embeds ONLY raw
 # inputs; every derived field is recomputed here before the atomic write.
 CAPTURE_BUNDLE_SCHEMA = "concordia.official_x402_capture_bundle.v1"
+_CAPTURE_BUNDLE_FIELDS = frozenset(
+    {
+        "bundle_version",
+        "captured_at",
+        "source_commit",
+        "deployment_commit",
+        "service_url",
+        "service_image_digest",
+        "imported_authorization",
+        "v3_proof_bytes_base64",
+        "report_bytes_base64",
+        "facilitator",
+        "wcspr_readbacks",
+        "settlement_providers",
+        "fulfillment",
+    }
+)
 OFFICIAL_X402_ARTIFACT_SCHEMA_VERSION = "concordia.official_x402_settlement.v2"
 # The origin the accepted adapter pins the capture identity to.
 _SERVICE_ORIGIN = "https://x402.concordiadao.xyz"
@@ -263,6 +295,8 @@ def build_prepared_authorization(request: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(request_snapshot, dict):
         raise _fail("prepare request must be one JSON object")
     request = request_snapshot
+    if set(request) != _PREPARE_REQUEST_FIELDS:
+        raise _fail("prepare request field set is not exact")
     if request.get("schema_version") != PREPARE_REQUEST_SCHEMA:
         raise _fail(
             f"prepare request schema must be {PREPARE_REQUEST_SCHEMA}"
@@ -1234,6 +1268,8 @@ def build_official_x402_artifact(bundle: Mapping[str, Any]) -> dict[str, Any]:
     on any adapter refusal this raises ``CaptureError`` and writes nothing.
     """
 
+    if set(bundle) != _CAPTURE_BUNDLE_FIELDS:
+        raise _fail("capture bundle field set is not exact")
     if bundle.get("bundle_version") != CAPTURE_BUNDLE_SCHEMA:
         raise _fail(f"capture bundle schema must be {CAPTURE_BUNDLE_SCHEMA}")
 

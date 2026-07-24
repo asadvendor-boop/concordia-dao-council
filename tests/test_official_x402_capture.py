@@ -143,6 +143,13 @@ class TestPrepare:
         assert prepared["eip712"]["message"]["from"] == "00" + _ed25519_payer()
         assert prepared["eip712"]["message"]["to"] == "00" + PAYEE_HEX
 
+    def test_prepare_rejects_an_unknown_top_level_field(self) -> None:
+        request = _prepare_request(_ed25519_payer())
+        request["unrecognized_top_level_field"] = "must not be ignored"
+
+        with pytest.raises(CaptureError, match="field set is not exact"):
+            build_prepared_authorization(request)
+
     @pytest.mark.parametrize(
         "mutate,fragment",
         [
@@ -788,6 +795,14 @@ def test_capture_builds_self_verifying_official_x402_artifact() -> None:
     assert result["proof_type"] == "official_x402_settlement_v1"
     assert result["derived_facts"]["v3_finalized_exact"] is True
     assert all(check["passed"] is True for check in result["checks"])
+
+
+def test_capture_rejects_an_unknown_top_level_field() -> None:
+    bundle = _bundle()
+    bundle["unrecognized_top_level_field"] = "must not be ignored"
+
+    with pytest.raises(CaptureError, match="field set is not exact"):
+        build_official_x402_artifact(bundle)
 
 
 def test_capture_refuses_frozen_request_bytes_that_do_not_match_import() -> None:
