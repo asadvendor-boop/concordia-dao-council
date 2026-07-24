@@ -1,14 +1,19 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+const BUILD_ID_PATTERN = /^concordia-[0-9a-f]{64}$/;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+async function configuredBuildId() {
+  const buildId = process.env.CONCORDIA_DASHBOARD_BUILD_ID;
+  if (typeof buildId !== "string" || !BUILD_ID_PATTERN.test(buildId)) {
+    throw new Error(
+      "CONCORDIA_DASHBOARD_BUILD_ID must be set by the deterministic build wrapper",
+    );
+  }
+  return buildId;
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   basePath: "/dashboard",
-  turbopack: {
-    root: __dirname,
-  },
+  generateBuildId: configuredBuildId,
   // Removed output: "standalone" — use `npx next start` for deployment
   // Removed unused rewrites proxy — dashboard reads from NEXT_PUBLIC_GATEWAY_URL directly
 };

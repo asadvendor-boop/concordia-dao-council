@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/deterministic-build-id.mjs --next-build",
     "start": "next start",
     "test:e2e": "playwright test"
   },
