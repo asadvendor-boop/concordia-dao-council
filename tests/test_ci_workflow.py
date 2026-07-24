@@ -44,6 +44,11 @@ def test_ci_pins_release_runtimes_and_builds_verifier_before_pytest() -> None:
     assert source.index("install --with-deps chromium") < source.index(
         "python -m pytest -q"
     )
+    assert "working-directory: dashboard" in source
+    assert "npm run test:unit" in source
+    assert source.index("npm run test:unit") < source.index(
+        "python -m pytest -q"
+    )
 
 
 def test_ci_does_not_shadow_pinned_runtime_entrypoints_with_detached_copies() -> None:

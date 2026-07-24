@@ -48,6 +48,13 @@ jobs:
           npm ci
           npm run build
 
+      - name: Test deterministic dashboard build identity
+        working-directory: dashboard
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run test:unit
+
       - name: Install locked Chromium test runtime
         working-directory: scripts/g13-browser-runtime
         run: |

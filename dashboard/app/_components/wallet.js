@@ -56,7 +56,7 @@ export function loadCsprClickSdk() {
     }
     const sdkOptions = {
       appName: "Concordia DAO Council",
-      appId: process.env.NEXT_PUBLIC_CSPR_CLICK_APP_ID || "csprclick-template",
+      appId: process.env.NEXT_PUBLIC_CSPR_CLICK_APP_ID,
       providers: ["casper-wallet", "casper-signer", "ledger", "metamask-snap"],
       contentMode: "IFRAME",
       uiContainer: "csprclick-ui",

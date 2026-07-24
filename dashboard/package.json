@@ -4,9 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/deterministic-build-id.mjs --next-build",
+    "build": "next build",
+    "build:e2e:live": "CONCORDIA_DASHBOARD_BUILD_PURPOSE=e2e-live NEXT_PUBLIC_GATEWAY_URL='' NEXT_PUBLIC_CONCORDIA_MODE=live NEXT_PUBLIC_CSPR_CLICK_APP_ID=0f892487-0a8c-45b5-8cea-bbe95c64 next build",
     "start": "next start",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:live": "CONCORDIA_DASHBOARD_BUILD_PURPOSE=e2e-live NEXT_PUBLIC_GATEWAY_URL='' NEXT_PUBLIC_CONCORDIA_MODE=live NEXT_PUBLIC_CSPR_CLICK_APP_ID=0f892487-0a8c-45b5-8cea-bbe95c64 playwright test --grep-invert @reviewer-only",
+    "test:e2e:reviewer": "NEXT_PUBLIC_GATEWAY_URL='' NEXT_PUBLIC_CONCORDIA_MODE=reviewer NEXT_PUBLIC_CSPR_CLICK_APP_ID=0f892487-0a8c-45b5-8cea-bbe95c64 playwright test tests/e2e/reviewer-mode.spec.mjs",
+    "test:unit": "node --test tests/unit/*.test.mjs"
   },
   "dependencies": {
     "@swc/helpers": "^0.5.23",

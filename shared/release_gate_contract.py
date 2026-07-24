@@ -7,7 +7,24 @@ import json
 from types import MappingProxyType
 from typing import Final
 
-COMMAND_GATE_RECEIPT_SCHEMA_VERSION: Final = "concordia.command_gate_receipt.v2"
+COMMAND_GATE_RECEIPT_SCHEMA_VERSION: Final = "concordia.command_gate_receipt.v3"
+COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION: Final = (
+    "concordia.dashboard_public_build_profile.v2"
+)
+COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE = MappingProxyType(
+    {
+        "NEXT_PUBLIC_GATEWAY_URL": "",
+        "NEXT_PUBLIC_CONCORDIA_MODE": "reviewer",
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID": "0f892487-0a8c-45b5-8cea-bbe95c64",
+    }
+)
+COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE = MappingProxyType(
+    {
+        "NEXT_PUBLIC_GATEWAY_URL": "",
+        "NEXT_PUBLIC_CONCORDIA_MODE": "live",
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID": "0f892487-0a8c-45b5-8cea-bbe95c64",
+    }
+)
 COMMAND_LOG_NORMALIZATION_SCHEMA_VERSION: Final = (
     "concordia.command_log_normalization.v1"
 )
@@ -207,6 +224,9 @@ BOUND_TOOL_POLICY = MappingProxyType(
             "NO_COLOR",
             "NPM_CONFIG_CACHE",
             "NPM_CONFIG_USERCONFIG",
+            "NEXT_PUBLIC_CSPR_CLICK_APP_ID",
+            "NEXT_PUBLIC_CONCORDIA_MODE",
+            "NEXT_PUBLIC_GATEWAY_URL",
             "TMPDIR",
             "XDG_CACHE_HOME",
             "XDG_CONFIG_HOME",
@@ -407,8 +427,23 @@ COMMAND_GATE_COMMANDS = MappingProxyType(
         ),
         "G9": (
             ("dashboard_install", "dashboard", ("npm", "ci")),
+            ("dashboard_unit", "dashboard", ("npm", "run", "test:unit")),
+            (
+                "dashboard_live_build",
+                "dashboard",
+                ("npm", "run", "build:e2e:live"),
+            ),
+            (
+                "dashboard_live_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:live"),
+            ),
             ("dashboard_build", "dashboard", ("npm", "run", "build")),
-            ("dashboard_e2e", "dashboard", ("npm", "run", "test:e2e")),
+            (
+                "dashboard_reviewer_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:reviewer"),
+            ),
             (
                 "dashboard_audit",
                 "dashboard",
@@ -623,14 +658,14 @@ COMMAND_GATE_RUNTIME_PROBES = MappingProxyType(
 COMMAND_GATE_TIMEOUT_SECONDS = MappingProxyType(
     {
         "G2": (1800, 1800, 1800, 900, 900, 900, 900, 900, 900, 900, 900, 900),
-        "G9": (900, 900, 1800, 900),
+        "G9": (900, 900, 900, 1800, 900, 900, 900),
         "G11": (300,),
     }
 )
 COMMAND_GATE_RUNTIME_TIMEOUT_SECONDS: Final = 60
 
 _FROZEN_COLLECTOR_CONTRACT_SHA256: Final = (
-    "e10cc73e9f4adf35ec674d0b76689bb7200abcab090d40b0e359bc63d7a30830"
+    "9438d469a4ecc2c0462b7b005731943bc244bef5a50242ea11091149ee8ff6f0"
 )
 
 
@@ -639,6 +674,13 @@ def collector_contract_projection() -> dict[str, object]:
 
     return {
         "receipt_schema": COMMAND_GATE_RECEIPT_SCHEMA_VERSION,
+        "public_build_profile": {
+            "schema_version": COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION,
+            "g9_production_values": dict(COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE),
+            "g9_live_test_values": dict(
+                COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+            ),
+        },
         "g1_freeze_tag": G1_FREEZE_TAG,
         "g1_freeze_tag_object": G1_FREEZE_TAG_OBJECT,
         "g1_freeze_commit": G1_FREEZE_COMMIT,

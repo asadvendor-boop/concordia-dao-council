@@ -1,19 +1,26 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 
-const DOMAIN = Buffer.from("CONCORDIA_DASHBOARD_BUILD_ID_V1\0", "ascii");
+const DOMAIN = Buffer.from("CONCORDIA_DASHBOARD_BUILD_ID_V2\0", "ascii");
 const ROOT_FILES = [
+  "Dockerfile",
+  "jsconfig.json",
   "next.config.mjs",
   "package-lock.json",
   "package.json",
   "scripts/deterministic-build-id.mjs",
 ];
 const ROOT_DIRECTORIES = ["app", "public"];
+const PUBLIC_BUILD_INPUT_NAMES = [
+  "NEXT_PUBLIC_GATEWAY_URL",
+  "NEXT_PUBLIC_CONCORDIA_MODE",
+  "NEXT_PUBLIC_CSPR_CLICK_APP_ID",
+];
+export const PRODUCTION_CSPR_CLICK_APP_ID = "0f892487-0a8c-45b5-8cea-bbe95c64";
+export const LIVE_E2E_BUILD_PURPOSE = "e2e-live";
 
 
 function compareUtf8(left, right) {
@@ -93,9 +100,71 @@ async function readRegularFile(root, relative) {
 }
 
 
-export async function deterministicBuildId(root) {
+function normalizePublicBuildInputs(inputs) {
+  if (inputs === null || typeof inputs !== "object" || Array.isArray(inputs)) {
+    throw new Error("public build inputs must be an exact object");
+  }
+  const keys = Object.keys(inputs).sort(compareUtf8);
+  const expected = [...PUBLIC_BUILD_INPUT_NAMES].sort(compareUtf8);
+  if (
+    keys.length !== expected.length
+    || keys.some((key, index) => key !== expected[index])
+  ) {
+    throw new Error("public build inputs must contain the exact frozen keys");
+  }
+  const normalized = {};
+  for (const name of PUBLIC_BUILD_INPUT_NAMES) {
+    const value = inputs[name];
+    if (
+      typeof value !== "string"
+      || value.includes("\0")
+      || Buffer.byteLength(value, "utf8") > 4096
+    ) {
+      throw new Error(`public build input ${name} is malformed`);
+    }
+    normalized[name] = value;
+  }
+  return normalized;
+}
+
+
+export function productionPublicBuildInputs(environment) {
+  let inputs;
+  try {
+    inputs = normalizePublicBuildInputs({
+      NEXT_PUBLIC_GATEWAY_URL: environment?.NEXT_PUBLIC_GATEWAY_URL,
+      NEXT_PUBLIC_CONCORDIA_MODE: environment?.NEXT_PUBLIC_CONCORDIA_MODE,
+      NEXT_PUBLIC_CSPR_CLICK_APP_ID:
+        environment?.NEXT_PUBLIC_CSPR_CLICK_APP_ID,
+    });
+  } catch {
+    throw new Error("production public build inputs are missing or malformed");
+  }
+  const commonInputsAreExact = (
+    inputs.NEXT_PUBLIC_GATEWAY_URL === ""
+    && inputs.NEXT_PUBLIC_CSPR_CLICK_APP_ID === PRODUCTION_CSPR_CLICK_APP_ID
+  );
+  const isProduction = (
+    commonInputsAreExact
+    && inputs.NEXT_PUBLIC_CONCORDIA_MODE === "reviewer"
+    && environment?.CONCORDIA_DASHBOARD_BUILD_PURPOSE === undefined
+  );
+  const isLiveE2e = (
+    commonInputsAreExact
+    && inputs.NEXT_PUBLIC_CONCORDIA_MODE === "live"
+    && environment?.CONCORDIA_DASHBOARD_BUILD_PURPOSE === LIVE_E2E_BUILD_PURPOSE
+  );
+  if (!isProduction && !isLiveE2e) {
+    throw new Error("production public build inputs are missing or malformed");
+  }
+  return Object.freeze(inputs);
+}
+
+
+export async function deterministicBuildId(root, publicBuildInputs) {
   const absoluteRoot = path.resolve(root);
   await requireDirectory(absoluteRoot);
+  const inputs = normalizePublicBuildInputs(publicBuildInputs);
 
   const files = [...ROOT_FILES];
   for (const directory of ROOT_DIRECTORIES) {
@@ -118,54 +187,14 @@ export async function deterministicBuildId(root) {
     hash.update(encodeU64(bytes.length));
     hash.update(bytes);
   }
+  hash.update(encodeU32(PUBLIC_BUILD_INPUT_NAMES.length));
+  for (const name of PUBLIC_BUILD_INPUT_NAMES) {
+    const encodedName = Buffer.from(name, "ascii");
+    const encodedValue = Buffer.from(inputs[name], "utf8");
+    hash.update(encodeU32(encodedName.length));
+    hash.update(encodedName);
+    hash.update(encodeU64(encodedValue.length));
+    hash.update(encodedValue);
+  }
   return `concordia-${hash.digest("hex")}`;
-}
-
-
-async function runNextBuild() {
-  if (process.argv.length !== 3 || process.argv[2] !== "--next-build") {
-    throw new Error("usage: deterministic-build-id.mjs --next-build");
-  }
-  const root = path.resolve(import.meta.dirname, "..");
-  const buildId = await deterministicBuildId(root);
-  const nextExecutable = path.join(root, "node_modules", ".bin", "next");
-  const child = spawn(nextExecutable, ["build"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      CONCORDIA_DASHBOARD_BUILD_ID: buildId,
-    },
-    shell: false,
-    stdio: "inherit",
-  });
-  const forward = new Map();
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-    const handler = () => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill(signal);
-      }
-    };
-    forward.set(signal, handler);
-    process.on(signal, handler);
-  }
-  const result = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  for (const [signal, handler] of forward) {
-    process.off(signal, handler);
-  }
-  if (result.signal !== null) {
-    throw new Error(`next build terminated by ${result.signal}`);
-  }
-  if (result.code !== 0) {
-    process.exitCode = result.code ?? 1;
-  }
-}
-
-
-const invokedAsScript = process.argv[1] !== undefined
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (invokedAsScript) {
-  await runNextBuild();
 }

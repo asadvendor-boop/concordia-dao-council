@@ -36,10 +36,13 @@ from shared.release_gate_contract import (
     COMMAND_GATE_EXECUTABLE_CHAIN_POLICY,
     COMMAND_GATE_EXECUTABLE_CHAIN_SCHEMA_VERSION,
     COMMAND_GATE_FRESH_OUTPUT_PATHS,
+    COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE,
+    COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE,
     COMMAND_GATE_IDENTITY_PATHS,
     COMMAND_GATE_INPUT_ARTIFACT_PATHS,
     COMMAND_GATE_NORMALIZATION,
     COMMAND_GATE_PRODUCED_ARTIFACT_PATHS,
+    COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION,
     COMMAND_GATE_RECEIPT_PATHS,
     COMMAND_GATE_RECEIPT_SCHEMA_VERSION,
     COMMAND_GATE_REQUIRED_RUNTIMES,
@@ -493,7 +496,45 @@ def _safe_tool_path() -> str:
     return os.pathsep.join(locations)
 
 
-def _sanitized_environment(temporary_root: Path) -> dict[str, str]:
+def _g9_public_build_environment(
+    environment: Mapping[str, str],
+) -> dict[str, str]:
+    required = tuple(COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE)
+    if any(name not in environment for name in required):
+        raise GateRunError("public dashboard build profile is incomplete")
+    profile = {name: environment[name] for name in required}
+    if profile != dict(COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE):
+        raise GateRunError("public dashboard build profile is invalid")
+    return profile
+
+
+def _command_gate_public_build_profile(
+    gate_id: str,
+    environment: Mapping[str, str],
+) -> dict[str, object] | None:
+    if gate_id != "G9":
+        return None
+    values = _g9_public_build_environment(environment)
+    live_test_values = dict(COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE)
+    return {
+        "schema_version": COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION,
+        "values": values,
+        "sha256": hashlib.sha256(_canonical_json(values)).hexdigest(),
+        "live_test": {
+            "values": live_test_values,
+            "sha256": hashlib.sha256(
+                _canonical_json(live_test_values)
+            ).hexdigest(),
+        },
+    }
+
+
+def _sanitized_environment(
+    temporary_root: Path,
+    *,
+    gate_id: str,
+    caller_environment: Mapping[str, str],
+) -> dict[str, str]:
     home = temporary_root / "home"
     tmp = temporary_root / "tmp"
     config = temporary_root / "config"
@@ -533,6 +574,8 @@ def _sanitized_environment(temporary_root: Path) -> dict[str, str]:
     rustup_home = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".rustup"
     if rustup_home.is_dir():
         environment["RUSTUP_HOME"] = str(rustup_home)
+    if gate_id == "G9":
+        environment.update(_g9_public_build_environment(caller_environment))
     return environment
 
 
@@ -1888,7 +1931,11 @@ def _run_gate_locked(
 
     with tempfile.TemporaryDirectory(prefix=f"concordia-{gate_id.lower()}-") as name:
         temporary_root = Path(name).resolve()
-        environment = _sanitized_environment(temporary_root)
+        environment = _sanitized_environment(
+            temporary_root,
+            gate_id=gate_id,
+            caller_environment=caller_environment,
+        )
         started_at = _utc_now()
         captured = _capture_commands(
             gate_id,
@@ -1969,6 +2016,10 @@ def _run_gate_locked(
         "bound_process_launcher": bound_launcher_identity,
         "runtime_versions": runtime_versions,
         "runtime_executable_chains": runtime_executable_chains,
+        "public_build_profile": _command_gate_public_build_profile(
+            gate_id,
+            environment,
+        ),
         "started_at": started_at,
         "ended_at": ended_at,
         "commands": command_rows,

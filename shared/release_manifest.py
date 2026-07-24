@@ -69,10 +69,13 @@ from shared.release_gate_contract import (
     COMMAND_GATE_EXECUTABLE_CHAIN_SCHEMA_VERSION,
     COMMAND_GATE_EXPECTED_RUNTIME_VERSIONS,
     COMMAND_GATE_FRESH_OUTPUT_PATHS,
+    COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE,
+    COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE,
     COMMAND_GATE_IDENTITY_PATHS,
     COMMAND_GATE_INPUT_ARTIFACT_PATHS,
     COMMAND_GATE_NORMALIZATION,
     COMMAND_GATE_PRODUCED_ARTIFACT_PATHS,
+    COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION,
     COMMAND_GATE_RECEIPT_PATHS,
     COMMAND_GATE_RECEIPT_SCHEMA_VERSION,
     COMMAND_GATE_REQUIRED_RUNTIMES,
@@ -2707,6 +2710,7 @@ def _command_gate_replay_projection(
         ),
         "input_artifacts": document.get("input_artifacts"),
         "bound_process_launcher": document.get("bound_process_launcher"),
+        "public_build_profile": document.get("public_build_profile"),
         "fresh_output_contract": [
             {
                 "path": row.get("path"),
@@ -2832,6 +2836,7 @@ def _load_command_gate_receipts(
         "bound_process_launcher",
         "runtime_versions",
         "runtime_executable_chains",
+        "public_build_profile",
         "started_at",
         "ended_at",
         "commands",
@@ -2934,6 +2939,57 @@ def _load_command_gate_receipts(
                 label=f"{gate_id} {runtime} runtime executable chain",
                 canaries=canaries,
             )
+
+        public_build_profile = document.get("public_build_profile")
+        if gate_id != "G9":
+            if public_build_profile is not None:
+                raise ReleaseManifestError(
+                    f"{gate_id} public build profile must be absent"
+                )
+        else:
+            profile = _mapping(
+                public_build_profile,
+                "G9 public build profile",
+            )
+            if set(profile) != {
+                "schema_version",
+                "values",
+                "sha256",
+                "live_test",
+            }:
+                raise ReleaseManifestError(
+                    "G9 public build profile schema is not exact"
+                )
+            values = _mapping(
+                profile.get("values"),
+                "G9 public build profile values",
+            )
+            expected_values = dict(COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE)
+            live_test = _mapping(
+                profile.get("live_test"),
+                "G9 live test build profile",
+            )
+            live_test_values = _mapping(
+                live_test.get("values"),
+                "G9 live test build profile values",
+            )
+            expected_live_test_values = dict(
+                COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+            )
+            if (
+                profile.get("schema_version")
+                != COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION
+                or values != expected_values
+                or profile.get("sha256")
+                != hashlib.sha256(_canonical_json(expected_values)).hexdigest()
+                or set(live_test) != {"values", "sha256"}
+                or live_test_values != expected_live_test_values
+                or live_test.get("sha256")
+                != hashlib.sha256(
+                    _canonical_json(expected_live_test_values)
+                ).hexdigest()
+            ):
+                raise ReleaseManifestError("G9 public build profile differs")
 
         started_at, started = _parse_timestamp(
             document.get("started_at"), f"{gate_id} started_at"

@@ -269,6 +269,36 @@ def _write_command_gate_receipts(
                     "sha256": hashlib.sha256(runner_bytes).hexdigest(),
                 }
             )
+        public_build_profile = None
+        if gate_id == "G9":
+            profile_values = dict(
+                release_manifest.COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE
+            )
+            public_build_profile = {
+                "schema_version": (
+                    release_manifest
+                    .COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION
+                ),
+                "values": profile_values,
+                "sha256": hashlib.sha256(
+                    _canonical(profile_values)
+                ).hexdigest(),
+                "live_test": {
+                    "values": dict(
+                        release_manifest
+                        .COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+                    ),
+                    "sha256": hashlib.sha256(
+                        _canonical(
+                            dict(
+                                release_manifest
+                                .COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+                            )
+                        )
+                    ).hexdigest(),
+                },
+            }
+
         receipt = {
             "schema_version": release_manifest.COMMAND_GATE_RECEIPT_SCHEMA_VERSION,
             "gate_id": gate_id,
@@ -294,6 +324,7 @@ def _write_command_gate_receipts(
                 name: executable_chain(name)
                 for name in release_manifest.COMMAND_GATE_REQUIRED_RUNTIMES[gate_id]
             },
+            "public_build_profile": public_build_profile,
             "started_at": "2026-07-23T00:00:00Z",
             "ended_at": "2026-07-23T00:01:00Z",
             "commands": command_rows,
@@ -3279,8 +3310,23 @@ def test_command_gate_contract_uses_frozen_isolated_and_fresh_dependency_trees()
         ),
         "G9": (
             ("dashboard_install", "dashboard", ("npm", "ci")),
+            ("dashboard_unit", "dashboard", ("npm", "run", "test:unit")),
+            (
+                "dashboard_live_build",
+                "dashboard",
+                ("npm", "run", "build:e2e:live"),
+            ),
+            (
+                "dashboard_live_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:live"),
+            ),
             ("dashboard_build", "dashboard", ("npm", "run", "build")),
-            ("dashboard_e2e", "dashboard", ("npm", "run", "test:e2e")),
+            (
+                "dashboard_reviewer_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:reviewer"),
+            ),
             (
                 "dashboard_audit",
                 "dashboard",
@@ -3489,6 +3535,11 @@ def test_bound_process_launcher_identity_is_exact_and_fail_closed(
 
 
 def test_command_gate_replay_contract_binds_launcher_runtime_identity() -> None:
+    public_build_values = {
+        "NEXT_PUBLIC_GATEWAY_URL": "",
+        "NEXT_PUBLIC_CONCORDIA_MODE": "reviewer",
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID": "0f892487-0a8c-45b5-8cea-bbe95c64",
+    }
     document = {
         "gate_id": "G2",
         "integration_commit": "11" * 20,
@@ -3504,12 +3555,42 @@ def test_command_gate_replay_contract_binds_launcher_runtime_identity() -> None:
         "input_artifacts": [],
         "fresh_outputs": [],
         "bound_process_launcher": _test_bound_process_launcher_identity(),
+        "public_build_profile": {
+            "schema_version": (
+                release_manifest.COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION
+            ),
+            "values": public_build_values,
+            "sha256": hashlib.sha256(_canonical(public_build_values)).hexdigest(),
+            "live_test": {
+                "values": {
+                    **public_build_values,
+                    "NEXT_PUBLIC_CONCORDIA_MODE": "live",
+                },
+                "sha256": hashlib.sha256(
+                    _canonical(
+                        {
+                            **public_build_values,
+                            "NEXT_PUBLIC_CONCORDIA_MODE": "live",
+                        }
+                    )
+                ).hexdigest(),
+            },
+        },
     }
     original = release_manifest._command_gate_replay_projection(document)
     changed = json.loads(json.dumps(document))
     changed["bound_process_launcher"]["shim_sha256"] = "55" * 32
 
     assert release_manifest._command_gate_replay_projection(changed) != original
+
+    changed_profile = json.loads(json.dumps(document))
+    changed_profile["public_build_profile"]["values"][
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID"
+    ] = "0f892487-0a8c-45b5-8cea-bbe95c65"
+    assert (
+        release_manifest._command_gate_replay_projection(changed_profile)
+        != original
+    )
 
 
 @pytest.mark.parametrize(

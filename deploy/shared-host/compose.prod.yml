@@ -287,7 +287,7 @@ services:
       args:
         NEXT_PUBLIC_GATEWAY_URL: ""
         NEXT_PUBLIC_CONCORDIA_MODE: reviewer
-        NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:-csprclick-template}
+        NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:?required public CSPR.click AppID}
     image: concordia-dashboard:local
     restart: unless-stopped
     environment:

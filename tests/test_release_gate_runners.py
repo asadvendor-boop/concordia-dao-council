@@ -29,7 +29,7 @@ from shared.release_gate_contract import (
 
 
 FROZEN_COLLECTOR_CONTRACT_SHA256 = (
-    "e10cc73e9f4adf35ec674d0b76689bb7200abcab090d40b0e359bc63d7a30830"
+    "9438d469a4ecc2c0462b7b005731943bc244bef5a50242ea11091149ee8ff6f0"
 )
 NOW = "2026-07-23T00:00:00Z"
 OTHER = "2026-07-23T00:00:01Z"
@@ -105,6 +105,12 @@ def _isolate_fake_executor_tests_from_host_tool_installation(
         release_gate_runner,
         "_validate_uv_binary",
         lambda _raw, *, expected_architecture=None: None,
+    )
+    monkeypatch.setenv("NEXT_PUBLIC_GATEWAY_URL", "")
+    monkeypatch.setenv("NEXT_PUBLIC_CONCORDIA_MODE", "reviewer")
+    monkeypatch.setenv(
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID",
+        "0f892487-0a8c-45b5-8cea-bbe95c64",
     )
 
 
@@ -237,6 +243,75 @@ class _SuccessfulExecutor:
         return subprocess.CompletedProcess(argv, 0, stdout, b"")
 
 
+def test_g9_public_build_environment_is_exact_and_fail_closed() -> None:
+    expected = {
+        "NEXT_PUBLIC_GATEWAY_URL": "",
+        "NEXT_PUBLIC_CONCORDIA_MODE": "reviewer",
+        "NEXT_PUBLIC_CSPR_CLICK_APP_ID": "0f892487-0a8c-45b5-8cea-bbe95c64",
+    }
+    assert dict(release_gate_contract.COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE) == expected
+    assert release_gate_runner._g9_public_build_environment(expected) == expected
+
+    invalid_profiles = (
+        {},
+        {**expected, "NEXT_PUBLIC_CSPR_CLICK_APP_ID": ""},
+        {**expected, "NEXT_PUBLIC_CSPR_CLICK_APP_ID": "csprclick-template"},
+        {
+            **expected,
+            "NEXT_PUBLIC_CSPR_CLICK_APP_ID": (
+                "0f892487-0a8c-45b5-8cea-bbe95c640001"
+            ),
+        },
+        {**expected, "NEXT_PUBLIC_CONCORDIA_MODE": "live"},
+        {**expected, "NEXT_PUBLIC_GATEWAY_URL": "https://example.invalid"},
+    )
+    for invalid in invalid_profiles:
+        with pytest.raises(GateRunError, match="public dashboard build profile"):
+            release_gate_runner._g9_public_build_environment(invalid)
+
+
+def test_g9_public_build_profile_is_receipt_bound_and_caller_environment_is_closed(
+    tmp_path: Path,
+) -> None:
+    expected = dict(release_gate_contract.COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE)
+    profile = release_gate_runner._command_gate_public_build_profile(
+        "G9",
+        expected,
+    )
+    assert profile == {
+        "schema_version": (
+            release_gate_contract.COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION
+        ),
+        "values": expected,
+        "sha256": hashlib.sha256(_canonical(expected)).hexdigest(),
+        "live_test": {
+            "values": dict(
+                release_gate_contract.COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+            ),
+            "sha256": hashlib.sha256(
+                _canonical(
+                    dict(
+                        release_gate_contract
+                        .COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+                    )
+                )
+            ).hexdigest(),
+        },
+    }
+    assert release_gate_runner._command_gate_public_build_profile("G2", {}) is None
+
+    sanitized = release_gate_runner._sanitized_environment(
+        tmp_path,
+        gate_id="G9",
+        caller_environment={**expected, "UNRELATED_CALLER_VALUE": "must-not-pass"},
+    )
+    assert {
+        name: sanitized[name]
+        for name in release_gate_contract.COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE
+    } == expected
+    assert "UNRELATED_CALLER_VALUE" not in sanitized
+
+
 def test_shared_contract_is_exact_immutable_and_matches_collector_hash() -> None:
     assert COMMAND_GATE_COMMANDS == {
         "G2": (
@@ -304,8 +379,23 @@ def test_shared_contract_is_exact_immutable_and_matches_collector_hash() -> None
         ),
         "G9": (
             ("dashboard_install", "dashboard", ("npm", "ci")),
+            ("dashboard_unit", "dashboard", ("npm", "run", "test:unit")),
+            (
+                "dashboard_live_build",
+                "dashboard",
+                ("npm", "run", "build:e2e:live"),
+            ),
+            (
+                "dashboard_live_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:live"),
+            ),
             ("dashboard_build", "dashboard", ("npm", "run", "build")),
-            ("dashboard_e2e", "dashboard", ("npm", "run", "test:e2e")),
+            (
+                "dashboard_reviewer_e2e",
+                "dashboard",
+                ("npm", "run", "test:e2e:reviewer"),
+            ),
             (
                 "dashboard_audit",
                 "dashboard",
@@ -481,7 +571,8 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
     receipt_raw = receipt_path.read_bytes()
     receipt = json.loads(receipt_raw)
     assert receipt_raw == _canonical(receipt)
-    assert receipt["schema_version"] == "concordia.command_gate_receipt.v2"
+    assert receipt["schema_version"] == "concordia.command_gate_receipt.v3"
+    assert receipt["public_build_profile"] is None
     assert receipt["gate_id"] == "G2"
     assert receipt["frozen_commit"] == frozen_commit
     assert receipt["integration_commit"] == integration_commit
@@ -2128,11 +2219,35 @@ def test_g11_authority_is_split_from_stable_command_contract(
                 resolved_executable=resolved_executable,
             )
 
-    run_gate(
+    result = run_gate(
         "G9",
         repository_root=g9_repository,
         executor=_G9Executor(g9_repository),
     )
+    receipt = json.loads((g9_repository / result.receipt_path).read_bytes())
+    expected_profile = dict(
+        release_gate_contract.COMMAND_GATE_G9_PUBLIC_BUILD_PROFILE
+    )
+    assert receipt["public_build_profile"] == {
+        "schema_version": (
+            release_gate_contract.COMMAND_GATE_PUBLIC_BUILD_PROFILE_SCHEMA_VERSION
+        ),
+        "values": expected_profile,
+        "sha256": hashlib.sha256(_canonical(expected_profile)).hexdigest(),
+        "live_test": {
+            "values": dict(
+                release_gate_contract.COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+            ),
+            "sha256": hashlib.sha256(
+                _canonical(
+                    dict(
+                        release_gate_contract
+                        .COMMAND_GATE_G9_LIVE_TEST_BUILD_PROFILE
+                    )
+                )
+            ).hexdigest(),
+        },
+    }
 
 
 def test_g11_authority_rejects_zero_or_malformed_policy_digest(

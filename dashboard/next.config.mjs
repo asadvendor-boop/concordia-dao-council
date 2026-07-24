@@ -1,19 +1,20 @@
-const BUILD_ID_PATTERN = /^concordia-[0-9a-f]{64}$/;
+import {
+  deterministicBuildId,
+  productionPublicBuildInputs,
+} from "./scripts/deterministic-build-id.mjs";
 
-async function configuredBuildId() {
-  const buildId = process.env.CONCORDIA_DASHBOARD_BUILD_ID;
-  if (typeof buildId !== "string" || !BUILD_ID_PATTERN.test(buildId)) {
-    throw new Error(
-      "CONCORDIA_DASHBOARD_BUILD_ID must be set by the deterministic build wrapper",
-    );
-  }
-  return buildId;
-}
+const root = import.meta.dirname;
+const publicBuildInputs = productionPublicBuildInputs(process.env);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   basePath: "/dashboard",
-  generateBuildId: configuredBuildId,
+  env: publicBuildInputs,
+  generateBuildId: async () => deterministicBuildId(root, publicBuildInputs),
+  outputFileTracingRoot: root,
+  turbopack: {
+    root: root,
+  },
   // Removed output: "standalone" — use `npx next start` for deployment
   // Removed unused rewrites proxy — dashboard reads from NEXT_PUBLIC_GATEWAY_URL directly
 };
