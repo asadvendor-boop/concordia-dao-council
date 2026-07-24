@@ -87,7 +87,7 @@ from shared.release_gate_contract import (
 from shared.secret_variants import normalize_sensitive_key, secret_variants
 
 
-SCHEMA_VERSION = "concordia.release_manifest.v5"
+SCHEMA_VERSION = "concordia.release_manifest.v6"
 OBSERVATION_SCHEMA_VERSION = "concordia.release_observation_receipt.v1"
 PROOF_RECEIPT_SCHEMA_VERSION = "concordia.proof_verifier_receipt.v1"
 RELEASE_MANIFEST_PATH = "release/RELEASE_MANIFEST.json"
@@ -155,6 +155,33 @@ ARTIFACT_PATHS: dict[str, str] = {
     "proof_registry_v1": "artifacts/live/proof-registry/registry.json",
     "safepay_v2": "artifacts/live/safepay-lite-replaysafe-v2.json",
 }
+
+_DEPLOYMENT_TO_INTEGRATION_PATHS = frozenset(
+    {
+        *ARTIFACT_PATHS.values(),
+        "handoff/G11_CLAIM_POLICY.json",
+        *COMMAND_GATE_PRODUCED_ARTIFACT_PATHS["G11"],
+    }
+)
+_CURRENT_DEPLOYMENT_ARTIFACT_IDS = frozenset(
+    {
+        "exact_envelope_v3",
+        "native_treasury_execution_v1",
+        "official_x402_settlement_v1",
+        "safepay_v2",
+    }
+)
+_COMMAND_GATE_FIRST_ADD_PATHS = frozenset(
+    {
+        *COMMAND_GATE_RECEIPT_PATHS.values(),
+        *(
+            f"release/receipts/logs/{gate_id}/{command_id}.{stream}"
+            for gate_id, commands in COMMAND_GATE_COMMANDS.items()
+            for command_id, _working_directory, _argv in commands
+            for stream in ("stdout", "stderr")
+        ),
+    }
+)
 
 RECEIPT_PATHS: dict[str, str] = {
     "compose": "release/receipts/compose.json",
@@ -2596,6 +2623,7 @@ def _assert_release_only_history(
         *RECEIPT_PATHS.values(),
         *PROOF_RECEIPT_PATHS.values(),
         NPM_CAPTURE_PATH,
+        BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
         ORGANIZER_G12_AUDIT_PATH,
         ORGANIZER_G12_INVOCATION_PATH,
         RELEASE_MANIFEST_PATH,
@@ -2670,6 +2698,224 @@ def _assert_release_only_history(
         expected_parent = commit
     if expected_parent != descendant_commit:
         raise ReleaseManifestError("release history does not reach its descendant")
+
+
+def _assert_deployment_to_integration_history(
+    root: Path,
+    *,
+    deployment_commit: str,
+    integration_commit: str,
+) -> None:
+    """Require a linear, non-runtime evidence integration from D through R."""
+
+    deployment_commit = _git40(deployment_commit, "deployment commit")
+    integration_commit = _git40(integration_commit, "integration commit")
+    if (
+        not _commit_exists(root, deployment_commit)
+        or not _commit_exists(root, integration_commit)
+        or not _is_ancestor(root, deployment_commit, integration_commit)
+    ):
+        raise ReleaseManifestError(
+            "deployment commit must be an ancestor of integration commit"
+        )
+    try:
+        raw_commits = _git(
+            root,
+            [
+                "rev-list",
+                "--reverse",
+                f"{deployment_commit}..{integration_commit}",
+            ],
+            limit=_GIT_OUTPUT_LIMIT,
+        ).stdout.decode("ascii", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ReleaseManifestError(
+            "deployment-to-integration history identity is malformed"
+        ) from exc
+
+    expected_parent = deployment_commit
+    changed_paths: set[str] = set()
+    for raw_commit in raw_commits.splitlines():
+        commit = _git40(raw_commit, "deployment-to-integration commit")
+        try:
+            parents = (
+                _git(
+                    root,
+                    ["rev-list", "--parents", "-n", "1", commit],
+                    limit=_CONTROL_LIMIT,
+                )
+                .stdout.decode("ascii", errors="strict")
+                .split()
+            )
+        except UnicodeDecodeError as exc:
+            raise ReleaseManifestError(
+                "deployment-to-integration parent is malformed"
+            ) from exc
+        if parents != [commit, expected_parent]:
+            raise ReleaseManifestError(
+                "deployment-to-integration history is not strictly linear"
+            )
+        raw_changes = _git(
+            root,
+            [
+                "diff-tree",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-commit-id",
+                "--name-status",
+                "-r",
+                "-z",
+                expected_parent,
+                commit,
+            ],
+            limit=_GIT_OUTPUT_LIMIT,
+        ).stdout.split(b"\0")
+        entries = [item for item in raw_changes if item]
+        if not entries:
+            raise ReleaseManifestError(
+                "deployment-to-integration history contains an empty commit"
+            )
+        if len(entries) % 2:
+            raise ReleaseManifestError(
+                "deployment-to-integration path status is malformed"
+            )
+        for index in range(0, len(entries), 2):
+            raw_status, raw_path = entries[index : index + 2]
+            if raw_status not in {b"A", b"M"}:
+                raise ReleaseManifestError(
+                    "deployment-to-integration history is not append-or-modify only"
+                )
+            try:
+                path = raw_path.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise ReleaseManifestError(
+                    "deployment-to-integration path is not UTF-8"
+                ) from exc
+            if path not in _DEPLOYMENT_TO_INTEGRATION_PATHS:
+                raise ReleaseManifestError(
+                    "deployment-to-integration change is outside the exact allowlist"
+                )
+            changed_paths.add(path)
+        expected_parent = commit
+    if expected_parent != integration_commit:
+        raise ReleaseManifestError(
+            "deployment-to-integration history does not reach integration"
+        )
+
+    for path in sorted(changed_paths):
+        raw_tree = _git(
+            root,
+            ["ls-tree", "-z", integration_commit, "--", path],
+            limit=_CONTROL_LIMIT,
+        ).stdout
+        rows = [row for row in raw_tree.split(b"\0") if row]
+        if len(rows) != 1:
+            raise ReleaseManifestError(
+                "deployment-to-integration output is not one regular file"
+            )
+        try:
+            metadata, observed_path = rows[0].split(b"\t", 1)
+            mode, kind, _object_id = metadata.decode(
+                "ascii", errors="strict"
+            ).split()
+            decoded_path = observed_path.decode("utf-8", errors="strict")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ReleaseManifestError(
+                "deployment-to-integration output identity is malformed"
+            ) from exc
+        if (
+            decoded_path != path
+            or kind != "blob"
+            or mode not in {"100644", "100755"}
+        ):
+            raise ReleaseManifestError(
+                "deployment-to-integration output is not a regular file"
+            )
+        _git_blob(root, integration_commit, path, _ARTIFACT_LIMIT)
+
+
+def _assert_exact_command_gate_commit(
+    root: Path,
+    *,
+    integration_commit: str,
+    command_commit: str,
+) -> None:
+    """Require one direct first-add commit containing exactly all gate receipts."""
+
+    integration_commit = _git40(integration_commit, "integration commit")
+    command_commit = _git40(command_commit, "command-gate commit")
+    if not _commit_exists(root, command_commit):
+        raise ReleaseManifestError("command-gate commit is unavailable")
+    try:
+        parents = (
+            _git(
+                root,
+                ["rev-list", "--parents", "-n", "1", command_commit],
+                limit=_CONTROL_LIMIT,
+            )
+            .stdout.decode("ascii", errors="strict")
+            .split()
+        )
+    except UnicodeDecodeError as exc:
+        raise ReleaseManifestError("command-gate parent is malformed") from exc
+    if parents != [command_commit, integration_commit]:
+        raise ReleaseManifestError(
+            "command-gate commit is not the direct child of integration"
+        )
+    raw_changes = _git(
+        root,
+        [
+            "diff-tree",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "-z",
+            integration_commit,
+            command_commit,
+        ],
+        limit=_GIT_OUTPUT_LIMIT,
+    ).stdout.split(b"\0")
+    entries = [item for item in raw_changes if item]
+    if len(entries) % 2:
+        raise ReleaseManifestError("command-gate path status is malformed")
+    observed_paths: set[str] = set()
+    for index in range(0, len(entries), 2):
+        raw_status, raw_path = entries[index : index + 2]
+        if raw_status != b"A":
+            raise ReleaseManifestError(
+                "command-gate commit is not exact first-add history"
+            )
+        try:
+            path = raw_path.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ReleaseManifestError("command-gate path is not UTF-8") from exc
+        if path in observed_paths:
+            raise ReleaseManifestError("command-gate path is duplicated")
+        observed_paths.add(path)
+    if observed_paths != _COMMAND_GATE_FIRST_ADD_PATHS:
+        raise ReleaseManifestError(
+            "command-gate commit does not contain the exact 37 receipt/log paths"
+        )
+
+
+def _assert_host_toolchain_follows_command_commit(
+    *,
+    command_commit: str,
+    host_toolchain_projection: Mapping[str, object],
+) -> None:
+    """Bind the receipt-only host-authority child to the exact command commit."""
+
+    command_commit = _git40(command_commit, "command-gate commit")
+    source_commit = _git40(
+        host_toolchain_projection.get("source_commit"),
+        "host-toolchain source commit",
+    )
+    if source_commit != command_commit:
+        raise ReleaseManifestError(
+            "host-toolchain authority does not directly follow command gates"
+        )
 
 
 def _command_gate_replay_projection(
@@ -2811,6 +3057,7 @@ def _load_command_gate_receipts(
     dict[str, dict[str, object]],
     dict[str, _BoundFile],
     list[_BoundFile],
+    str,
     str,
     str,
 ]:
@@ -3148,6 +3395,19 @@ def _load_command_gate_receipts(
     if len(integration_commits) != 1:
         raise ReleaseManifestError("command gates do not bind one integration commit")
     integration_commit = next(iter(integration_commits))
+    command_commits = {
+        bound.artifact_commit for bound in receipt_bounds.values()
+    }
+    if len(command_commits) != 1:
+        raise ReleaseManifestError(
+            "command gates do not share one exact receipt commit"
+        )
+    command_commit = next(iter(command_commits))
+    _assert_exact_command_gate_commit(
+        root,
+        integration_commit=integration_commit,
+        command_commit=command_commit,
+    )
     for receipt_bound in receipt_bounds.values():
         _assert_release_only_history(
             root,
@@ -3174,7 +3434,14 @@ def _load_command_gate_receipts(
                 "current release code differs from the command-gated integration "
                 f"commit: {exc}"
             ) from exc
-    return receipts, receipt_bounds, all_bounds, frozen_commit, integration_commit
+    return (
+        receipts,
+        receipt_bounds,
+        all_bounds,
+        frozen_commit,
+        integration_commit,
+        command_commit,
+    )
 
 
 def _verify_command_gate_receipts_locked(
@@ -3186,7 +3453,14 @@ def _verify_command_gate_receipts_locked(
     _require_repository(root)
     _recover_capture_publication(root)
     _require_clean_worktree(root)
-    receipts, _, _, frozen_commit, integration_commit = _load_command_gate_receipts(
+    (
+        receipts,
+        _,
+        _,
+        frozen_commit,
+        integration_commit,
+        _,
+    ) = _load_command_gate_receipts(
         root,
         _load_secret_canaries(),
         require_current_tree=True,
@@ -3594,6 +3868,12 @@ _COMPOSE_SERVICE_ALLOWLIST = frozenset(
         "x402-provider",
     }
 )
+_COMPOSE_THIRD_PARTY_SERVICES = frozenset(
+    {"ipfs", "jaeger", "otel-collector"}
+)
+_COMPOSE_PROJECT_SERVICES = (
+    _COMPOSE_SERVICE_ALLOWLIST - _COMPOSE_THIRD_PARTY_SERVICES
+)
 _COMPOSE_BUILD_ALLOWLIST = frozenset(
     {"dashboard", "gateway", "x402-official"}
 )
@@ -3998,6 +4278,10 @@ def _validate_payment_artifact_runtime_binding(
 ) -> None:
     """Bind payment capture identities to the observed deployed image bytes."""
 
+    deployment_commit = _git40(
+        runtime.get("deployment_commit"),
+        "payment artifact runtime deployment commit",
+    )
     containers = _sequence(
         runtime.get("containers"),
         "payment artifact runtime containers",
@@ -4027,6 +4311,16 @@ def _validate_payment_artifact_runtime_binding(
             "official-x402 service",
         ),
     )
+    for artifact_id in sorted(_CURRENT_DEPLOYMENT_ARTIFACT_IDS):
+        artifact = artifacts.get(artifact_id)
+        if artifact is None:
+            raise ReleaseManifestError(
+                f"{artifact_id} current deployment artifact is unavailable"
+            )
+        if artifact.deployment_commit != deployment_commit:
+            raise ReleaseManifestError(
+                f"{artifact_id} deployment commit differs from observed runtime"
+            )
     for artifact_id, service_id, digest_field, label in bindings:
         artifact = artifacts.get(artifact_id)
         if artifact is None:
@@ -4252,13 +4546,21 @@ def _compose_projection(
             or image.startswith("concordia/")
             or image.startswith("concordia-")
         )
-        if local_image:
+        if service_id in _COMPOSE_PROJECT_SERVICES:
+            if not local_image:
+                raise ReleaseManifestError(
+                    f"Compose service {service_id} project image policy differs"
+                )
             if image.endswith(":latest") or ":" not in image:
                 raise ReleaseManifestError(
                     f"Compose service {service_id} local image is mutable"
                 )
             image_policy = "runtime_digest_and_commit_bound"
         else:
+            if local_image:
+                raise ReleaseManifestError(
+                    f"Compose service {service_id} third-party image policy differs"
+                )
             if re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image) is None:
                 raise ReleaseManifestError(
                     f"Compose service {service_id} external image is not digest-pinned"
@@ -4689,6 +4991,7 @@ _RUNTIME_KEYS = {
 
 
 def _runtime_projection(
+    root: Path,
     raw: Sequence[Mapping[str, object]],
     compose_projection: Mapping[str, object],
     canaries: Sequence[bytes],
@@ -4697,6 +5000,7 @@ def _runtime_projection(
 ) -> dict[str, object]:
     integration_commit = _git40(integration_commit, "runtime integration commit")
     containers: list[dict[str, object]] = []
+    project_deployment_commits: set[str] = set()
     for raw_item in raw:
         item = _mapping(raw_item, "runtime container")
         projected = {key: item.get(key) for key in _RUNTIME_KEYS}
@@ -4741,7 +5045,8 @@ def _runtime_projection(
         )
     }
     for container in containers:
-        service = compose_by_service[str(container["service_id"])]
+        service_id = str(container["service_id"])
+        service = compose_by_service[service_id]
         if container["config_image"] != service.get("image"):
             raise ReleaseManifestError("runtime image differs from rendered Compose")
         if container["config_hash"] != service.get("config_hash"):
@@ -4755,8 +5060,11 @@ def _runtime_projection(
                 "runtime health status does not match Compose healthcheck presence"
             )
         image = _text(service.get("image"), "Compose service image")
-        if "@sha256:" in image:
-            if re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image) is None:
+        if service_id in _COMPOSE_THIRD_PARTY_SERVICES:
+            if (
+                service.get("image_policy") != "compose_digest_pinned"
+                or re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image) is None
+            ):
                 raise ReleaseManifestError(
                     "third-party runtime image is not digest pinned"
                 )
@@ -4768,16 +5076,41 @@ def _runtime_projection(
                     "third-party image has unexpected project labels"
                 )
         else:
+            if service.get("image_policy") != "runtime_digest_and_commit_bound":
+                raise ReleaseManifestError(
+                    "project runtime image policy does not require OCI identity"
+                )
+            revision = _git40(
+                container.get("image_revision"),
+                f"{service_id} runtime image revision",
+            )
+            deployment = _git40(
+                container.get("image_deployment"),
+                f"{service_id} runtime image deployment",
+            )
             if (
-                container.get("image_revision") != integration_commit
-                or container.get("image_deployment") != integration_commit
+                revision != deployment
                 or container.get("image_source")
                 != "https://github.com/asadvendor-boop/concordia-dao-council"
             ):
                 raise ReleaseManifestError(
-                    "project runtime image OCI identity does not bind the integration commit"
+                    "project runtime image OCI identity does not bind one deployment commit"
                 )
-    projection = {"containers": containers}
+            project_deployment_commits.add(deployment)
+    if len(project_deployment_commits) != 1:
+        raise ReleaseManifestError(
+            "project runtime images do not share one deployment commit"
+        )
+    deployment_commit = next(iter(project_deployment_commits))
+    _assert_deployment_to_integration_history(
+        root,
+        deployment_commit=deployment_commit,
+        integration_commit=integration_commit,
+    )
+    projection = {
+        "deployment_commit": deployment_commit,
+        "containers": containers,
+    }
     _assert_safe_projection(projection, canaries, "runtime projection")
     return projection
 
@@ -6884,6 +7217,14 @@ def _project_snapshot(
     if pages.get("deployment_commit") != npm.get("publication_commit"):
         raise ReleaseManifestError("Pages and npm do not bind the same release commit")
     release_commit = _git40(pages.get("deployment_commit"), "surface release commit")
+    integration_commit = _git40(
+        integration_commit,
+        "snapshot integration commit",
+    )
+    if release_commit != integration_commit:
+        raise ReleaseManifestError(
+            "Pages and npm do not bind the command-gated integration commit"
+        )
     if not _commit_exists(root, release_commit) or not _is_ancestor(
         root, release_commit, "HEAD"
     ):
@@ -6896,6 +7237,7 @@ def _project_snapshot(
     projections = {
         "compose": compose,
         "runtime": _runtime_projection(
+            root,
             snapshot.runtime,
             compose,
             canaries,
@@ -7702,17 +8044,26 @@ def _capture_release_observations_locked(
     ]
     _preflight_outputs_absent(root, output_paths)
     canaries = _load_secret_canaries()
-    _, host_toolchain_bound, _ = _host_toolchain_binding(root)
+    (
+        _,
+        host_toolchain_bound,
+        host_toolchain_projection,
+    ) = _host_toolchain_binding(root)
     (
         _,
         _,
         command_gate_bounds,
         _,
         integration_commit,
+        command_commit,
     ) = _load_command_gate_receipts(
         root,
         canaries,
         require_current_tree=False,
+    )
+    _assert_host_toolchain_follows_command_commit(
+        command_commit=command_commit,
+        host_toolchain_projection=host_toolchain_projection,
     )
     snapshot = _collector_factory(root).collect()
     now = _utc_now()
@@ -8909,6 +9260,7 @@ def _validate_g12_manifest_offline(
         "completion_scope",
         "frozen_commit",
         "integration_commit",
+        "deployment_commit",
         "g1_freeze",
         "host_toolchain",
         "post_freeze_corrections",
@@ -8942,6 +9294,7 @@ def _validate_g12_manifest_offline(
         _,
         frozen_commit,
         integration_commit,
+        command_commit,
     ) = _load_command_gate_receipts(root, canaries, require_current_tree=True)
     if (
         manifest.get("frozen_commit") != frozen_commit
@@ -8952,6 +9305,10 @@ def _validate_g12_manifest_offline(
     if manifest.get("g1_freeze") != g1_freeze:
         raise ReleaseManifestError("G12 G1 freeze authority differs")
     _, _, host_toolchain_projection = _host_toolchain_binding(root)
+    _assert_host_toolchain_follows_command_commit(
+        command_commit=command_commit,
+        host_toolchain_projection=host_toolchain_projection,
+    )
     if manifest.get("host_toolchain") != host_toolchain_projection:
         raise ReleaseManifestError("G12 host-toolchain authority differs")
     post_freeze_corrections, _ = _post_freeze_corrections_projection(
@@ -9068,6 +9425,12 @@ def _validate_g12_manifest_offline(
         raise ReleaseManifestError("G12 observation receipt bindings differ")
 
     artifacts = _load_artifacts(root)
+    deployment_commit = _git40(
+        captured["runtime"].get("deployment_commit"),
+        "G12 runtime deployment commit",
+    )
+    if manifest.get("deployment_commit") != deployment_commit:
+        raise ReleaseManifestError("G12 deployment identity differs")
     _validate_payment_artifact_runtime_binding(
         artifacts,
         _mapping(captured.get("runtime"), "captured runtime"),
@@ -9282,6 +9645,7 @@ def _validate_g12_manifest_offline(
         "frozen_commit": frozen_commit,
         "generated_at": _format_now(generated_time),
         "integration_commit": integration_commit,
+        "deployment_commit": deployment_commit,
         "status": "verified_offline",
     }
 
@@ -9348,12 +9712,17 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
         command_gate_bounds,
         frozen_commit,
         integration_commit,
+        command_commit,
     ) = _load_command_gate_receipts(
         root,
         canaries,
         require_current_tree=True,
     )
     _, host_toolchain_bound, host_toolchain_projection = _host_toolchain_binding(root)
+    _assert_host_toolchain_follows_command_commit(
+        command_commit=command_commit,
+        host_toolchain_projection=host_toolchain_projection,
+    )
     post_freeze_corrections, post_freeze_bounds = _post_freeze_corrections_projection(
         root,
         integration_commit=integration_commit,
@@ -9421,6 +9790,10 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
     _validate_payment_artifact_runtime_binding(
         artifacts,
         _mapping(captured.get("runtime"), "captured runtime"),
+    )
+    deployment_commit = _git40(
+        captured["runtime"].get("deployment_commit"),
+        "release runtime deployment commit",
     )
     proof_bindings: list[dict[str, object]] = []
     for artifact_id, artifact in artifacts.items():
@@ -9571,6 +9944,7 @@ def _assemble_release_manifest_locked(root: Path) -> Path:
         "completion_scope": "G2-G12",
         "frozen_commit": frozen_commit,
         "integration_commit": integration_commit,
+        "deployment_commit": deployment_commit,
         "g1_freeze": g1_freeze,
         "host_toolchain": host_toolchain_projection,
         "post_freeze_corrections": post_freeze_corrections,

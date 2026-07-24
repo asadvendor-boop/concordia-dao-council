@@ -18,7 +18,7 @@ from typing import Mapping, Sequence
 
 import pytest
 
-from shared import release_manifest
+from shared import release_gate_contract, release_manifest
 from shared.proof_registry import (
     REQUIRED_CHECKS_BY_PROOF_TYPE,
     validate_release_registry_document,
@@ -128,6 +128,18 @@ def _canonical(value: object) -> bytes:
     )
 
 
+def test_release_command_environment_matches_the_frozen_allowlist() -> None:
+    environment = release_manifest._sanitized_command_environment()
+    allowed = set(
+        release_gate_contract.BOUND_TOOL_POLICY["allowed_environment_keys"]
+    )
+
+    assert set(environment) <= allowed
+    assert environment["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+    assert environment["NPM_CONFIG_GLOBALCONFIG"] == "/dev/null"
+    assert environment["NPM_CONFIG_REGISTRY"] == "https://registry.npmjs.org/"
+
+
 def _test_bound_process_launcher_identity() -> dict[str, object]:
     return {
         "schema_version": "concordia.bound_process_launcher.v1",
@@ -177,6 +189,82 @@ def _write_bytes(repository: Path, relative: str, value: bytes) -> None:
     target = repository / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(value)
+
+
+def _deployment_to_integration_paths() -> set[str]:
+    return {
+        *ARTIFACT_PATHS.values(),
+        "handoff/G11_CLAIM_POLICY.json",
+        *release_manifest.COMMAND_GATE_PRODUCED_ARTIFACT_PATHS["G11"],
+    }
+
+
+def _new_deployment_history_base(repository: Path) -> str:
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.name", "Release Test")
+    _git(repository, "config", "user.email", "release@example.invalid")
+    _write_bytes(
+        repository,
+        "scripts/build_release_manifest.py",
+        b"#!/usr/bin/env python3\nprint('release runner')\n",
+    )
+    _write_bytes(repository, "gateway/app.py", b"RUNTIME = 'reviewed'\n")
+    _write(repository, ARTIFACT_PATHS["safepay_v2"], {"generation": "deployment"})
+    return _commit(repository, "reviewed runtime deployment D")
+
+
+def _write_evidence_integration(repository: Path) -> str:
+    for index, relative in enumerate(sorted(_deployment_to_integration_paths())):
+        if relative.endswith(".md"):
+            _write_bytes(repository, relative, f"# Claim surface {index}\n".encode())
+        else:
+            _write(
+                repository,
+                relative,
+                {"generation": "integration", "path": relative},
+            )
+    return _commit(repository, "evidence integration R")
+
+
+def _write_exact_command_gate_commit(repository: Path) -> str:
+    paths: list[str] = []
+    for gate_id, receipt_path in COMMAND_GATE_RECEIPT_PATHS.items():
+        _write(repository, receipt_path, {"gate_id": gate_id})
+        paths.append(receipt_path)
+        for command_id, _working_directory, _argv in COMMAND_GATE_COMMANDS[gate_id]:
+            for stream in ("stdout", "stderr"):
+                relative = _command_log_path(gate_id, command_id, stream)
+                _write_bytes(repository, relative, b"")
+                paths.append(relative)
+    assert len(paths) == 37
+    return _commit(repository, "exact command gate receipt commit C")
+
+
+@pytest.fixture(scope="module")
+def real_release_history(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, dict[str, str]]:
+    repository = tmp_path_factory.mktemp("real-release-history") / "repository"
+    deployment_commit = _new_deployment_history_base(repository)
+    integration_commit = _write_evidence_integration(repository)
+    command_commit = _write_exact_command_gate_commit(repository)
+    candidate = release_manifest.build_host_toolchain_receipt_candidate(
+        repository_root=repository,
+        source_commit=command_commit,
+    )
+    _write(
+        repository,
+        release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
+        candidate,
+    )
+    host_commit = _commit(repository, "receipt-only host authority H")
+    return repository, {
+        "deployment": deployment_commit,
+        "integration": integration_commit,
+        "command": command_commit,
+        "host": host_commit,
+    }
 
 
 def _command_log_path(gate_id: str, command_id: str, stream: str) -> str:
@@ -1063,7 +1151,10 @@ def test_payment_artifact_image_digests_bind_to_observed_runtime() -> None:
         adapter_results=_adapter_results(documents),
     )
     compose = _compose_raw()
-    runtime = {"containers": _runtime_raw(compose, "2" * 40)}
+    runtime = {
+        "deployment_commit": "2" * 40,
+        "containers": _runtime_raw(compose, "2" * 40),
+    }
 
     release_manifest._validate_payment_artifact_runtime_binding(
         artifacts,
@@ -1079,6 +1170,28 @@ def test_payment_artifact_image_digests_bind_to_observed_runtime() -> None:
                 documents,
                 adapter_results=_adapter_results(documents),
             ),
+            runtime,
+        )
+
+
+def test_payment_artifact_deployment_must_match_runtime_D() -> None:
+    documents = _artifact_documents("1" * 40, "2" * 40)
+    artifacts = _parity_artifacts(
+        documents,
+        adapter_results=_adapter_results(documents),
+    )
+    artifacts["safepay_v2"] = replace(
+        artifacts["safepay_v2"],
+        deployment_commit="3" * 40,
+    )
+    runtime = {
+        "deployment_commit": "2" * 40,
+        "containers": _runtime_raw(_compose_raw(), "2" * 40),
+    }
+
+    with pytest.raises(ReleaseManifestError, match="deployment commit"):
+        release_manifest._validate_payment_artifact_runtime_binding(
+            artifacts,
             runtime,
         )
 
@@ -1337,6 +1450,10 @@ def _compose_raw() -> dict[str, object]:
             }
         ],
     }
+    third_party_images = {
+        name: f"registry.example/{name}@sha256:{hashlib.sha256(name.encode()).hexdigest()}"
+        for name in release_manifest._COMPOSE_THIRD_PARTY_SERVICES
+    }
     services: dict[str, object] = {}
     for name in names:
         environment: dict[str, str] = {"CASPER_CHAIN_NAME": "casper-test"}
@@ -1349,7 +1466,7 @@ def _compose_raw() -> dict[str, object]:
                 environment[key] = f"/run/secrets/{target}"
                 granted_secrets.append({"source": target, "target": target})
         services[name] = {
-            "image": f"concordia/{name}:finals",
+            "image": third_party_images.get(name, f"concordia/{name}:finals"),
             "build": (
                 {"context": "."}
                 if name in {"gateway", "dashboard", "x402-official"}
@@ -1417,6 +1534,7 @@ def _runtime_raw(
     result: list[dict[str, object]] = []
     for name in sorted(compose["services"]):
         digest = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+        project_image = name in release_manifest._COMPOSE_PROJECT_SERVICES
         result.append(
             {
                 "service_id": name,
@@ -1424,11 +1542,15 @@ def _runtime_raw(
                 "container_id": hashlib.sha256(
                     ("container:" + name).encode()
                 ).hexdigest(),
-                "config_image": f"concordia/{name}:finals",
+                "config_image": compose["services"][name]["image"],
                 "image_id": digest,
-                "image_revision": integration_commit,
-                "image_source": "https://github.com/asadvendor-boop/concordia-dao-council",
-                "image_deployment": integration_commit,
+                "image_revision": integration_commit if project_image else None,
+                "image_source": (
+                    "https://github.com/asadvendor-boop/concordia-dao-council"
+                    if project_image
+                    else None
+                ),
+                "image_deployment": integration_commit if project_image else None,
                 "state_status": "running",
                 "health_status": "healthy",
                 "started_at": "2026-07-22T23:00:00Z",
@@ -2045,16 +2167,16 @@ def _snapshot(
     compose["services"]["x402-official"]["volumes"][1]["source"] = str(
         repository.parent / "config/x402-official"
     )
-    integration_commit = json.loads(
-        (repository / COMMAND_GATE_RECEIPT_PATHS["G2"]).read_bytes()
-    )["integration_commit"]
+    deployment_commit = json.loads(
+        (repository / ARTIFACT_PATHS["safepay_v2"]).read_bytes()
+    )["deployment_commit"]
     registry = json.loads(
         (repository / ARTIFACT_PATHS["proof_registry_v1"]).read_bytes()
     )
     return release_manifest.RawObservationSnapshot(
         observed_at=observed_at,
         compose=compose,
-        runtime=_runtime_raw(compose, integration_commit),
+        runtime=_runtime_raw(compose, deployment_commit),
         caddy=_caddy_raw(),
         public_probes=_http_raw(observed_at, registry["public_items"]),
         pages={
@@ -2337,20 +2459,6 @@ def release_repository(
         release_manifest._G1_POST_FREEZE_CORRECTIONS_PATH,
         post_freeze_authority,
     )
-    _write(
-        repository,
-        release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
-        {
-            "schema_version": (
-                release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_SCHEMA_VERSION
-            ),
-            "source_commit": source_commit,
-            "runner_sha256": hashlib.sha256(module_target.read_bytes()).hexdigest(),
-            "host_id": "55" * 32,
-            "tools": {},
-        },
-    )
-    _commit(repository, "host-toolchain authority")
     _write_bytes(
         repository,
         "gateway/app.py",
@@ -2385,8 +2493,6 @@ def release_repository(
         b"safepay_quote_token_secret = True\n",
     )
     _commit(repository, "accepted post-freeze SafePay correction")
-    _write(repository, "deployment.json", {"source_commit": source_commit})
-    deployment_commit = _commit(repository, "deployment")
     _write(
         repository,
         release_manifest.COMPOSE_FILE_PATH,
@@ -2399,6 +2505,8 @@ def release_repository(
             },
         },
     )
+    _write(repository, "deployment.json", {"source_commit": source_commit})
+    deployment_commit = _commit(repository, "deployment")
     for artifact_id, relative in ARTIFACT_PATHS.items():
         _write(
             repository,
@@ -2414,6 +2522,20 @@ def release_repository(
         frozen_commit=source_commit,
         integration_commit=artifacts_commit,
     )
+    _write(
+        repository,
+        release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
+        {
+            "schema_version": (
+                release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_SCHEMA_VERSION
+            ),
+            "source_commit": gate_receipts_commit,
+            "runner_sha256": hashlib.sha256(module_target.read_bytes()).hexdigest(),
+            "host_id": "55" * 32,
+            "tools": {},
+        },
+    )
+    host_commit = _commit(repository, "host-toolchain authority")
 
     test_cid_bytes = (
         bytes.fromhex("01551220") + hashlib.sha256(_TEST_IPFS_BODY).digest()
@@ -2493,7 +2615,7 @@ def release_repository(
         )
         authority = release_manifest.HostToolchainAuthority(
             repository_root=root,
-            source_commit=source_commit,
+            source_commit=gate_receipts_commit,
             receipt_raw=bound.raw,
         )
         projection = {
@@ -2503,7 +2625,7 @@ def release_repository(
             "path": release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
             "sha256": bound.sha256,
             "artifact_commit": bound.artifact_commit,
-            "source_commit": source_commit,
+            "source_commit": gate_receipts_commit,
             "runner_sha256": hashlib.sha256(module_target.read_bytes()).hexdigest(),
             "host_id": "55" * 32,
             "tools_sha256": hashlib.sha256(_canonical({})).hexdigest(),
@@ -2616,6 +2738,7 @@ def release_repository(
             "artifacts": artifacts_commit,
             "integration": artifacts_commit,
             "gate_receipts": gate_receipts_commit,
+            "host": host_commit,
         },
         collector,
         verifier,
@@ -3206,7 +3329,7 @@ def test_capture_is_code_collected_strict_projected_and_commit_bound(
     assert len(compose_receipt["projection"]["services"]) == 15
     assert (
         compose_receipt["projection"]["tracked_compose"]["artifact_commit"]
-        == commits["artifacts"]
+        == commits["deployment"]
     )
     encoded = b"".join(
         (repository / path).read_bytes() for path in RECEIPT_PATHS.values()
@@ -3368,6 +3491,221 @@ def test_command_gate_diagnostic_is_read_only_and_commit_bound(
     }
     assert collector.calls == 0
     assert not (repository / RELEASE_MANIFEST_PATH).exists()
+
+
+def test_real_release_flow_accepts_runtime_D_evidence_R_gate_C_host_H(
+    real_release_history: tuple[Path, dict[str, str]],
+) -> None:
+    repository, commits = real_release_history
+
+    release_manifest._assert_deployment_to_integration_history(
+        repository,
+        deployment_commit=commits["deployment"],
+        integration_commit=commits["integration"],
+    )
+    release_manifest._assert_exact_command_gate_commit(
+        repository,
+        integration_commit=commits["integration"],
+        command_commit=commits["command"],
+    )
+    release_manifest._assert_release_only_history(
+        repository,
+        integration_commit=commits["integration"],
+        descendant_commit=commits["host"],
+    )
+    _authority, host_bound, projection = release_manifest._host_toolchain_binding(
+        repository
+    )
+    release_manifest._assert_host_toolchain_follows_command_commit(
+        command_commit=commits["command"],
+        host_toolchain_projection=projection,
+    )
+
+    assert host_bound.artifact_commit == commits["host"]
+    assert projection["source_commit"] == commits["command"]
+
+
+def test_release_history_accepts_host_authority_after_gate_receipts(
+    real_release_history: tuple[Path, dict[str, str]],
+) -> None:
+    repository, commits = real_release_history
+    changed = _git(
+        repository,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        commits["command"],
+    ).decode().splitlines()
+
+    assert len(changed) == 37
+    release_manifest._assert_release_only_history(
+        repository,
+        integration_commit=commits["integration"],
+        descendant_commit=commits["host"],
+    )
+    release_manifest._host_toolchain_binding(repository)
+
+
+def test_command_gate_commit_rejects_staggered_receipt_groups(
+    real_release_history: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    source, commits = real_release_history
+    repository = tmp_path / "staggered-command-gates"
+    _git(tmp_path, "clone", "--quiet", source.as_posix(), repository.as_posix())
+    _git(repository, "config", "user.name", "Release Test")
+    _git(repository, "config", "user.email", "release@example.invalid")
+    _git(repository, "checkout", "--detach", "--quiet", commits["integration"])
+    paths = sorted(release_manifest._COMMAND_GATE_FIRST_ADD_PATHS)
+    midpoint = len(paths) // 2
+    for relative in paths[:midpoint]:
+        _write_bytes(repository, relative, b"first command-gate group\n")
+    _commit(repository, "first command-gate receipt group")
+    for relative in paths[midpoint:]:
+        _write_bytes(repository, relative, b"second command-gate group\n")
+    staggered_commit = _commit(repository, "second command-gate receipt group")
+
+    with pytest.raises(ReleaseManifestError, match="direct child|exact 37"):
+        release_manifest._assert_exact_command_gate_commit(
+            repository,
+            integration_commit=commits["integration"],
+            command_commit=staggered_commit,
+        )
+
+
+def test_host_authority_rejects_non_direct_child_and_post_authority_source_change(
+    real_release_history: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    source, commits = real_release_history
+    receipt_raw = (
+        source / release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH
+    ).read_bytes()
+
+    non_direct = tmp_path / "non-direct"
+    _git(tmp_path, "clone", "--quiet", source.as_posix(), non_direct.as_posix())
+    _git(non_direct, "config", "user.name", "Release Test")
+    _git(non_direct, "config", "user.email", "release@example.invalid")
+    _git(non_direct, "checkout", "--detach", "--quiet", commits["command"])
+    _write_bytes(non_direct, NPM_CAPTURE_PATH, b"release-only intermediary\n")
+    _commit(non_direct, "intermediary release output")
+    _write_bytes(
+        non_direct,
+        release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
+        receipt_raw,
+    )
+    _commit(non_direct, "non-direct host authority")
+    with pytest.raises(ReleaseManifestError, match="authority|lineage"):
+        release_manifest._host_toolchain_binding(non_direct)
+
+    later_source = tmp_path / "later-source"
+    _git(tmp_path, "clone", "--quiet", source.as_posix(), later_source.as_posix())
+    _git(later_source, "config", "user.name", "Release Test")
+    _git(later_source, "config", "user.email", "release@example.invalid")
+    _git(later_source, "checkout", "--detach", "--quiet", commits["command"])
+    _write_bytes(later_source, NPM_CAPTURE_PATH, b"release-only intermediary\n")
+    intermediary_commit = _commit(later_source, "release-only intermediary")
+    candidate = release_manifest.build_host_toolchain_receipt_candidate(
+        repository_root=later_source,
+        source_commit=intermediary_commit,
+    )
+    _write(
+        later_source,
+        release_manifest.BOUND_HOST_TOOLCHAIN_RECEIPT_PATH,
+        candidate,
+    )
+    _commit(later_source, "valid host authority after intermediary")
+    _, _, later_projection = release_manifest._host_toolchain_binding(later_source)
+    with pytest.raises(ReleaseManifestError, match="follow command gates"):
+        release_manifest._assert_host_toolchain_follows_command_commit(
+            command_commit=commits["command"],
+            host_toolchain_projection=later_projection,
+        )
+
+    post_source = tmp_path / "post-source"
+    _git(tmp_path, "clone", "--quiet", source.as_posix(), post_source.as_posix())
+    _git(post_source, "config", "user.name", "Release Test")
+    _git(post_source, "config", "user.email", "release@example.invalid")
+    _write_bytes(post_source, "shared/post_authority_change.py", b"CHANGED = True\n")
+    _commit(post_source, "post-authority source change")
+    with pytest.raises(ReleaseManifestError, match="source code|authority"):
+        release_manifest._host_toolchain_binding(post_source)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "gateway/changed.py",
+        ".github/workflows/changed.yml",
+        "dashboard/package-lock.json",
+        release_manifest.COMPOSE_FILE_PATH,
+        "unlisted-release-note.txt",
+    ],
+)
+def test_D_to_R_rejects_runtime_source_changes(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    repository = tmp_path / "repository"
+    deployment_commit = _new_deployment_history_base(repository)
+    _write_bytes(repository, relative, b"forbidden between D and R\n")
+    integration_commit = _commit(repository, f"forbidden D-R change {relative}")
+
+    with pytest.raises(ReleaseManifestError, match="deployment.*integration|allowlist"):
+        release_manifest._assert_deployment_to_integration_history(
+            repository,
+            deployment_commit=deployment_commit,
+            integration_commit=integration_commit,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["symlink", "deletion", "rename", "merge"])
+def test_D_to_R_rejects_symlink_merge_deletion_and_rename(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    repository = tmp_path / mutation
+    deployment_commit = _new_deployment_history_base(repository)
+    safepay_path = repository / ARTIFACT_PATHS["safepay_v2"]
+
+    if mutation == "symlink":
+        relative = ARTIFACT_PATHS["exact_envelope_v3"]
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(safepay_path)
+        integration_commit = _commit(repository, "symlink evidence")
+    elif mutation == "deletion":
+        safepay_path.unlink()
+        integration_commit = _commit(repository, "deleted evidence")
+    elif mutation == "rename":
+        target = repository / ARTIFACT_PATHS["exact_envelope_v3"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        safepay_path.rename(target)
+        integration_commit = _commit(repository, "renamed evidence")
+    else:
+        _git(repository, "checkout", "-b", "left")
+        _write(repository, ARTIFACT_PATHS["exact_envelope_v3"], {"branch": "left"})
+        _commit(repository, "left evidence")
+        _git(repository, "checkout", "-b", "right", deployment_commit)
+        _write(
+            repository,
+            ARTIFACT_PATHS["native_treasury_execution_v1"],
+            {"branch": "right"},
+        )
+        _commit(repository, "right evidence")
+        _git(repository, "merge", "--no-ff", "-m", "merge evidence", "left")
+        integration_commit = _git(repository, "rev-parse", "HEAD").decode().strip()
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="regular|linear|append|delet|rename|history",
+    ):
+        release_manifest._assert_deployment_to_integration_history(
+            repository,
+            deployment_commit=deployment_commit,
+            integration_commit=integration_commit,
+        )
 
 
 def test_command_gate_history_rejects_source_change_even_when_later_reverted(
@@ -3798,13 +4136,15 @@ def test_command_gate_artifacts_are_exact_and_ignored_build_outputs_are_safe(
 def test_manifest_has_one_to_one_g2_through_g12_evidence_and_external_g13(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
 ) -> None:
-    repository, _, _, _ = release_repository
+    repository, commits, _, _ = release_repository
     _capture_and_commit(repository)
     assemble_release_manifest_once(repository)
 
     manifest = json.loads((repository / RELEASE_MANIFEST_PATH).read_bytes())
     assert manifest["status"] == "g12_ready"
     assert manifest["overall_status"] == "pending_external"
+    assert manifest["deployment_commit"] == commits["deployment"]
+    assert manifest["integration_commit"] == commits["integration"]
     correction_authority = manifest["post_freeze_corrections"]["authority"]
     assert correction_authority["path"] == "handoff/G1_POST_FREEZE_CORRECTIONS.json"
     assert correction_authority["schema_id"] == (
@@ -3861,6 +4201,14 @@ def test_manifest_has_one_to_one_g2_through_g12_evidence_and_external_g13(
     forged = json.loads(json.dumps(manifest))
     forged["post_freeze_corrections"]["authority"]["correction_ids"].pop()
     with pytest.raises(ReleaseManifestError, match="post-freeze corrections differ"):
+        release_manifest._validate_g12_manifest_offline(
+            repository,
+            forged,
+            canaries=(),
+        )
+    forged = json.loads(json.dumps(manifest))
+    forged["deployment_commit"] = commits["integration"]
+    with pytest.raises(ReleaseManifestError, match="deployment identity"):
         release_manifest._validate_g12_manifest_offline(
             repository,
             forged,
@@ -4041,7 +4389,7 @@ def test_capture_rejects_missing_approval_auth_or_broken_provider_tls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     bad_caddy = _caddy_raw()
     routes = bad_caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"]
     routes[0]["handle"] = [routes[0]["handle"][-1]]
@@ -4057,7 +4405,7 @@ def test_capture_rejects_missing_approval_auth_or_broken_provider_tls(
     with pytest.raises(ReleaseManifestError, match="approval.*authentication|X-Proxy"):
         capture_release_observations_once(repository)
 
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probes = [dict(item) for item in bad.public_probes]
     provider = next(
         item for item in probes if item["probe_id"] == "sslip_provider_root"
@@ -4078,7 +4426,7 @@ def test_unexpected_compose_service_is_rejected_before_runtime_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     compose = _compose_raw()
     compose["services"]["future-observer"] = {
         "image": "concordia/future-observer:finals",
@@ -4129,7 +4477,7 @@ def test_compose_rejects_unexpected_or_legacy_payment_secret_targets(
     key: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     snapshot.compose["services"][service]["environment"][key] = "/run/secrets/bad"
     monkeypatch.setattr(
         release_manifest,
@@ -4159,7 +4507,7 @@ def test_compose_rejects_mutable_or_unscoped_release_directory_binds(
     mutation: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     gateway_volumes = snapshot.compose["services"]["gateway"]["volumes"]
     official_volumes = snapshot.compose["services"]["x402-official"]["volumes"]
     if mutation == "artifact_auto_create":
@@ -4213,7 +4561,7 @@ def test_compose_rejects_direct_or_misdirected_secret_material(
     mutation: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     if mutation == "direct_secret":
         bad.compose["services"]["dashboard"]["environment"][
             "CSPR_CLOUD_ACCESS_TOKEN"
@@ -4286,7 +4634,7 @@ def test_compose_command_is_digest_only_and_runtime_is_bound_to_image_and_config
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     snapshot.compose["services"]["dashboard"]["command"] = [
         "run",
         "--api-key=LEAKME",
@@ -4308,7 +4656,7 @@ def test_compose_command_is_digest_only_and_runtime_is_bound_to_image_and_config
         ("config_image", "attacker/image:latest"),
         ("config_hash", "ef" * 32),
     ):
-        bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+        bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
         dashboard = next(
             item for item in bad.runtime if item["service_id"] == "dashboard"
         )
@@ -4317,6 +4665,7 @@ def test_compose_command_is_digest_only_and_runtime_is_bound_to_image_and_config
             ReleaseManifestError, match="runtime.*Compose|config hash|image"
         ):
             release_manifest._runtime_projection(
+                repository,
                 bad.runtime,
                 release_manifest._compose_projection(repository, bad.compose, ()),
                 (),
@@ -4328,7 +4677,7 @@ def test_runtime_health_must_match_compose_healthcheck_presence(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
 ) -> None:
     repository, commits, _, _ = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     compose_projection = release_manifest._compose_projection(
         repository, snapshot.compose, ()
     )
@@ -4336,6 +4685,7 @@ def test_runtime_health_must_match_compose_healthcheck_presence(
     with_health[0]["health_status"] = "none"
     with pytest.raises(ReleaseManifestError, match="healthcheck|healthy"):
         release_manifest._runtime_projection(
+            repository,
             with_health,
             compose_projection,
             (),
@@ -4351,8 +4701,147 @@ def test_runtime_health_must_match_compose_healthcheck_presence(
     healthy_without_healthcheck = json.loads(json.dumps(snapshot.runtime))
     with pytest.raises(ReleaseManifestError, match="healthcheck|none"):
         release_manifest._runtime_projection(
+            repository,
             healthy_without_healthcheck,
             no_health_projection,
+            (),
+            integration_commit=commits["integration"],
+        )
+
+
+def test_runtime_projection_derives_one_reviewed_deployment_commit_D(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+
+    projected = release_manifest._runtime_projection(
+        repository,
+        snapshot.runtime,
+        release_manifest._compose_projection(repository, snapshot.compose, ()),
+        (),
+        integration_commit=commits["integration"],
+    )
+
+    assert projected["deployment_commit"] == commits["deployment"]
+
+
+def test_pages_and_npm_must_bind_integration_R_not_runtime_D(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="command-gated integration commit",
+    ):
+        release_manifest._project_snapshot(
+            repository,
+            snapshot,
+            now=datetime(2026, 7, 23, 0, 10, 30, tzinfo=UTC),
+            canaries=(),
+            integration_commit=commits["integration"],
+        )
+
+
+def test_runtime_commit_must_be_ancestor_of_integration(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    empty_tree = _git(repository, "mktree", input_bytes=b"").decode().strip()
+    unrelated = _git(
+        repository,
+        "commit-tree",
+        empty_tree,
+        "-m",
+        "unrelated deployment",
+    ).decode().strip()
+    for container in snapshot.runtime:
+        if container["service_id"] in release_manifest._COMPOSE_PROJECT_SERVICES:
+            container["image_revision"] = unrelated
+            container["image_deployment"] = unrelated
+
+    with pytest.raises(ReleaseManifestError, match="ancestor|deployment.*integration"):
+        release_manifest._runtime_projection(
+            repository,
+            snapshot.runtime,
+            release_manifest._compose_projection(repository, snapshot.compose, ()),
+            (),
+            integration_commit=commits["integration"],
+        )
+
+
+def test_runtime_images_must_share_exact_reviewed_D(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    snapshot.runtime[0]["image_revision"] = commits["integration"]
+    snapshot.runtime[0]["image_deployment"] = commits["integration"]
+
+    with pytest.raises(ReleaseManifestError, match="one deployment commit|OCI identity"):
+        release_manifest._runtime_projection(
+            repository,
+            snapshot.runtime,
+            release_manifest._compose_projection(repository, snapshot.compose, ()),
+            (),
+            integration_commit=commits["integration"],
+        )
+
+
+def test_digest_pinned_project_service_cannot_bypass_oci_D(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    digest_ref = "registry.example/concordia-dashboard@sha256:" + "ab" * 32
+    snapshot.compose["services"]["dashboard"]["image"] = digest_ref
+    dashboard = next(
+        item for item in snapshot.runtime if item["service_id"] == "dashboard"
+    )
+    dashboard["config_image"] = digest_ref
+    dashboard["image_revision"] = None
+    dashboard["image_source"] = None
+    dashboard["image_deployment"] = None
+
+    with pytest.raises(
+        ReleaseManifestError,
+        match="project image policy|project runtime image|OCI identity|runtime image revision",
+    ):
+        release_manifest._runtime_projection(
+            repository,
+            snapshot.runtime,
+            release_manifest._compose_projection(repository, snapshot.compose, ()),
+            (),
+            integration_commit=commits["integration"],
+        )
+
+
+@pytest.mark.parametrize("mutation", ["project_image", "project_labels"])
+def test_third_party_service_remains_digest_pinned_without_project_labels(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+    mutation: str,
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    ipfs = next(item for item in snapshot.runtime if item["service_id"] == "ipfs")
+    if mutation == "project_image":
+        snapshot.compose["services"]["ipfs"]["image"] = "concordia/ipfs:finals"
+        ipfs["config_image"] = "concordia/ipfs:finals"
+    else:
+        ipfs["image_revision"] = commits["deployment"]
+        ipfs["image_source"] = (
+            "https://github.com/asadvendor-boop/concordia-dao-council"
+        )
+        ipfs["image_deployment"] = commits["deployment"]
+
+    with pytest.raises(ReleaseManifestError, match="third-party"):
+        release_manifest._runtime_projection(
+            repository,
+            snapshot.runtime,
+            release_manifest._compose_projection(repository, snapshot.compose, ()),
             (),
             integration_commit=commits["integration"],
         )
@@ -4366,16 +4855,20 @@ def test_runtime_health_must_match_compose_healthcheck_presence(
         ("image_source", "https://attacker.example/repository"),
     ],
 )
-def test_runtime_image_oci_identity_binds_exact_integration_commit(
+def test_runtime_image_oci_identity_binds_exact_reviewed_deployment_commit(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
     field: str,
     value: object,
 ) -> None:
     repository, commits, _, _ = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     snapshot.runtime[0][field] = value
-    with pytest.raises(ReleaseManifestError, match="OCI identity|integration commit"):
+    with pytest.raises(
+        ReleaseManifestError,
+        match="OCI identity|deployment commit|runtime image deployment",
+    ):
         release_manifest._runtime_projection(
+            repository,
             snapshot.runtime,
             release_manifest._compose_projection(repository, snapshot.compose, ()),
             (),
@@ -4389,7 +4882,7 @@ def test_known_secret_reflection_and_broad_sensitive_keys_fail_without_echo(
 ) -> None:
     repository, commits, _, verifier = release_repository
     canary = b"EXACT-CSPR-CLOUD-CANARY-DO-NOT-ECHO"
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     snapshot.public_probes[0]["body"] += canary
     monkeypatch.setattr(release_manifest, "_load_secret_canaries", lambda: (canary,))
     monkeypatch.setattr(
@@ -4444,7 +4937,7 @@ def test_npm_sha256_and_sha512_are_from_same_bounded_tarball_and_must_match_regi
         NPM_CAPTURE_PATH,
     ]:
         (repository2 / path).unlink(missing_ok=True)
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository2)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository2)
     bad.npm["metadata"]["dist"]["integrity"] = (
         "sha512-" + base64.b64encode(b"x" * 64).decode()
     )
@@ -4465,7 +4958,7 @@ def test_npm_first_public_release_requires_registry_visible_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     bad.npm["registry_signatures"]["missing"] = [
         {"keyid": "npm:missing-registry-signature"}
     ]
@@ -4503,7 +4996,7 @@ def test_rpc_receipt_is_exact_two_operator_projection_and_requires_same_finalize
         NPM_CAPTURE_PATH,
     ]:
         (repository2 / path).unlink(missing_ok=True)
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository2)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository2)
     bad.rpc[1]["result"] = {**bad.rpc[1]["result"], "block_hash": "ff" * 32}
     monkeypatch.setattr(
         release_manifest,
@@ -4522,7 +5015,7 @@ def test_public_probe_markers_cannot_replace_structured_proof_predicates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "proof_registry"
     )
@@ -4558,7 +5051,7 @@ def test_public_evidence_registry_and_trace_form_one_recomputed_graph(
     message: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(item for item in bad.public_probes if item["probe_id"] == probe_id)
     document = json.loads(probe["body"])
     if probe_id == "card_chain":
@@ -4647,7 +5140,7 @@ def test_judge_critical_json_routes_require_artifact_bound_structure(
     probe_id: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(item for item in bad.public_probes if item["probe_id"] == probe_id)
     probe["body"] = (
         b'{"proposal_id":"DAO-PROP-6CB25C",'
@@ -4695,7 +5188,7 @@ def test_dns_and_tls_projection_rejects_wrong_docs_cname(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "custom_docs_root"
     )
@@ -4718,7 +5211,7 @@ def test_dns_projection_rejects_wrong_fixed_vm_address(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "custom_apex_root"
     )
@@ -4743,7 +5236,7 @@ def test_pdf_probe_requires_parseable_certificate_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "certificate_pdf"
     )
@@ -4901,7 +5394,7 @@ def test_provider_openapi_probe_requires_post_only_v2_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "provider_openapi"
     )
@@ -4964,7 +5457,7 @@ def test_official_x402_public_health_requires_live_hosted_settlement_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    bad = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probe = next(
         item for item in bad.public_probes if item["probe_id"] == "custom_x402_health"
     )
@@ -4989,7 +5482,7 @@ def test_caddy_nested_subroutes_preserve_host_path_and_enforcement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"]
     approval = routes[0]
@@ -5040,7 +5533,7 @@ def test_caddy_accepts_two_exact_protected_approval_hosts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"]
     combined = routes[0]
@@ -5078,7 +5571,7 @@ def test_caddy_does_not_flatten_unsafe_match_alternatives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     approval = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][0]
     approval["match"] = [
@@ -5115,7 +5608,7 @@ def test_caddy_rejects_unapproved_approval_topology(
     message: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     approval = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][0]
     if mutation == "unexpected_host":
@@ -5159,7 +5652,7 @@ def test_caddy_rejects_active_material_that_differs_from_secret_files(
     message: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     approval = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][0]
     secret_value = "MUTATED-MATERIAL-MUST-NEVER-APPEAR"
@@ -5240,7 +5733,7 @@ def test_caddy_rejects_matcher_drift_and_nonterminal_approval(
     mutation: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     approval = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][0]
     if mutation == "method":
@@ -5268,7 +5761,7 @@ def test_caddy_rejects_preceding_route_that_can_bypass_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"]
     routes.insert(
@@ -5313,7 +5806,7 @@ def test_caddy_rejects_missing_or_failed_live_auth_probe(
     mutation: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     if mutation == "missing":
         caddy[probe_group].pop()
@@ -5340,7 +5833,7 @@ def test_caddy_requires_exact_cohost_mcp_binding(
     mutation: str,
 ) -> None:
     repository, commits, _, verifier = release_repository
-    snapshot = _snapshot(CAPTURED_AT, commits["deployment"], repository)
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     route = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][1]
     if mutation == "path":

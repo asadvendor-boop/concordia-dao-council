@@ -2442,8 +2442,8 @@ def _execute_live_capture(
         transcript_output="acquisitions.json",
     )
     # The worker addresses the fixed Docker socket directly and must not inherit
-    # a caller-selectable daemon endpoint.  DOCKER_HOST is also outside the
-    # bound-command environment allowlist.
+    # a caller-selectable daemon endpoint.  The broader release collector uses
+    # one fixed DOCKER_HOST value, but this worker receives no daemon override.
     command_environment = _collector_command_environment(
         _sanitized_command_environment()
     )

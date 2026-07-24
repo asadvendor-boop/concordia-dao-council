@@ -213,6 +213,7 @@ BOUND_TOOL_POLICY = MappingProxyType(
         "allowed_environment_keys": (
             "CI",
             "DOCKER_CONFIG",
+            "DOCKER_HOST",
             "GH_CONFIG_DIR",
             "GIT_CONFIG_GLOBAL",
             "GIT_CONFIG_NOSYSTEM",
@@ -223,6 +224,8 @@ BOUND_TOOL_POLICY = MappingProxyType(
             "LC_ALL",
             "NO_COLOR",
             "NPM_CONFIG_CACHE",
+            "NPM_CONFIG_GLOBALCONFIG",
+            "NPM_CONFIG_REGISTRY",
             "NPM_CONFIG_USERCONFIG",
             "NEXT_PUBLIC_CSPR_CLICK_APP_ID",
             "NEXT_PUBLIC_CONCORDIA_MODE",
@@ -665,7 +668,7 @@ COMMAND_GATE_TIMEOUT_SECONDS = MappingProxyType(
 COMMAND_GATE_RUNTIME_TIMEOUT_SECONDS: Final = 60
 
 _FROZEN_COLLECTOR_CONTRACT_SHA256: Final = (
-    "9438d469a4ecc2c0462b7b005731943bc244bef5a50242ea11091149ee8ff6f0"
+    "8a919b2ed38d11d08ca249a1801ab50aa5a51287335fbd577460fe6aa55367df"
 )
 
 
