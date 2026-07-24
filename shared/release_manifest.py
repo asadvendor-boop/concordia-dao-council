@@ -745,6 +745,102 @@ _PUBLIC_ENV_KEYS = frozenset(
         "X402_PROVIDER_URL",
     }
 )
+_GATEWAY_ENVIRONMENT_KEY_ALLOWLIST = frozenset(
+    {
+        "APPROVAL_PROXY_SECRET_FILE",
+        "APPROVAL_UI_APPROVER_ID_FILE",
+        "APPROVAL_UI_BCRYPT_HASH_FILE",
+        "APPROVAL_UI_CSRF_SECRET_FILE",
+        "APPROVAL_UI_USER_FILE",
+        "APP_ENV",
+        "CASPER_CALL_TARGET",
+        "CASPER_CHAIN_NAME",
+        "CASPER_CONTRACT_VERSION",
+        "CASPER_ENTRY_POINT",
+        "CASPER_EXECUTION_DRIVER",
+        "CASPER_EXECUTION_MODE",
+        "CASPER_MCP_OFFLINE_MOCK",
+        "CASPER_MCP_URL",
+        "CASPER_NODE_ADDRESS",
+        "CASPER_PAYMENT_AMOUNT",
+        "CASPER_PUBLIC_STATUS_URL",
+        "CASPER_QUORUM_CONTRACT_VERSION",
+        "CASPER_QUORUM_PACKAGE_HASH",
+        "CASPER_RECEIPT_CONTRACT_HASH",
+        "CASPER_SECRET_KEY_PATH",
+        "COMMANDER_AGENT_ID",
+        "COMMANDER_SUBMISSION_KEY_FILE",
+        "CONCORDIA_CARD_CHAIN_ROOTS_FILE",
+        "CONCORDIA_DISABLE_LLM_REASONING",
+        "CONCORDIA_OPERATOR_TOKEN_FILE",
+        "CONCORDIA_PROOF_REGISTRY_DIR",
+        "CONCORDIA_PYCSPR_DRY_RUN",
+        "CONCORDIA_RATE_LIMIT_PER_MINUTE",
+        "CONCORDIA_RATE_LIMIT_WINDOW_SECONDS",
+        "CONCORDIA_RELEASE_ARTIFACTS_DIR",
+        "CONCORDIA_REQUIRE_LIVE_LLM",
+        "CONCORDIA_SERVICE",
+        "CONCORDIA_TEST_MODE",
+        "CSPR_CLOUD_API_URL",
+        "CSPR_CLOUD_SERVICE_SCOPE",
+        "CSPR_CLOUD_STREAM_URL",
+        "CSPR_NODE_RPC_URL",
+        "CSPR_TRADE_API_URL",
+        "CSPR_TRADE_MCP_URL",
+        "CSPR_TRADE_SLIPPAGE_BPS",
+        "DASHBOARD_DEMO_GATEWAY_TOKEN_FILE",
+        "DEMO_CAPABILITY_HMAC_SECRET_FILE",
+        "DIAGNOSIS_AGENT_ID",
+        "DIAGNOSIS_SUBMISSION_KEY_FILE",
+        "GATEWAY_DB_PATH",
+        "GATEWAY_SECRET_FILE",
+        "GATEWAY_URL",
+        "HUMAN_APPROVER_IDS",
+        "IPFS_API_URL",
+        "IPFS_GATEWAY_BASE",
+        "LLM_API_KEY_FILE",
+        "LLM_BASE_URL",
+        "LLM_COMMANDER_MODEL",
+        "LLM_DIAGNOSIS_MODEL",
+        "LLM_OPERATOR_MODEL",
+        "LLM_SAFETY_MODEL",
+        "LLM_SCRIBE_MODEL",
+        "LLM_TRIAGE_MODEL",
+        "OPERATOR_AGENT_ID",
+        "OPERATOR_SUBMISSION_KEY_FILE",
+        "OTEL_ENABLED",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_SERVICE_NAME",
+        "OTEL_TRACES_EXPORTER",
+        "PROPOSAL_ROOM_API_KEY_FILE",
+        "PROPOSAL_SIMULATOR_URL",
+        "PUBLIC_BASE_URL",
+        "RECORDER_AGENT_ID",
+        "RECORDER_SUBMISSION_KEY_FILE",
+        "SAFEPAY_AMOUNT_MOTES",
+        "SAFEPAY_PROXY_SECRET_FILE",
+        "SAFEPAY_QUOTE_TOKEN_SECRET_FILE",
+        "SAFEPAY_TRUSTED_PROXY_CIDRS",
+        "SAFETY_REVIEWER_AGENT_ID",
+        "SAFETY_REVIEWER_SUBMISSION_KEY_FILE",
+        "SCRIBE_AGENT_ID",
+        "TRIAGE_AGENT_ID",
+        "TRIAGE_SUBMISSION_KEY_FILE",
+        "X402_CSPR_LIVE_API",
+        "X402_GATEWAY_TOKEN_FILE",
+        "X402_MAX_ATTEMPTS",
+        "X402_PAYMENT_ACCOUNT_HASH",
+        "X402_PAYMENT_ADDRESS",
+        "X402_PAYMENT_AMOUNT",
+        "X402_PAYMENT_NETWORK",
+        "X402_PAYMENT_RECEIVER_PUBLIC_KEY",
+        "X402_PROVIDER_URL",
+        "X402_RETRY_DELAY_SECONDS",
+        "X402_SETTLEMENT_MODE",
+        "X402_TRANSFER_PAYMENT_AMOUNT",
+    }
+)
 _SECRET_CANARY_PATHS = tuple(
     [Path("/run/secrets") / target for target, _ in _SECRET_FILE_MATRIX.values()]
     + [
@@ -4672,6 +4768,10 @@ def _compose_projection(
             raise ReleaseManifestError(
                 "Compose secret grants and sensitive file references are not exact"
             )
+        if service_id == "gateway" and not set(environment).issubset(
+            _GATEWAY_ENVIRONMENT_KEY_ALLOWLIST
+        ):
+            raise ReleaseManifestError("Gateway environment key allowlist differs")
         public_environment = {
             key: environment[key]
             for key in sorted(environment)
@@ -5394,6 +5494,17 @@ def _caddy_projection(
             _text(subject, "Caddy TLS policy subject").lower()
             for subject in _sequence(policy.get("subjects"), "Caddy TLS policy subjects")
         }
+        if any(
+            "*" in subject
+            and any(
+                owned.endswith(subject.replace("*", ""))
+                for owned in _OWNED_CADDY_TLS_SUBJECTS
+            )
+            for subject in subjects
+        ):
+            raise ReleaseManifestError(
+                "owned Caddy TLS wildcard policy is forbidden"
+            )
         owned_subjects = subjects & set(_OWNED_CADDY_TLS_SUBJECTS)
         if not owned_subjects:
             continue
@@ -5448,7 +5559,10 @@ def _caddy_projection(
                 unknown_matcher_keys = sorted(
                     str(key) for key in set(match) - {"host", "path", "method"}
                 )
-                match_hosts = sorted(str(item) for item in match.get("host") or [])
+                match_hosts = sorted(
+                    _text(item, "Caddy route host").lower()
+                    for item in match.get("host") or []
+                )
                 match_paths = sorted(str(item) for item in match.get("path") or [])
                 match_methods = sorted(
                     str(item).upper() for item in match.get("method") or []

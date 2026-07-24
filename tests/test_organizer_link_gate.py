@@ -82,3 +82,27 @@ def test_organizer_gate_is_invoked_before_both_g12_and_g13() -> None:
     assert "does not replace or weaken G12 or G13" in notes
     assert "--fixture tests/fixtures/organizer-link-gate-pass.json" in notes
     assert "never release evidence" in notes
+
+
+def test_reviewer_instructions_install_the_locked_browser_runtime() -> None:
+    notes = DOCUMENTATION.read_text()
+
+    install_directory = "cd scripts/g13-browser-runtime"
+    install_dependencies = "npm ci --ignore-scripts --no-audit --no-fund"
+    install_browser = (
+        "PLAYWRIGHT_BROWSERS_PATH=0 "
+        "node node_modules/playwright/cli.js install chromium"
+    )
+    return_to_root = "cd ../.."
+    capture_g12 = (
+        "python scripts/build_release_manifest.py capture-organizer-g12"
+    )
+
+    assert install_directory in notes
+    assert install_dependencies in notes
+    assert install_browser in notes
+    assert return_to_root in notes
+    assert notes.index(install_directory) < notes.index(install_dependencies)
+    assert notes.index(install_dependencies) < notes.index(install_browser)
+    assert notes.index(install_browser) < notes.index(return_to_root)
+    assert notes.index(return_to_root) < notes.index(capture_g12)

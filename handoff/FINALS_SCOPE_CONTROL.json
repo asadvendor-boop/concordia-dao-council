@@ -269,8 +269,8 @@
       ],
       "acceptance": [
         "The dynamic runtime inventory, rendered Compose, runtime images, full Caddy JSON, DNS, TLS, redirects, routes, APIs, console, and links match the release candidate.",
-        "Every submitted sslip alias remains healthy and the pre-existing co-hosted /mcp route remains unchanged.",
-        "Apex, www, docs, and x402 hosts expose only the approved surfaces."
+        "Every non-Concordia co-hosted judged application's submitted sslip alias remains healthy, Concordia's retired sslip aliases remain rejected, and the pre-existing co-hosted /mcp route remains unchanged.",
+        "Apex, www, docs, safepay, and x402 hosts expose only the approved surfaces."
       ],
       "evidence": [],
       "next_action": "Perform the serialized stage-two release through the sole Codex operator and re-run all hosted checks."

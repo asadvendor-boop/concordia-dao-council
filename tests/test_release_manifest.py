@@ -4568,6 +4568,19 @@ def test_compose_projects_the_pinned_owned_safepay_provider_url(
     assert gateway["public_environment"]["X402_PROVIDER_URL"] == _SAFEPAY_PROVIDER_URL
 
 
+def test_compose_rejects_unallowlisted_gateway_environment_key(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    compose = _snapshot(CAPTURED_AT, commits["integration"], repository).compose
+    compose["services"]["gateway"]["environment"]["X402_FACILITATOR_URL"] = (
+        "https://facilitator.example.invalid"
+    )
+
+    with pytest.raises(ReleaseManifestError, match="Gateway environment key allowlist"):
+        release_manifest._compose_projection(repository, compose, ())
+
+
 @pytest.mark.parametrize(
     "provider_url",
     (
@@ -5674,6 +5687,32 @@ def test_caddy_rejects_retired_host_on_any_projected_route(
         release_manifest._caddy_projection(caddy, ())
 
 
+def test_caddy_rejects_retired_host_case_insensitively() -> None:
+    caddy = _caddy_raw()
+    routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"][
+        "routes"
+    ]
+    routes.append(
+        {
+            "match": [
+                {
+                    "host": ["Concordia.47.84.232.193.SSLIP.IO"],
+                    "path": ["/health"],
+                }
+            ],
+            "handle": [
+                {
+                    "handler": "reverse_proxy",
+                    "upstreams": [{"dial": "gateway:8000"}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ReleaseManifestError, match="retired Caddy hostname"):
+        release_manifest._caddy_projection(caddy, ())
+
+
 @pytest.mark.parametrize("subject", _OWNED_CADDY_SUBJECTS)
 @pytest.mark.parametrize("mutation", ("missing", "non_le", "extra_issuer"))
 def test_caddy_requires_one_letsencrypt_production_issuer_per_owned_subject(
@@ -5720,6 +5759,28 @@ def test_caddy_rejects_policies_that_can_capture_owned_subjects(
                 ]
             }
         )
+
+    with pytest.raises(ReleaseManifestError, match="owned Caddy TLS.*policy"):
+        release_manifest._caddy_projection(caddy, ())
+
+
+def test_caddy_rejects_wildcard_tls_policy_that_can_capture_owned_subjects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caddy = _caddy_raw()
+    _allow_test_cohost_route(monkeypatch)
+    policies = caddy["active_config"]["apps"]["tls"]["automation"][
+        "policies"
+    ]
+    policies.insert(
+        0,
+        {
+            "subjects": ["*.concordiadao.xyz"],
+            "issuers": [
+                {"module": "acme", "ca": _LE_PRODUCTION_DIRECTORY}
+            ],
+        },
+    )
 
     with pytest.raises(ReleaseManifestError, match="owned Caddy TLS.*policy"):
         release_manifest._caddy_projection(caddy, ())

@@ -141,6 +141,11 @@ REQUIRED_GATE_PHRASES = {
         "enforced https",
         "deployed content hash",
     ],
+    "G10": [
+        "non-concordia co-hosted judged application's submitted sslip alias",
+        "concordia's retired sslip aliases remain rejected",
+        "apex, www, docs, safepay, and x402",
+    ],
 }
 
 KNOWN_GAPS = {

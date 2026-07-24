@@ -52,6 +52,21 @@ route/query mismatch, or Proof-tab mismatch. Redirects are allowed only when
 their exact source, destination, and status are committed in
 `handoff/ORGANIZER_LINK_GATE_REQUEST.json`; there is no runtime override.
 
+From a fresh clone, install the collector's separately locked Node dependencies
+and its local Chromium binary before invoking either live organizer capture:
+
+```bash
+cd scripts/g13-browser-runtime
+npm ci --ignore-scripts --no-audit --no-fund
+PLAYWRIGHT_BROWSERS_PATH=0 node node_modules/playwright/cli.js install chromium
+cd ../..
+```
+
+CI performs the same locked install and adds Playwright's Linux system
+dependencies with `--with-deps`. The browser remains under
+`scripts/g13-browser-runtime/node_modules`; the collector never falls back to
+an ambient browser installation.
+
 Run this against the exact deployed release-candidate SHA before G12:
 
 ```bash
