@@ -9,9 +9,11 @@ trajectory; nothing here is presented as already shipped.
 Each of these is `PENDING_PROOF` until its publication gate passes (see
 [Links](links.md) and [Deployment & Security](deployment-security.md)):
 
-- **Production domain** — `concordiadao.xyz` (+ `www`, `x402` subdomain), with
-  the existing `*.sslip.io` links kept as working aliases.
-- **Hosted documentation portal** — `docs.concordiadao.xyz`.
+- **Owned finals domain map** — main application
+  `https://concordiadao.xyz`, `https://www.concordiadao.xyz` redirect, SafePay
+  v2 provider `https://safepay.concordiadao.xyz`, and official WCSPR
+  facilitator `https://x402.concordiadao.xyz`.
+- **Hosted documentation portal** — `https://docs.concordiadao.xyz`.
 - **Published verifier** — `@concordia-dao/verify` on npm, clean-room installable
   (see [Verifier SDK / CLI](verifier-cli.md)).
 - **GovernanceReceipt v3** — on-chain exact-envelope enforcement, with its

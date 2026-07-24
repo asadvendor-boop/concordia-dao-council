@@ -1,17 +1,32 @@
 # Links
 
-## Live application
+## Finals service map
+
+All finals-facing public URLs use Concordia-owned domains. The `www` hostname
+redirects to the main application. SafePay v2 and official x402 are separate
+payment surfaces: SafePay v2 serves the native-CSPR provider flow, while the
+official WCSPR facilitator serves the x402 settlement flow.
+
+| Service | URL |
+|---|---|
+| Main application | <https://concordiadao.xyz> |
+| WWW redirect | <https://www.concordiadao.xyz> |
+| SafePay v2 provider | <https://safepay.concordiadao.xyz> |
+| Official WCSPR facilitator | <https://x402.concordiadao.xyz> |
+| Documentation portal | <https://docs.concordiadao.xyz> |
+
+## Main application
 
 | Surface | URL |
 |---|---|
-| Dashboard | <https://concordia.47.84.232.193.sslip.io/dashboard> |
-| Judge Walkthrough | <https://concordia.47.84.232.193.sslip.io/dashboard/judge> |
-| Proof Center | <https://concordia.47.84.232.193.sslip.io/dashboard/proof> |
-| Evidence chain (canonical proposal) | <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C> |
-| Proof pack | <https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C> |
-| Technical jury note | <https://concordia.47.84.232.193.sslip.io/technical-jury-note> |
-| Certificate (HTML) | <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C> |
-| Certificate (PDF) | <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf> |
+| Dashboard | <https://concordiadao.xyz/dashboard> |
+| Judge Walkthrough | <https://concordiadao.xyz/dashboard/judge> |
+| Proof Center | <https://concordiadao.xyz/dashboard/proof> |
+| Evidence chain (canonical proposal) | <https://concordiadao.xyz/evidence/DAO-PROP-6CB25C> |
+| Proof pack | <https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C> |
+| Technical jury note | <https://concordiadao.xyz/technical-jury-note> |
+| Certificate (HTML) | <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C> |
+| Certificate (PDF) | <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf> |
 
 ## Source and submission
 
@@ -21,17 +36,12 @@
 | DoraHacks BUIDL | On the DoraHacks Casper buildathon track (`PENDING_PROOF`: direct BUIDL link added on publication) |
 | Demo video | <https://www.youtube.com/watch?v=GU01V83Jrko> |
 
-## Finals launch surfaces (pending publication)
+## Publication evidence still pending
 
-These surfaces ship inside the final round. They are listed here as the planned
-public endpoints and are **not yet live** — the existing sslip links above
-remain the working, submitted aliases and never change.
-
-| Surface | Planned endpoint | Status |
-|---|---|---|
-| Production domain | `concordiadao.xyz` (+ `www`, `x402` subdomain) | `PENDING_PROOF`: production domain live, sslip aliases intact |
-| Documentation site | `docs.concordiadao.xyz` | `PENDING_PROOF`: docs site live over HTTPS |
-| Verifier package | `npm install @concordia-dao/verify` | `PENDING_PROOF`: npm publish + clean-room install |
+The owned-domain map above is the finals-facing URL contract. Live hosted
+evidence, HTTPS verification, and publication of `@concordia-dao/verify` remain
+separate `PENDING_PROOF` release gates; they do not change the frozen Testnet
+receipts below.
 
 ## On-chain references
 

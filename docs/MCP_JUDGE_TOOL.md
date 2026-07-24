@@ -35,7 +35,7 @@ review environment or use the non-MCP verifier instead:
 
 ```bash
 python scripts/verify_concordia_receipt.py \
-  --base-url https://concordia.47.84.232.193.sslip.io \
+  --base-url https://concordiadao.xyz \
   --proposal-id DAO-PROP-6CB25C \
   --live-chain
 ```

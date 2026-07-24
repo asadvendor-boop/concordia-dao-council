@@ -176,7 +176,7 @@ The submission has a real Casper Testnet transaction hash for the approved Conco
 Current hosted status:
 
 ```text
-Public URL: https://concordia.47.84.232.193.sslip.io/dashboard
+Public URL: https://concordiadao.xyz/dashboard
 Casper Testnet live read: verified from the hosted gateway
 Hosted execution mode: real
 Hosted receipt contract hash: hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1

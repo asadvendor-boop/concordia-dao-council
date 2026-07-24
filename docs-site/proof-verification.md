@@ -32,7 +32,7 @@ from a generated, schema-validated release manifest after live capture and are
 
 The dashboard's Proof Center is the judge-facing proof surface:
 
-- <https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C>
+- <https://concordiadao.xyz/dashboard/proof?proposal=DAO-PROP-6CB25C>
 
 It shows the compact proof table, the policy leash meter, the blocked rogue
 action, the outcome gallery, and links to every downloadable artifact. The
@@ -61,7 +61,7 @@ field by field.
 The public evidence endpoint recomputes the SHA-256 card chain server-side on
 request and reports verification status:
 
-- <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C>
+- <https://concordiadao.xyz/evidence/DAO-PROP-6CB25C>
 
 Changing any historical card would break the chain, so a passing recomputation
 is evidence the deliberation record is internally intact. Note the observation
@@ -73,15 +73,15 @@ independent, trust-nothing check is comparing the on-chain deploys on CSPR.live
 
 The certificate renders the canonical proof with QR links for offline review:
 
-- HTML: <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C>
-- PDF: <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf>
+- HTML: <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C>
+- PDF: <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf>
 
 ## Audit packet
 
 The downloadable governance archive bundles the evidence chain, proof pack,
 and receipt references:
 
-- <https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download>
+- <https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C/download>
 
 The archive is also pinned to IPFS under CID
 `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq`.
@@ -95,7 +95,7 @@ for a Concordia proof pack or the hosted proof endpoints. It is deliberately
 
 ```bash
 python scripts/verify_concordia_receipt.py \
-  --base-url https://concordia.47.84.232.193.sslip.io \
+  --base-url https://concordiadao.xyz \
   --proposal-id DAO-PROP-6CB25C
 ```
 
@@ -120,7 +120,7 @@ With network access, `--live-chain` adds an on-chain cross-check:
 
 ```bash
 python scripts/verify_concordia_receipt.py \
-  --base-url https://concordia.47.84.232.193.sslip.io \
+  --base-url https://concordiadao.xyz \
   --proposal-id DAO-PROP-6CB25C \
   --live-chain
 ```

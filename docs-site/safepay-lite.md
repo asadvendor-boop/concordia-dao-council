@@ -9,6 +9,10 @@ bought, for how much, and that the same payment cannot be redeemed twice.
 SafePay Lite is deliberately **not** described as full escrow, a refund
 contract, or a marketplace.
 
+The finals public **SafePay v2 provider** surface is
+<https://safepay.concordiadao.xyz>. It remains distinct from the official
+WCSPR x402 facilitator at <https://x402.concordiadao.xyz>.
+
 !!! warning "Status: SafePay Lite v2 is implemented locally — no live v2 evidence yet"
     The v2 quote/consumption model described on this page is merged into the
     local release candidate and covered by its component tests. It has not yet

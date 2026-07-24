@@ -5,19 +5,19 @@ Concordia's live proof is designed so judges can verify the whole governance loo
 ## Live Proof Items
 
 1. Open the live dashboard and select `DAO-PROP-6CB25C`.
-2. Open `https://concordia.47.84.232.193.sslip.io/dashboard/judge` for the Judge Walkthrough.
-3. Open `https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C` for the Proof Center.
-4. Open `https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C` for the public evidence chain.
-5. Open `https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download` for the downloadable governance archive.
-6. Open `https://concordia.47.84.232.193.sslip.io/technical-jury-note` for the canonical-proof and production-scope boundary.
-7. Open `https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C` for the HTML certificate.
-8. Download `https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf` for the PDF certificate with QR links.
+2. Open `https://concordiadao.xyz/dashboard/judge` for the Judge Walkthrough.
+3. Open `https://concordiadao.xyz/dashboard/proof?proposal=DAO-PROP-6CB25C` for the Proof Center.
+4. Open `https://concordiadao.xyz/evidence/DAO-PROP-6CB25C` for the public evidence chain.
+5. Open `https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C/download` for the downloadable governance archive.
+6. Open `https://concordiadao.xyz/technical-jury-note` for the canonical-proof and production-scope boundary.
+7. Open `https://concordiadao.xyz/certificate/DAO-PROP-6CB25C` for the HTML certificate.
+8. Download `https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf` for the PDF certificate with QR links.
 9. Open the CSPR.live deploy link shown in the Proof Center.
 10. Verify the real x402 paid-report proof:
 
 ```bash
 curl -H 'X-Payment: dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c' \
-  'https://x402-provider.47.84.232.193.sslip.io/x402/risk-report?proposal_id=DAO-PROP-6CB25C'
+  'https://safepay.concordiadao.xyz/x402/risk-report?proposal_id=DAO-PROP-6CB25C'
 ```
 
 11. Run the local verifier:
@@ -122,4 +122,4 @@ Those roadmap items are intentionally not required for the final proof packet.
 
 ## Technical Jury Scope Note
 
-Concordia's canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless their own evidence chain, signature, finality record, and proof artifact exist. The Odra topology genesis proves `CouncilRegistry`, `TreasuryPolicy`, and `CardIndexLedger` as independently exercised supplemental modules; full cross-contract production enforcement is roadmap, not overclaimed. See `docs/TECHNICAL_JURY_NOTE.md` and `https://concordia.47.84.232.193.sslip.io/technical-jury-note`.
+Concordia's canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless their own evidence chain, signature, finality record, and proof artifact exist. The Odra topology genesis proves `CouncilRegistry`, `TreasuryPolicy`, and `CardIndexLedger` as independently exercised supplemental modules; full cross-contract production enforcement is roadmap, not overclaimed. See `docs/TECHNICAL_JURY_NOTE.md` and `https://concordiadao.xyz/technical-jury-note`.

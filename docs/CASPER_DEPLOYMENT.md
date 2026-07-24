@@ -115,7 +115,7 @@ The transaction hash must be visible in the demo and copied into `docs/SUBMISSIO
 Current hosted review deployment:
 
 ```text
-https://concordia.47.84.232.193.sslip.io/dashboard
+https://concordiadao.xyz/dashboard
 ```
 
 Current state until funding/deployment is completed:

@@ -6,13 +6,13 @@ The archive intentionally includes source code, documentation, contracts, dashbo
 
 ## Live Review URLs
 
-- Dashboard Proof Center: https://concordia.47.84.232.193.sslip.io/dashboard/proof
-- Judge Walkthrough: https://concordia.47.84.232.193.sslip.io/dashboard/judge
-- Evidence chain: https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C
-- Proof pack: https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C
-- Technical jury note: https://concordia.47.84.232.193.sslip.io/technical-jury-note
-- HTML certificate: https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C
-- PDF certificate: https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf
+- Dashboard Proof Center: https://concordiadao.xyz/dashboard/proof
+- Judge Walkthrough: https://concordiadao.xyz/dashboard/judge
+- Evidence chain: https://concordiadao.xyz/evidence/DAO-PROP-6CB25C
+- Proof pack: https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C
+- Technical jury note: https://concordiadao.xyz/technical-jury-note
+- HTML certificate: https://concordiadao.xyz/certificate/DAO-PROP-6CB25C
+- PDF certificate: https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf
 
 ## Canonical Proof Hashes
 

@@ -5,7 +5,7 @@ surfaces. No account, wallet, or local install is required for steps 1–6.
 
 ## 1. Open the guided walkthrough
 
-- <https://concordia.47.84.232.193.sslip.io/dashboard/judge>
+- <https://concordiadao.xyz/dashboard/judge>
 
 This walks the flagship scenario end to end: the unsafe 30% treasury request,
 Verity's dissent, the 8% DAO Mandate cap, exact-envelope approval, pre-quorum
@@ -13,14 +13,14 @@ rejection, quorum acceptance, and the final receipt.
 
 ## 2. Open the Proof Center
 
-- <https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C>
+- <https://concordiadao.xyz/dashboard/proof?proposal=DAO-PROP-6CB25C>
 
 This is the expert drill-down: proof table, policy leash meter, blocked rogue
 action, and artifact downloads.
 
 ## 3. Check the evidence chain
 
-- <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C>
+- <https://concordiadao.xyz/evidence/DAO-PROP-6CB25C>
 
 The endpoint recomputes the SHA-256 card chain live and reports verification
 status. The proof packet for the hero run shows `decision:
@@ -42,13 +42,13 @@ including a browser-wallet approval.
 
 ## 5. Download the certificate and audit packet
 
-- Certificate (HTML): <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C>
-- Certificate (PDF, with QR links): <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf>
-- Audit packet: <https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download>
+- Certificate (HTML): <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C>
+- Certificate (PDF, with QR links): <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf>
+- Audit packet: <https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C/download>
 
 ## 6. Read the scope boundary
 
-- <https://concordia.47.84.232.193.sslip.io/technical-jury-note>
+- <https://concordiadao.xyz/technical-jury-note>
 
 Concordia freezes the canonical proof for reproducibility and states its
 boundaries explicitly: what is live, what is supplemental, and what is
@@ -58,7 +58,7 @@ roadmap. Nothing is presented as production that is not.
 
 ```bash
 python scripts/verify_concordia_receipt.py \
-  --base-url https://concordia.47.84.232.193.sslip.io \
+  --base-url https://concordiadao.xyz \
   --proposal-id DAO-PROP-6CB25C \
   --live-chain
 ```

@@ -224,12 +224,12 @@ the exact financial action constitutionally governable.
 
 ## Verify everything yourself
 
-- Live Judge Walkthrough: https://concordia.47.84.232.193.sslip.io/dashboard/judge
-- Proof Center: https://concordia.47.84.232.193.sslip.io/dashboard/proof
-- Evidence Chain: https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C
-- Proof Pack: https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C
-- Technical Jury Note: https://concordia.47.84.232.193.sslip.io/technical-jury-note
-- Certificate: https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C
+- Live Judge Walkthrough: https://concordiadao.xyz/dashboard/judge
+- Proof Center: https://concordiadao.xyz/dashboard/proof
+- Evidence Chain: https://concordiadao.xyz/evidence/DAO-PROP-6CB25C
+- Proof Pack: https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C
+- Technical Jury Note: https://concordiadao.xyz/technical-jury-note
+- Certificate: https://concordiadao.xyz/certificate/DAO-PROP-6CB25C
 - Canonical reviewer receipt: https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852
 - Quorum acceptance receipt: https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928
 - IPFS evidence archive CID: `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq`
@@ -242,7 +242,7 @@ the exact financial action constitutionally governable.
   typed runtime arguments against the evidence chain field by field. This is the
   strongest independent check available today.
 - **Consistency checker.** `python3 scripts/verify_concordia_receipt.py
-  --base-url https://concordia.47.84.232.193.sslip.io --proposal-id
+  --base-url https://concordiadao.xyz --proposal-id
   DAO-PROP-6CB25C` runs a dependency-free consistency check whose output declares
   its own `verification_scope` and `observation_sources`. With `--live-chain` it
   diffs the deploy against a trusted, operator-configured Casper node RPC and
@@ -256,15 +256,16 @@ the exact financial action constitutionally governable.
   Casper node status, inspect the canonical receipt, and audit `DAO-PROP-6CB25C`
   end to end.
 
-## Launch surfaces (pending publication)
+## Finals public URL map
 
-These ship inside the final round; the existing sslip links above are the
-working, submitted aliases and never change.
-
-- Production domain: `concordiadao.xyz` (+ `www`, `x402` subdomain).
-  `PENDING_PROOF`: production domain live, sslip aliases intact.
-- Documentation site: `docs.concordiadao.xyz`.
-  `PENDING_PROOF`: docs site live over HTTPS.
+- Main application: `https://concordiadao.xyz`; `https://www.concordiadao.xyz`
+  redirects to the main application.
+- SafePay v2 provider: `https://safepay.concordiadao.xyz` for the native-CSPR
+  provider flow.
+- Official WCSPR facilitator: `https://x402.concordiadao.xyz` for the separate
+  official x402 settlement flow.
+- Documentation site: `https://docs.concordiadao.xyz`.
+  `PENDING_PROOF`: HTTPS/publication evidence for these finals surfaces.
 - Verifier package: `npm install @concordia-dao/verify`.
   `PENDING_PROOF`: npm publish + clean-room install.
 

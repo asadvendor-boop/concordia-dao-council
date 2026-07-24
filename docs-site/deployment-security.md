@@ -13,11 +13,13 @@ dismissed-findings register — is the repository's
 
 ## Deployment shape
 
-- A live application runs on cloud infrastructure today; the submitted
-  `*.sslip.io` links are the working, stable aliases and never change.
-- The production domain, hosted docs portal, and published verifier package ship
-  inside the final round and are listed as planned surfaces on
-  [Links](links.md) — each is `PENDING_PROOF` until published.
+- Finals-facing public URLs use the owned-domain map in [Links](links.md): the
+  main application is `https://concordiadao.xyz`, `www` redirects to it,
+  SafePay v2 is `https://safepay.concordiadao.xyz`, official WCSPR x402 is
+  `https://x402.concordiadao.xyz`, and the documentation portal is
+  `https://docs.concordiadao.xyz`.
+- HTTPS/publication evidence and the published verifier package remain separate
+  `PENDING_PROOF` release gates.
 - Historical URLs inside immutable proof artifacts are never rewritten.
 
 ## Deterministic authority

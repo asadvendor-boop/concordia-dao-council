@@ -218,9 +218,9 @@ this file, and adjust narration to the fallback line — never the pending line.
 | G7a treasury execution | 8 | Cut the shot. Optionally substitute the LIVE historical browser-wallet approval receipt `56b6ea6c…` with 3–4 s dwell | If substituting, narrate only what it proves: "a real browser-wallet signature inside the quorum." Never say "treasury transfer", never mention 625/50 CSPR |
 | G6 SafePay v2 | 9 | The LIVE historical SafePay Lite settlement `dcb35f42…` on CSPR.live (2.5 CSPR, verified block 8,339,447) plus the judge-page SafePay panel | Narrate as historical verified payment-before-proof only. No "consumed exactly once", no idempotent-retry or 409 claims |
 | G7b official x402 | 10 | Cut the shot entirely; reallocate the 14 s as extra dwell on shots 4–7 (or the v2 fallback pair) | Never show the service or narrate WCSPR/facilitator settlement as done; do not describe it in voiceover at all |
-| G9n npm verifier | 11 | LIVE consistency checker on camera: `python3 scripts/verify_concordia_receipt.py --base-url https://concordia.47.84.232.193.sslip.io --proposal-id DAO-PROP-6CB25C` | Use scope-honest words: "a consistency check of the hosted artifacts against the chain" — never "independent recompute", never mention npm |
-| G10 domain / G9d docs | 12 | Same shot with the sslip URLs in the address bar; skip the docs beat | Do not say or show `concordiadao.xyz` or `docs.concordiadao.xyz` |
-| WP10 hosted release (proof cockpit deployed) | 1, 2, 12 | Record on the current live dashboard surfaces at the sslip origin (Overview, Judge Walkthrough, Proof Center, certificate) | Do not narrate cockpit-only features (registry status dimensions) unless they are on screen |
+| G9n npm verifier | 11 | LIVE consistency checker on camera: `python3 scripts/verify_concordia_receipt.py --base-url https://concordiadao.xyz --proposal-id DAO-PROP-6CB25C` | Use scope-honest words: "a consistency check of the hosted artifacts against the chain" — never "independent recompute", never mention npm |
+| G10 domain / G9d docs | 12 | Same shot with the owned-domain application URL in the address bar; skip the docs beat | Do not claim a hosted release state beyond the evidence visible on screen |
+| WP10 hosted release (proof cockpit deployed) | 1, 2, 12 | Record on the finals main application surfaces at `https://concordiadao.xyz` (Overview, Judge Walkthrough, Proof Center, certificate) | Do not narrate cockpit-only features (registry status dimensions) unless they are on screen |
 
 Rule of thumb: the LIVE spine (shots 1, 2, 3, plus the v2 fallback pair, plus
 the consistency checker, plus 12's certificate and 13) is a complete, honest
@@ -231,7 +231,7 @@ never breaks the cut.
 
 Services and data:
 
-- [ ] All judged sslip routes return 200 (run the automated link sweep; zero
+- [ ] All judged owned-domain routes return 200 (run the automated link sweep; zero
       broken links).
 - [ ] Dashboard, gateway, SafePay provider, and the official x402 service
       health endpoints are green; Caddy TLS valid.
@@ -328,16 +328,16 @@ flips; a blank row means the corresponding shot records its fallback.
 
 ## Links to open during recording
 
-- Overview (persona wall): <https://concordia.47.84.232.193.sslip.io/dashboard>
-- Judge Walkthrough (recording mode): <https://concordia.47.84.232.193.sslip.io/dashboard/judge?recording=1>
-- Proposal Workspace (transcript): <https://concordia.47.84.232.193.sslip.io/dashboard/proposals?proposal=DAO-PROP-6CB25C>
-- Proof Center: <https://concordia.47.84.232.193.sslip.io/dashboard/proof>
-- HTML certificate: <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C>
+- Overview (persona wall): <https://concordiadao.xyz/dashboard>
+- Judge Walkthrough (recording mode): <https://concordiadao.xyz/dashboard/judge?recording=1>
+- Proposal Workspace (transcript): <https://concordiadao.xyz/dashboard/proposals?proposal=DAO-PROP-6CB25C>
+- Proof Center: <https://concordiadao.xyz/dashboard/proof>
+- HTML certificate: <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C>
 - v2 pre-quorum revert deploy: <https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431>
 - v2 quorum-accepted deploy: <https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928>
 - SafePay Lite historical settlement: <https://testnet.cspr.live/deploy/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c>
-- Evidence chain (backup tab): <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C>
-- Proof pack (backup tab): <https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C>
+- Evidence chain (backup tab): <https://concordiadao.xyz/evidence/DAO-PROP-6CB25C>
+- Proof pack (backup tab): <https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C>
 - v3 deploy tabs, treasury deploy tab, x402 settlement tab: add from the
   pending-values table once their gates flip.
 

@@ -5,6 +5,10 @@ Concordia integrates the **official Casper x402 payment standard**: WCSPR
 (Wrapped CSPR) transfers authorized off-chain and settled through the
 CSPR.cloud x402 facilitator.
 
+The finals public **official WCSPR facilitator** surface is
+<https://x402.concordiadao.xyz>. It is separate from the SafePay v2 native-CSPR
+provider at <https://safepay.concordiadao.xyz>.
+
 !!! warning "Status: implemented locally — no live settlement evidence yet"
     The official x402 service described here is present in the local release
     candidate and remains fail-closed while integration gates run. It depends on
