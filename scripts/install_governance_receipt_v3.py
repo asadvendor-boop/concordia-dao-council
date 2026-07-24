@@ -1220,9 +1220,29 @@ def _normalize_deploy_json(value: object) -> object:
     return normalize_deploy_rpc_json(value)
 
 
+def _without_non_consensus_clvalue_parsed(value: object) -> object:
+    """Remove only RPC display values whose CLValue bytes are authoritative."""
+
+    if isinstance(value, Mapping):
+        keys = set(value)
+        return {
+            str(key): _without_non_consensus_clvalue_parsed(item)
+            for key, item in value.items()
+            if not (
+                key == "parsed"
+                and keys == {"bytes", "cl_type", "parsed"}
+            )
+        }
+    if isinstance(value, list):
+        return [_without_non_consensus_clvalue_parsed(item) for item in value]
+    return value
+
+
 def validate_finalized_install_deploy(
     value: object,
     manifest: Mapping[str, Any],
+    *,
+    expected_signed_deploy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
         "approvals",
@@ -1241,10 +1261,42 @@ def validate_finalized_install_deploy(
         raise InstallValidationError(
             "install deploy cannot be decoded canonically"
         ) from exc
-    if _normalize_deploy_json(canonical_json) != _normalize_deploy_json(value):
+    if _without_non_consensus_clvalue_parsed(
+        _normalize_deploy_json(canonical_json)
+    ) != _without_non_consensus_clvalue_parsed(_normalize_deploy_json(value)):
         raise InstallValidationError(
             "install deploy parsed fields disagree with canonical bytes"
         )
+    if expected_signed_deploy is not None:
+        try:
+            expected = serializer.from_json(dict(expected_signed_deploy), Deploy)
+            expected_canonical = canonical_deploy_rpc_json(expected)
+            expected_body_hash = exact_deploy_body_hash(expected)
+            expected_deploy_hash = create_digest_of_deploy(expected.header)
+        except Exception as exc:
+            raise InstallValidationError(
+                "immutable journal deploy cannot be decoded canonically"
+            ) from exc
+        if _normalize_deploy_json(expected_canonical) != _normalize_deploy_json(
+            expected_signed_deploy
+        ):
+            raise InstallValidationError(
+                "immutable journal deploy is not canonical Casper JSON"
+            )
+        if (
+            expected.header.body_hash != expected_body_hash
+            or expected.hash != expected_deploy_hash
+        ):
+            raise InstallValidationError(
+                "immutable journal deploy hash binding is invalid"
+            )
+        if not hmac.compare_digest(
+            serializer.to_bytes(deploy),
+            serializer.to_bytes(expected),
+        ):
+            raise InstallValidationError(
+                "node install deploy differs from immutable journal deploy"
+            )
     if deploy.header.body_hash != body_hash or deploy.hash != deploy_hash:
         raise InstallValidationError("install deploy body/deploy hash mismatch")
     if deploy_hash.hex() != _strip_hash(
@@ -1337,6 +1389,8 @@ def validate_finalized_install_deploy(
 def _validate_successful_install_rpc(
     transcript: Mapping[str, Any],
     manifest: Mapping[str, Any],
+    *,
+    expected_signed_deploy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     response = transcript.get("response")
     result = response.get("result") if isinstance(response, Mapping) else None
@@ -1350,7 +1404,11 @@ def _validate_successful_install_rpc(
         )
     if not isinstance(result["api_version"], str) or not result["api_version"]:
         raise InstallValidationError("install finality lacks api_version")
-    deploy_facts = validate_finalized_install_deploy(result["deploy"], manifest)
+    deploy_facts = validate_finalized_install_deploy(
+        result["deploy"],
+        manifest,
+        expected_signed_deploy=expected_signed_deploy,
+    )
     execution_info = result["execution_info"]
     if not isinstance(execution_info, Mapping) or set(execution_info) != {
         "block_hash",
@@ -1469,6 +1527,7 @@ def finalize_deployment_manifest(
     rpc_transport: PinnedHttpsJsonRpc,
     rpc_url: str,
     manifest: dict[str, Any],
+    signed_deploy: Mapping[str, Any],
     broadcast_response: Mapping[str, Any],
     two_node_finality: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1496,7 +1555,11 @@ def finalize_deployment_manifest(
         "block_hash": block_hash,
         "block_height": block_height,
     }
-    install_facts = _validate_successful_install_rpc(install_rpc, manifest)
+    install_facts = _validate_successful_install_rpc(
+        install_rpc,
+        manifest,
+        expected_signed_deploy=signed_deploy,
+    )
     if install_facts["block_hash"] != _strip_hash(block_hash, "install block hash"):
         raise InstallValidationError(
             "install finality summary disagrees with raw node response"
@@ -1832,6 +1895,7 @@ def main() -> int:
             rpc_transport=rpc_transport,
             rpc_url=rpc_urls[0],
             manifest=manifest,
+            signed_deploy=journal.signed_deploy,
             broadcast_response=raw_broadcast,
             two_node_finality=reconciliation,
         )

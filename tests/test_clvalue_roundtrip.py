@@ -379,6 +379,79 @@ def test_wasm_07_finalized_install_deploy_reproves_wasm_locked_args_and_signatur
             validate_finalized_install_deploy(broken, manifest)
 
 
+def test_wasm_07_finalized_install_accepts_node_boolean_parsed_values() -> None:
+    private = parse_private_key_bytes(bytes([7]) * 32, KeyAlgorithm.ED25519)
+    public = private.to_public_key()
+    roles = {
+        name: {"kind": "Account", "account_hash": bytes([offset] * 32).hex()}
+        for name, offset in zip(
+            ("proposer", "finalizer", "signer_a", "signer_b", "signer_c"),
+            (11, 12, 13, 14, 15),
+            strict=True,
+        )
+    }
+    nonce = "77" * 32
+    args = build_locked_install_args(
+        installer_account_hash=public.to_account_hash().hex(),
+        roles=roles,
+        threshold=2,
+        casper_chain_name="casper-test",
+        installation_nonce=nonce,
+    )
+    wasm = b"\x00asm" + b"concordia-v3-test"
+    deploy = create_deploy(
+        create_deploy_parameters(private, "casper-test", timestamp=1_784_750_400),
+        create_standard_payment(30_000_000_000),
+        DeployOfModuleBytes(module_bytes=wasm, args=args),
+    )
+    deploy.approve(private)
+    signed_json = exact_deploy_rpc_json(deploy)
+    node_json = copy.deepcopy(signed_json)
+    for name, value in node_json["session"]["ModuleBytes"]["args"]:
+        if name in {
+            "odra_cfg_allow_key_override",
+            "odra_cfg_is_upgradable",
+            "odra_cfg_is_upgrade",
+        }:
+            assert value["bytes"] == "00"
+            value["parsed"] = False
+    manifest = {
+        "installer_public_key": public.account_key.hex(),
+        "installer_account_hash": public.to_account_hash().hex(),
+        "installation_nonce": nonce,
+        "threshold": 2,
+        "roles": roles,
+        "build": {"wasm_sha256": hashlib.sha256(wasm).hexdigest()},
+        "install_deploy_hash": node_json["hash"],
+        "install_payment_motes": 30_000_000_000,
+    }
+
+    facts = validate_finalized_install_deploy(
+        node_json,
+        manifest,
+        expected_signed_deploy=signed_json,
+    )
+
+    assert facts["deploy_hash"] == node_json["hash"].lower()
+    assert facts["wasm_sha256"] == hashlib.sha256(wasm).hexdigest()
+
+    different = create_deploy(
+        create_deploy_parameters(private, "casper-test", timestamp=1_784_750_401),
+        create_standard_payment(30_000_000_000),
+        DeployOfModuleBytes(module_bytes=wasm, args=args),
+    )
+    different.approve(private)
+    with pytest.raises(
+        InstallValidationError,
+        match="differs from immutable journal deploy",
+    ):
+        validate_finalized_install_deploy(
+            node_json,
+            manifest,
+            expected_signed_deploy=exact_deploy_rpc_json(different),
+        )
+
+
 def test_install_payload_requires_and_persists_exact_source_and_deployment_commits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -895,7 +968,11 @@ def _deployment_evidence(
         "install_payment_motes": 30_000_000_000,
         "install_deploy_hash": install_json["hash"],
     }
-    verified_install = _validate_successful_install_rpc(install_raw, install_manifest)
+    verified_install = _validate_successful_install_rpc(
+        install_raw,
+        install_manifest,
+        expected_signed_deploy=install_json,
+    )
     release_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD^{commit}"],
         cwd=ROOT,
