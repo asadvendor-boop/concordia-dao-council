@@ -237,7 +237,7 @@ def _write_exact_command_gate_commit(repository: Path) -> str:
                 relative = _command_log_path(gate_id, command_id, stream)
                 _write_bytes(repository, relative, b"")
                 paths.append(relative)
-    assert len(paths) == 37
+    assert len(paths) == release_manifest._COMMAND_GATE_FIRST_ADD_PATH_COUNT == 43
     return _commit(repository, "exact command gate receipt commit C")
 
 
@@ -3538,7 +3538,11 @@ def test_release_history_accepts_host_authority_after_gate_receipts(
         commits["command"],
     ).decode().splitlines()
 
-    assert len(changed) == 37
+    assert (
+        len(changed)
+        == release_manifest._COMMAND_GATE_FIRST_ADD_PATH_COUNT
+        == 43
+    )
     release_manifest._assert_release_only_history(
         repository,
         integration_commit=commits["integration"],
@@ -3566,7 +3570,13 @@ def test_command_gate_commit_rejects_staggered_receipt_groups(
         _write_bytes(repository, relative, b"second command-gate group\n")
     staggered_commit = _commit(repository, "second command-gate receipt group")
 
-    with pytest.raises(ReleaseManifestError, match="direct child|exact 37"):
+    with pytest.raises(
+        ReleaseManifestError,
+        match=(
+            "direct child|exact "
+            f"{release_manifest._COMMAND_GATE_FIRST_ADD_PATH_COUNT}"
+        ),
+    ):
         release_manifest._assert_exact_command_gate_commit(
             repository,
             integration_commit=commits["integration"],

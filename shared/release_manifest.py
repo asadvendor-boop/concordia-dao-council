@@ -182,6 +182,9 @@ _COMMAND_GATE_FIRST_ADD_PATHS = frozenset(
         ),
     }
 )
+_COMMAND_GATE_FIRST_ADD_PATH_COUNT = 43
+if len(_COMMAND_GATE_FIRST_ADD_PATHS) != _COMMAND_GATE_FIRST_ADD_PATH_COUNT:
+    raise RuntimeError("command-gate first-add path inventory drifted")
 
 RECEIPT_PATHS: dict[str, str] = {
     "compose": "release/receipts/compose.json",
@@ -2896,7 +2899,8 @@ def _assert_exact_command_gate_commit(
         observed_paths.add(path)
     if observed_paths != _COMMAND_GATE_FIRST_ADD_PATHS:
         raise ReleaseManifestError(
-            "command-gate commit does not contain the exact 37 receipt/log paths"
+            "command-gate commit does not contain the exact "
+            f"{_COMMAND_GATE_FIRST_ADD_PATH_COUNT} receipt/log paths"
         )
 
 
