@@ -21,7 +21,11 @@ const { chromium } = requireRuntime("playwright");
 
 async function withBrowser(callback) {
   const browser = await chromium.launch({
-    chromiumSandbox: true,
+    // The locked test browser has no external network access and runs only
+    // synthetic local pages. Ubuntu CI disables unprivileged user namespaces,
+    // so requiring Chromium's OS sandbox would reject the test environment
+    // before either read-only browser contract can execute.
+    chromiumSandbox: false,
     headless: true,
   });
   try {

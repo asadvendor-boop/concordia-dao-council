@@ -18,7 +18,7 @@ from typing import Mapping, Sequence
 
 import pytest
 
-from shared import release_gate_contract, release_manifest
+from shared import bound_command, release_gate_contract, release_manifest
 from shared.proof_registry import (
     REQUIRED_CHECKS_BY_PROOF_TYPE,
     validate_release_registry_document,
@@ -249,14 +249,47 @@ def _write_exact_command_gate_commit(repository: Path) -> str:
     return _commit(repository, "exact command gate receipt commit C")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def real_release_history(
     tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, dict[str, str]]:
+    def synthetic_tool_identity(
+        spec: bound_command.ToolSpec,
+        *,
+        cwd: Path,
+    ) -> bound_command.SafeToolIdentity:
+        del cwd
+        digest = hashlib.sha256(
+            f"concordia-release-history-fixture:{spec.tool_id}".encode("ascii")
+        ).hexdigest()
+        return bound_command.SafeToolIdentity(
+            tool_id=spec.tool_id,
+            resolution="synthetic-test-fixture",
+            resolved_path_sha256=digest,
+            symlink_chain_sha256=digest,
+            source_sha256=digest,
+            source_size=1,
+            source_mode=0o755,
+            source_owner_uid=0,
+            version=spec.exact_version or f"{spec.tool_id} fixture",
+            dependencies={},
+        )
+
     repository = tmp_path_factory.mktemp("real-release-history") / "repository"
     deployment_commit = _new_deployment_history_base(repository)
     integration_commit = _write_evidence_integration(repository)
     command_commit = _write_exact_command_gate_commit(repository)
+    monkeypatch.setattr(
+        bound_command,
+        "_host_identity_material",
+        lambda: ("linux_machine_id", b"0" * 32),
+    )
+    monkeypatch.setattr(
+        bound_command,
+        "_inspect_with_staging",
+        synthetic_tool_identity,
+    )
     candidate = release_manifest.build_host_toolchain_receipt_candidate(
         repository_root=repository,
         source_commit=command_commit,

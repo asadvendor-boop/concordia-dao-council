@@ -25,7 +25,7 @@ def test_ci_checks_out_complete_history_with_immutable_actions() -> None:
 def test_ci_pins_release_runtimes_and_builds_verifier_before_pytest() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "timeout-minutes:" in source
+    assert "timeout-minutes: 75" in source
     assert "node-version: 22.12.0" in source
     assert "version: 0.10.12" in source
     assert "id: setup-uv" in source

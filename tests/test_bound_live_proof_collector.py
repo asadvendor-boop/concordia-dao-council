@@ -525,6 +525,11 @@ def test_worker_capability_is_inherited_bound_and_one_use(
         "_collect_worker",
         lambda _plan: (b'{"bundle":true}\n', b'{"transcript":true}\n'),
     )
+    monkeypatch.setattr(
+        collector,
+        "_inherited_fifo_descriptors",
+        lambda: (read_descriptor,),
+    )
 
     assert collector._worker_main(args) == 0
     assert bundle_output.read_bytes() == b'{"bundle":true}\n'
