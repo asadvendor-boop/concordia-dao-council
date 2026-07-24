@@ -35,7 +35,6 @@ x-concordia-env: &concordia-env
   CASPER_EXECUTION_MODE: ${CASPER_EXECUTION_MODE:-real}
   CASPER_EXECUTION_DRIVER: ${CASPER_EXECUTION_DRIVER:-pycspr}
   CONCORDIA_PYCSPR_DRY_RUN: "${CONCORDIA_PYCSPR_DRY_RUN:-0}"
-  CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
   CASPER_RECEIPT_CONTRACT_HASH: ${CASPER_RECEIPT_CONTRACT_HASH:?Set CASPER_RECEIPT_CONTRACT_HASH}
   CASPER_ENTRY_POINT: ${CASPER_ENTRY_POINT:-store_governance_receipt}
   CASPER_CALL_TARGET: ${CASPER_CALL_TARGET:-contract}
@@ -45,7 +44,6 @@ x-concordia-env: &concordia-env
   CASPER_CHAIN_NAME: ${CASPER_CHAIN_NAME:-casper-test}
   CASPER_PAYMENT_AMOUNT: ${CASPER_PAYMENT_AMOUNT:-5000000000}
   CSPR_CLOUD_API_URL: ${CSPR_CLOUD_API_URL:-https://api.testnet.cspr.cloud}
-  CSPR_CLOUD_ACCESS_TOKEN: ${CSPR_CLOUD_ACCESS_TOKEN:-}
   CSPR_CLOUD_STREAM_URL: ${CSPR_CLOUD_STREAM_URL:-wss://streaming.testnet.cspr.cloud}
   CASPER_QUORUM_PACKAGE_HASH: ${CASPER_QUORUM_PACKAGE_HASH:-}
   CASPER_QUORUM_CONTRACT_VERSION: ${CASPER_QUORUM_CONTRACT_VERSION:-1}
@@ -55,6 +53,19 @@ x-concordia-env: &concordia-env
   CSPR_TRADE_API_URL: ${CSPR_TRADE_API_URL:-}
   CSPR_TRADE_SLIPPAGE_BPS: ${CSPR_TRADE_SLIPPAGE_BPS:-50}
   CASPER_PUBLIC_STATUS_URL: ${CASPER_PUBLIC_STATUS_URL:-https://testnet.cspr.live}
+  IPFS_API_URL: ${IPFS_API_URL:-http://concordia-ipfs:5001}
+  IPFS_GATEWAY_BASE: ${IPFS_GATEWAY_BASE:-https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}/api/ipfs}
+  OTEL_ENABLED: ${OTEL_ENABLED:-1}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://concordia-otel-collector:4318}
+  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+
+# SafePay Lite is separate from the official x402 service. The legacy
+# facilitator URL/token path is deliberately absent from production Compose.
+x-safepay-env: &safepay-env
+  # SafePay v2 is pinned to one non-secret amount in every consumer. The
+  # legacy X402_PAYMENT_AMOUNT remains separate for historical v1 continuity.
+  SAFEPAY_AMOUNT_MOTES: "1000000"
   X402_SETTLEMENT_MODE: ${X402_SETTLEMENT_MODE:-demo}
   X402_PAYMENT_NETWORK: ${X402_PAYMENT_NETWORK:-casper-testnet}
   X402_PAYMENT_AMOUNT: ${X402_PAYMENT_AMOUNT:-1000000}
@@ -65,18 +76,6 @@ x-concordia-env: &concordia-env
   X402_RETRY_DELAY_SECONDS: ${X402_RETRY_DELAY_SECONDS:-5}
   X402_TRANSFER_PAYMENT_AMOUNT: ${X402_TRANSFER_PAYMENT_AMOUNT:-100000000}
   X402_CSPR_LIVE_API: ${X402_CSPR_LIVE_API:-https://api.testnet.cspr.live}
-  X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
-  X402_FACILITATOR_TOKEN: ${X402_FACILITATOR_TOKEN:-}
-  X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
-  X402_PROVIDER_TOKEN: ${X402_PROVIDER_TOKEN:-}
-  X402_PROVIDER_HOSTNAME: ${X402_PROVIDER_HOSTNAME:-}
-  X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
-  IPFS_API_URL: ${IPFS_API_URL:-http://concordia-ipfs:5001}
-  IPFS_GATEWAY_BASE: ${IPFS_GATEWAY_BASE:-https://${CONCORDIA_HOSTNAME:?Set CONCORDIA_HOSTNAME}/api/ipfs}
-  OTEL_ENABLED: ${OTEL_ENABLED:-1}
-  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://concordia-otel-collector:4318}
-  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
-  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
 
 x-concordia-secrets: &concordia-secrets
   - llm_api_key
@@ -89,9 +88,16 @@ x-concordia-secrets: &concordia-secrets
   - operator_submission_key
   - proposal_room_api_key
   - approval_proxy_secret
+  - approval_ui_user
+  - approval_ui_approver_id
   - approval_ui_bcrypt_hash
   - approval_ui_csrf_secret
+  - demo_capability_hmac_secret
+  - dashboard_demo_gateway_token
+  - safepay_proxy_secret
+  - safepay_quote_token_secret
   - concordia_operator_token
+  - x402_official_gateway_token
   - casper_secret_key
 
 services:
@@ -99,10 +105,14 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
     image: concordia-dao-council:local
     restart: unless-stopped
     environment:
-      <<: *concordia-env
+      <<: [*concordia-env, *safepay-env]
       CONCORDIA_SERVICE: gateway
       OTEL_SERVICE_NAME: concordia-gateway
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
@@ -115,12 +125,38 @@ services:
       OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
       PROPOSAL_ROOM_API_KEY_FILE: /run/secrets/proposal_room_api_key
       APPROVAL_PROXY_SECRET_FILE: /run/secrets/approval_proxy_secret
+      APPROVAL_UI_USER_FILE: /run/secrets/approval_ui_user
+      APPROVAL_UI_APPROVER_ID_FILE: /run/secrets/approval_ui_approver_id
       APPROVAL_UI_BCRYPT_HASH_FILE: /run/secrets/approval_ui_bcrypt_hash
       APPROVAL_UI_CSRF_SECRET_FILE: /run/secrets/approval_ui_csrf_secret
+      DEMO_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/demo_capability_hmac_secret
+      DASHBOARD_DEMO_GATEWAY_TOKEN_FILE: /run/secrets/dashboard_demo_gateway_token
+      SAFEPAY_PROXY_SECRET_FILE: /run/secrets/safepay_proxy_secret
+      SAFEPAY_QUOTE_TOKEN_SECRET_FILE: /run/secrets/safepay_quote_token_secret
+      SAFEPAY_TRUSTED_PROXY_CIDRS: ${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}
       CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+      X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
+      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+      CSPR_CLOUD_SERVICE_SCOPE: mercer
+      X402_PROVIDER_URL: https://safepay.concordiadao.xyz/x402/risk-report
+      CONCORDIA_RELEASE_ARTIFACTS_DIR: /app/artifacts
+      CONCORDIA_PROOF_REGISTRY_DIR: /run/config/proof-registry
+      CONCORDIA_CARD_CHAIN_ROOTS_FILE: /app/artifacts/live/card-chain-roots-v1.json
     secrets: *concordia-secrets
     volumes:
       - concordia-data:/data
+      - type: bind
+        source: ${CONCORDIA_RELEASE_ARTIFACTS_HOST_DIR:?Set CONCORDIA_RELEASE_ARTIFACTS_HOST_DIR}
+        target: /app/artifacts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CONCORDIA_PROOF_REGISTRY_HOST_DIR:?Set CONCORDIA_PROOF_REGISTRY_HOST_DIR}
+        target: /run/config/proof-registry
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       concordia-edge:
         aliases:
@@ -128,6 +164,7 @@ services:
       concordia-internal:
         aliases:
           - concordia-gateway
+          - gateway
     depends_on:
       simulator:
         condition: service_started
@@ -144,17 +181,25 @@ services:
     image: concordia-dao-council:local
     restart: unless-stopped
     environment:
-      <<: *concordia-env
+      <<: [*concordia-env, *safepay-env]
       CONCORDIA_SERVICE: x402-provider
       OTEL_SERVICE_NAME: concordia-x402-provider
       X402_PROVIDER_URL: ""
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       GATEWAY_SECRET_FILE: /run/secrets/gateway_secret
-      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
+      X402_LEDGER: /data/safepay.db
+      SAFEPAY_PROXY_SECRET_FILE: /run/secrets/safepay_proxy_secret
+      SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE: /run/secrets/safepay_client_key_hmac_secret
+      SAFEPAY_TRUSTED_PROXY_CIDRS: ${SAFEPAY_TRUSTED_PROXY_CIDRS:?Set SAFEPAY_TRUSTED_PROXY_CIDRS}
+      SAFEPAY_PAYEE_ACCOUNT_HASH: ${SAFEPAY_PAYEE_ACCOUNT_HASH:?Set SAFEPAY_PAYEE_ACCOUNT_HASH}
+      X402_PROVIDER_SIMULATE_LAG_ATTEMPTS: ${X402_PROVIDER_SIMULATE_LAG_ATTEMPTS:-0}
     secrets:
       - llm_api_key
       - gateway_secret
-      - casper_secret_key
+      - safepay_proxy_secret
+      - safepay_client_key_hmac_secret
+    volumes:
+      - x402_provider_data:/data
     networks:
       concordia-edge:
         aliases:
@@ -167,6 +212,65 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *bounded-logging
+
+  x402-official:
+    build:
+      context: ../..
+      dockerfile: services/x402-official/Dockerfile
+      args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
+    image: concordia-x402-official:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      X402_OFFICIAL_PORT: "8787"
+      X402_FACILITATOR_URL: https://x402-facilitator.cspr.cloud
+      X402_NETWORK: casper:casper-test
+      X402_SCHEME: exact
+      X402_WCSPR_PACKAGE_HASH: 3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e
+      X402_WCSPR_CONTRACT_HASH: 032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a
+      X402_WCSPR_CONTRACT_VERSION: "8"
+      X402_TOKEN_NAME: Wrapped CSPR
+      X402_TOKEN_SYMBOL: WCSPR
+      X402_TOKEN_DECIMALS: "9"
+      X402_TOKEN_DOMAIN_VERSION: "1"
+      X402_LEDGER_PATH: /data/x402-official.db
+      X402_GATEWAY_INTERNAL_URL: http://gateway:8000
+      X402_RESOURCES_FILE: /run/config/x402-resources.json
+      X402_GOVERNANCE_V3_CONFIG_FILE: /run/config/x402-governance-v3.json
+      X402_CSPR_CLOUD_TOKEN_FILE: /run/secrets/x402_official_cspr_cloud_token
+      X402_SIGNER_FILE: /run/secrets/x402_official_signer
+      X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
+    secrets:
+      - x402_official_cspr_cloud_token
+      - x402_official_signer
+      - x402_official_gateway_token
+    volumes:
+      - x402_official_data:/data
+      - type: bind
+        source: ${X402_OFFICIAL_CONFIG_DIR:?Set X402_OFFICIAL_CONFIG_DIR}
+        target: /run/config
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      concordia-edge:
+        aliases:
+          - concordia-x402-official
+      concordia-internal:
+        aliases:
+          - concordia-x402-official
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -189,17 +293,20 @@ services:
       context: ../..
       dockerfile: dashboard/Dockerfile
       args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
         NEXT_PUBLIC_GATEWAY_URL: ""
         NEXT_PUBLIC_CONCORDIA_MODE: reviewer
-        NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:-csprclick-template}
+        NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:?required public CSPR.click AppID}
     image: concordia-dashboard:local
     restart: unless-stopped
     environment:
       GATEWAY_URL: http://concordia-gateway:8000
       CONCORDIA_LIVE_DEMO: "${CONCORDIA_LIVE_DEMO:-0}"
-      CONCORDIA_OPERATOR_TOKEN_FILE: /run/secrets/concordia_operator_token
+      DASHBOARD_DEMO_GATEWAY_TOKEN_FILE: /run/secrets/dashboard_demo_gateway_token
     secrets:
-      - concordia_operator_token
+      - dashboard_demo_gateway_token
     networks:
       concordia-edge:
         aliases:
@@ -240,9 +347,11 @@ services:
       AGENT_ROLE: mercer
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       DIAGNOSIS_SUBMISSION_KEY_FILE: /run/secrets/diagnosis_submission_key
+      CSPR_CLOUD_ACCESS_TOKEN_FILE: /run/secrets/cspr_cloud_access_token
     secrets:
       - llm_api_key
       - diagnosis_submission_key
+      - cspr_cloud_access_token
     networks:
       - concordia-internal
     depends_on:
@@ -297,6 +406,7 @@ services:
       AGENT_ROLE: locke
       LLM_API_KEY_FILE: /run/secrets/llm_api_key
       OPERATOR_SUBMISSION_KEY_FILE: /run/secrets/operator_submission_key
+      CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
     secrets:
       - llm_api_key
       - operator_submission_key
@@ -344,7 +454,7 @@ services:
     logging: *bounded-logging
 
   ipfs:
-    image: ipfs/kubo:v0.32.1
+    image: ipfs/kubo@sha256:7cc0e0de8f845d6c9fa1dce414c069974c34ed3cd3742e0d4f5bccda4adc376d
     container_name: concordia-ipfs
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
@@ -364,7 +474,7 @@ services:
     logging: *bounded-logging
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.114.0
+    image: otel/opentelemetry-collector-contrib@sha256:37fa87091cfaaec7234a27e4e395a40c31c2bfaea97a349a4afef6d9e9681197
     container_name: concordia-otel-collector
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yml"]
@@ -384,7 +494,7 @@ services:
     logging: *bounded-logging
 
   jaeger:
-    image: jaegertracing/all-in-one:1.62.0
+    image: jaegertracing/all-in-one@sha256:836e9b69c88afbedf7683ea7162e179de63b1f981662e83f5ebb68badadc710f
     container_name: concordia-jaeger
     restart: unless-stopped
     environment:
@@ -411,6 +521,8 @@ networks:
 volumes:
   concordia-data:
   concordia-ipfs-data:
+  x402_provider_data:
+  x402_official_data:
 
 secrets:
   llm_api_key:
@@ -433,11 +545,33 @@ secrets:
     file: ${PROPOSAL_ROOM_API_KEY_FILE:-/opt/apps/concordia/secrets/proposal_room_api_key}
   approval_proxy_secret:
     file: ${APPROVAL_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/approval_proxy_secret}
+  approval_ui_user:
+    file: ${APPROVAL_UI_USER_FILE:-/opt/apps/concordia/secrets/approval_ui_user}
+  approval_ui_approver_id:
+    file: ${APPROVAL_UI_APPROVER_ID_FILE:-/opt/apps/concordia/secrets/approval_ui_approver_id}
   approval_ui_bcrypt_hash:
     file: ${APPROVAL_UI_BCRYPT_HASH_FILE:-/opt/apps/concordia/secrets/approval_ui_bcrypt_hash}
   approval_ui_csrf_secret:
     file: ${APPROVAL_UI_CSRF_SECRET_FILE:-/opt/apps/concordia/secrets/approval_ui_csrf_secret}
+  demo_capability_hmac_secret:
+    file: ${DEMO_CAPABILITY_HMAC_SECRET_FILE:-/opt/apps/concordia/secrets/demo_capability_hmac_secret}
+  dashboard_demo_gateway_token:
+    file: ${DASHBOARD_DEMO_GATEWAY_TOKEN_FILE:-/opt/apps/concordia/secrets/dashboard_demo_gateway_token}
   concordia_operator_token:
     file: ${CONCORDIA_OPERATOR_TOKEN_FILE:-/opt/apps/concordia/secrets/concordia_operator_token}
+  safepay_proxy_secret:
+    file: ${SAFEPAY_PROXY_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_proxy_secret}
+  safepay_quote_token_secret:
+    file: ${SAFEPAY_QUOTE_TOKEN_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_quote_token_secret}
+  safepay_client_key_hmac_secret:
+    file: ${SAFEPAY_CLIENT_KEY_HMAC_SECRET_FILE:-/opt/apps/concordia/secrets/safepay_client_key_hmac_secret}
+  x402_official_cspr_cloud_token:
+    file: ${X402_OFFICIAL_CSPR_CLOUD_TOKEN_FILE:-/opt/apps/concordia/secrets/x402_official_cspr_cloud_token}
+  x402_official_signer:
+    file: ${X402_OFFICIAL_SIGNER_FILE:-/opt/apps/concordia/secrets/x402_official_signer}
+  x402_official_gateway_token:
+    file: ${X402_OFFICIAL_GATEWAY_TOKEN_FILE:-/opt/apps/concordia/secrets/x402_official_gateway_token}
   casper_secret_key:
     file: ${CASPER_SECRET_KEY_FILE:-/opt/apps/concordia/secrets/casper_secret_key.pem}
+  cspr_cloud_access_token:
+    file: ${CSPR_CLOUD_ACCESS_TOKEN_FILE:-/opt/apps/concordia/secrets/cspr_cloud_access_token}

@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.prepare_odra_quorum_exercise import call_specs, envelope, receipt_args, sha256_hex  # noqa: E402
 from shared.casper_executor import await_casper_finality, submit_odra_call_deploy  # noqa: E402
+from shared.exact_casper_deploy_json import exact_deploy_rpc_json  # noqa: E402
 
 DEPLOY_HASH_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
 HASH_RE = re.compile(r"^(?:hash|package)-[0-9a-fA-F]{64}$")
@@ -195,7 +196,7 @@ def _install_payload(
         "jsonrpc": "2.0",
         "id": f"concordia-odra-install-{int(time.time() * 1000)}",
         "method": "account_put_deploy",
-        "params": {"deploy": serializer.to_json(deploy)},
+        "params": {"deploy": exact_deploy_rpc_json(deploy)},
     }
 
 

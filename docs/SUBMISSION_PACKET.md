@@ -69,7 +69,7 @@ Contract lineage note: the canonical reviewer receipt writes to the Jun 29 v1 Go
 
 SafePay Lite demonstrates conditional paid specialist-report settlement: Concordia verifies Casper payment, validates the provider report hash, shows deterministic duplicate-proof replay, records provider reputation delta, and includes the result in the governance proof. It is not a full escrow, refund contract, or marketplace claim.
 
-Technical jury note: the canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless fully evidenced and signed; the Odra topology genesis proves auxiliary modules independently; and full cross-contract production enforcement is roadmap, not overclaimed. Public note: https://concordia.47.84.232.193.sslip.io/technical-jury-note
+Technical jury note: the canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless fully evidenced and signed; the Odra topology genesis proves auxiliary modules independently; and full cross-contract production enforcement is roadmap, not overclaimed. Public note: https://concordiadao.xyz/technical-jury-note
 
 Roadmap-only:
 
@@ -95,7 +95,7 @@ Plan hash: 603c61df5efc7c911d6c3cbc9063ba3e7b7ac3d580a61e90c89aa0673ef2ac93
 Policy hash: cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6
 Dissent hash: 53fb4bc558cf2ee3d70d1a61b2462bdc3da92cd6e2ee24594eabff7f7a2055da
 Approved allocation bps: 800
-Evidence URL: https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C
+Evidence URL: https://concordiadao.xyz/evidence/DAO-PROP-6CB25C
 Team name:
 Contact:
 ```
@@ -103,9 +103,9 @@ Contact:
 Current live proof status:
 
 ```text
-Live app URL: https://concordia.47.84.232.193.sslip.io/dashboard
-Judge Walkthrough URL: https://concordia.47.84.232.193.sslip.io/dashboard/judge
-Technical Jury Note URL: https://concordia.47.84.232.193.sslip.io/technical-jury-note
+Live app URL: https://concordiadao.xyz/dashboard
+Judge Walkthrough URL: https://concordiadao.xyz/dashboard/judge
+Technical Jury Note URL: https://concordiadao.xyz/technical-jury-note
 Casper Testnet live read: verified
 Hosted execution mode: real
 Hosted Testnet public key: 019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151

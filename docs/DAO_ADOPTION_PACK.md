@@ -26,7 +26,7 @@ Concordia DAO Council is intended as a policy-governed execution firewall for Ca
 - Verity enforces the DAO Constitution and records structured dissent.
 - Alden converts a revised decision into an exact action envelope.
 - Locke submits only an approved, hash-bound receipt to Casper Testnet.
-- Wells summarizes the sealed evidence trail.
+- Wells presents the sealed evidence trail (non-reasoning archival persona; the deterministic archive is produced by Locke/Core).
 
 ## What Agents May Not Do
 

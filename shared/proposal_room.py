@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from shared.runtime_secrets import read_secret
+
 
 class ProposalRoomClient:
     """Async client for Gateway-managed Council Chambers."""
@@ -26,7 +28,9 @@ class ProposalRoomClient:
         timeout: float = 30.0,
     ):
         self.gateway_url = (gateway_url or os.getenv("GATEWAY_URL", "http://127.0.0.1:8000")).rstrip("/")
-        self.agent_key = agent_key or os.getenv(f"{sender_role.upper()}_SUBMISSION_KEY", "") or os.getenv("GATEWAY_SECRET", "")
+        self.agent_key = agent_key or read_secret(
+            f"{sender_role.upper()}_SUBMISSION_KEY"
+        )
         self.sender_id = sender_id or os.getenv(f"{sender_role.upper()}_AGENT_ID", sender_role)
         self.sender_role = sender_role
         self.client = httpx.AsyncClient(
@@ -59,13 +63,13 @@ class ProposalRoomClient:
         role: str | None = None,
         display_name: str | None = None,
     ) -> None:
+        del role  # target role is derived by the Gateway's principal registry
+        body = {"participant_id": participant_id}
+        if display_name is not None:
+            body["display_name"] = display_name
         response = await self.client.post(
             f"/rooms/{room_id}/participants",
-            json={
-                "participant_id": participant_id,
-                "role": role,
-                "display_name": display_name,
-            },
+            json=body,
         )
         response.raise_for_status()
 
@@ -81,13 +85,11 @@ class ProposalRoomClient:
         sender_role: str | None = None,
         sender_type: str = "Agent",
     ) -> str:
+        del sender_id, sender_role, sender_type
         response = await self.client.post(
             f"/rooms/{room_id}/messages",
             json={
                 "content": content,
-                "sender_id": sender_id or self.sender_id,
-                "sender_role": sender_role or self.sender_role,
-                "sender_type": sender_type,
                 "mentions": mentions or [],
                 "message_type": message_type,
                 "metadata": metadata or {},

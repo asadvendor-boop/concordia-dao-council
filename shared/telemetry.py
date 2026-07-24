@@ -49,11 +49,10 @@ def init_telemetry(service_name: str | None = None) -> dict[str, Any]:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except Exception as exc:  # pragma: no cover - optional dependency guard
+    except Exception:  # pragma: no cover - optional dependency guard
         _STATUS = {
             "enabled": False,
             "reason": "dependency_missing",
-            "error": f"{type(exc).__name__}: {exc}",
         }
         return dict(_STATUS)
 

@@ -8,7 +8,7 @@ This file separates verified engineering proof from publication assets that must
 
 | Asset | Status | Evidence |
 |---|---|---|
-| Live app | Ready | https://concordia.47.84.232.193.sslip.io/dashboard/judge |
+| Live app | Ready | https://concordiadao.xyz/dashboard/judge |
 | Canonical reviewer receipt | Ready | `e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852` |
 | Supplemental dynamic lifecycle proof | Ready | `DAO-PROP-DYN-002` -> `68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0` |
 | Supplemental quorum proof | Ready | `9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928` |
@@ -22,7 +22,7 @@ This file separates verified engineering proof from publication assets that must
 | Launch roadmap | Ready | `docs/LAUNCH_ROADMAP.md` |
 | Demo video | Published | https://www.youtube.com/watch?v=GU01V83Jrko |
 | DoraHacks submission text | Ready | `docs/DORAHACKS_SUBMISSION_TEXT.md` |
-| Technical jury note | Ready | `docs/TECHNICAL_JURY_NOTE.md` and `https://concordia.47.84.232.193.sslip.io/technical-jury-note` |
+| Technical jury note | Ready | `docs/TECHNICAL_JURY_NOTE.md` and `https://concordiadao.xyz/technical-jury-note` |
 
 ## External Publication Assets
 

@@ -134,8 +134,14 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
     await expect(collapseButton).toBeVisible();
     await expect(collapseButton).toBeEnabled();
-    await collapseButton.click();
-    await expect(page.locator(".app-shell.sidebar-collapsed")).toBeVisible();
+    // Hydration race (same class as the tablet navigation fix): the server
+    // renders the button before React attaches its click handler, so a click
+    // straight after first paint can be silently lost. Bounded retry of the
+    // click until the collapsed state appears — no sleeps, assertions intact.
+    await expect(async () => {
+      await collapseButton.click();
+      await expect(page.locator(".app-shell.sidebar-collapsed")).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
     const sidebarWidth = await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width));
     expect(sidebarWidth).toBe(88);
@@ -155,7 +161,10 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     await expect(page.getByRole("heading", { name: "Live wallet / testnet sandbox" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open Wallet Sandbox" })).toBeVisible();
     await gotoDashboardRoute(page, "/dashboard/proof?tab=onchain");
-    await expect(page.getByRole("button", { name: "On-chain" })).toHaveClass(/active/);
+    // Proof-Center sections are now ARIA tabs (role=tab, aria-selected).
+    const onchainTab = page.getByRole("tab", { name: "On-chain" });
+    await expect(onchainTab).toHaveClass(/active/);
+    await expect(onchainTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "Judge Sandbox" })).toBeVisible();
     await expect(page.getByText("Advanced: re-run signing demo")).toBeVisible();
     await assertNoHorizontalOverflow(page);
@@ -180,8 +189,13 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
       });
     });
     await gotoDashboardRoute(page, "/dashboard/judge");
-    await page.getByRole("button", { name: "Try to Break Concordia" }).click();
-    await expect(page.getByText("Mode")).toBeVisible();
+    // Retry the trigger-click until the replay panel lands: a click dispatched
+    // before React hydration attaches the handler is silently lost (test
+    // timing artifact, not an app defect — same idiom as the nav-drawer test).
+    await expect(async () => {
+      await page.getByRole("button", { name: "Try to Break Concordia" }).click();
+      await expect(page.getByText("Mode")).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     await expect(page.getByText("Deterministic Adversarial Replay")).toBeVisible();
     await expect(page.locator(".safety-demo-grid").getByText("Fallback")).toHaveCount(0);
   });
@@ -275,7 +289,7 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
       const bg = bgRaw ? compositeOver(bgRaw) : null;
       expect(fg, JSON.stringify(sample)).toBeTruthy();
       expect(bg, JSON.stringify(sample)).toBeTruthy();
-      expect(contrastRatio(fg, bg), JSON.stringify(sample)).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(fg, bg), JSON.stringify(sample)).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

@@ -1,4 +1,4 @@
-"""Run Wells, the Governance Archivist."""
+"""Run the presentation-only Wells roster heartbeat."""
 import asyncio
 from agents.wells import main
 

@@ -1,0 +1,207 @@
+{
+  "schema_version": "concordia-g0r-fallback-evidence-v1",
+  "status": "pass",
+  "observed_at": "2026-07-22T19:33:00Z",
+  "read_only": true,
+  "secret_values_recorded": false,
+  "baseline": {
+    "repository": "/Users/asad.ali/Desktop/FreshAgents/concordia/revised/concordia-dao-council",
+    "commit": "b79b42c974daa6ba4b8d904573f6c321ecef1a98",
+    "origin_main": "b79b42c974daa6ba4b8d904573f6c321ecef1a98",
+    "tree": "c82655a79882ab3fcd596e388b07aebfd0bc1701",
+    "porcelain_entry_count": 0,
+    "untracked_entry_count": 0,
+    "untracked_snapshot": {
+      "command_semantics": "git status --porcelain=v1 --untracked-files=all on the canonical main worktree",
+      "entries": [],
+      "secret_values_read": false
+    }
+  },
+  "git_bundle": {
+    "path": "/Users/asad.ali/Desktop/FreshAgents/concordia/backups/concordia-b79b42c-pre-v3-sprint-20260722T155102Z.bundle",
+    "size_bytes": 7222968,
+    "sha256": "8943a468ee805c459b6b9bb6fc3d68d145226aec8d2ed0d3db113e174ba92e7f",
+    "git_bundle_verify": "pass",
+    "complete_history": true,
+    "head": "b79b42c974daa6ba4b8d904573f6c321ecef1a98"
+  },
+  "vm_backup": {
+    "host": "47.84.232.193",
+    "path": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z",
+    "source_archive": {
+      "path": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z/concordia-src.tgz",
+      "size_bytes": 978474044,
+      "tar_list_readability": "pass",
+      "root_entry": "src/"
+    },
+    "database": {
+      "path": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z/concordia.db.bak",
+      "size_bytes": 618496,
+      "sqlite_open_mode": "read_only",
+      "pragma_integrity_check": "ok",
+      "runtime_volume_path": "/var/lib/docker/volumes/concordia_concordia-data/_data/concordia.db",
+      "backup_owner_mode": "0:0 0644"
+    },
+    "environment_backup": {
+      "directory": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z/shared-host-env",
+      "current_filename": "concordia.env",
+      "contents_read": false
+    },
+    "caddy_snapshots": [
+      "_opt_apps_platform_Caddyfile",
+      "_opt_apps_platform_backups_caddy-yiting-vhost-20260708T150957Z_Caddyfile",
+      "_opt_apps_qunce_src_deploy_platform_Caddyfile"
+    ],
+    "docker_image_inventory": {
+      "path": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z/docker-images-digests.txt",
+      "unique_image_ids": 77,
+      "locally_available": 77,
+      "actual_restart_performed": false,
+      "reason": "Image presence and exact app-scoped restore commands were validated without disturbing the judged production stack; the completed system-disk snapshot is the exact whole-VM relaunch fallback."
+    },
+    "running_concordia_images": {
+      "dashboard": "sha256:676bcb188b60c84f09882bd53a7da0b35c0e9619b2d03a4b9b5f0f873d451696",
+      "gateway_and_simulator": "sha256:f8158401471d1e3cfc7c06c9ba7db08c623b858d025867ab6663bb5f2fcbcbcd",
+      "agents_and_x402_provider": "sha256:8745b16a7eaf9136debacc52bed346ad92e28b50b07516b2537e9c4b3fb0494d",
+      "ipfs": "sha256:7cc0e0de8f845d6c9fa1dce414c069974c34ed3cd3742e0d4f5bccda4adc376d",
+      "otel_collector": "sha256:37fa87091cfaaec7234a27e4e395a40c31c2bfaea97a349a4afef6d9e9681197",
+      "jaeger": "sha256:836e9b69c88afbedf7683ea7162e179de63b1f981662e83f5ebb68badadc710f"
+    }
+  },
+  "ecs_snapshot": {
+    "region": "ap-southeast-1",
+    "snapshot_id": "s-t4nip7i1zb1dradznxiq",
+    "name": "pre-v3-sprint-20260722-all4apps-golden",
+    "disk_id": "d-t4ngvwxej924e2yayqi5",
+    "size_gb": 100,
+    "status": "accomplished",
+    "progress_percent": 100,
+    "completed": true
+  },
+  "route_crawl": {
+    "observed_at": "2026-07-22T19:28:18.454423Z",
+    "method": "Python urllib.request GET with redirects recorded",
+    "user_agent": "Concordia-G0R-readonly/1.0",
+    "post_requests": 0,
+    "requested_count": 16,
+    "final_200_count": 16,
+    "routes": [
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/agents", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/agents", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proposals?proposal=DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proposals?proposal=DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/approvals", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/approvals", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/record", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/record", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/technical-jury-note", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/technical-jury-note", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C", "status": 200, "content_type": "application/json", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C", "status": 200, "content_type": "application/json", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/technical-jury-note", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/technical-jury-note", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": [{"status": 307, "location": "/dashboard/technical-jury-note"}]},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf", "effective_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf", "status": 200, "content_type": "application/pdf", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/safepay-lite/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/safepay-lite/DAO-PROP-6CB25C", "status": 200, "content_type": "application/json", "redirect_chain": []}
+    ]
+  },
+  "anchor_audit": {
+    "observed_at": "2026-07-22T19:31:00.825259Z",
+    "source_pages": 10,
+    "raw_anchor_count": 164,
+    "unique_http_targets": 32,
+    "successful_200_targets": 32,
+    "broken_targets": 0,
+    "denylisted_demo_mutation_targets": 0,
+    "targets": [
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq", "effective_url": "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq", "status": 200, "content_type": "text/plain; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/api/runs/DAO-PROP-6CB25C/trace", "effective_url": "https://concordia.47.84.232.193.sslip.io/api/runs/DAO-PROP-6CB25C/trace", "status": 200, "content_type": "application/json", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf", "effective_url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf", "status": 200, "content_type": "application/pdf", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/agents", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/agents", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/approvals", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/approvals", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence?proposal=DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/evidence?proposal=DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge?proposal=DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/judge?proposal=DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?tab=onchain", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?tab=onchain", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proposals", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proposals", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs?proposal=DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/runs?proposal=DAO-PROP-6CB25C", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/dashboard/technical-jury-note", "effective_url": "https://concordia.47.84.232.193.sslip.io/dashboard/technical-jury-note", "status": 200, "content_type": "text/html; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C", "status": 200, "content_type": "application/json", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/download", "status": 200, "content_type": "application/json", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/cards.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/cards.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/casper_receipts.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/casper_receipts.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/outcomes.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/outcomes.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/proof_table.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/proof_table.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/reputation.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/reputation.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/x402_settlements.csv", "effective_url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/exports/x402_settlements.csv", "status": 200, "content_type": "text/csv; charset=utf-8", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/contract/a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1", "effective_url": "https://testnet.cspr.live/contract/a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1", "status": 200, "content_type": "text/html", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/deploy/56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf", "effective_url": "https://testnet.cspr.live/deploy/56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf", "status": 200, "content_type": "text/html", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431", "effective_url": "https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431", "status": 200, "content_type": "text/html", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/deploy/7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da", "effective_url": "https://testnet.cspr.live/deploy/7ee77b11b8373fa55976b047e5613d391dd2ece5b6c2f0671c7232183cc875da", "status": 200, "content_type": "text/html", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928", "effective_url": "https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928", "status": 200, "content_type": "text/html", "redirect_chain": []},
+      {"requested_url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852", "effective_url": "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852", "status": 200, "content_type": "text/html", "redirect_chain": []}
+    ]
+  },
+  "live_buidl_backup": {
+    "path": "/Users/asad.ali/Desktop/FreshAgents/concordia/backups/BUIDL-46732-live-backup-2026-07-22.md",
+    "size_bytes": 8365,
+    "sha256": "1ebc976928fbccd39692e259c26b468e747daff038d9923aed52f254729a0eb2",
+    "copied_into_repository": false,
+    "link_audit": {
+      "observed_at": "2026-07-22T19:44:05.268651Z",
+      "method": "Python urllib.request GET consuming one byte with redirects recorded",
+      "post_requests": 0,
+      "unique_targets": 13,
+      "successful_200_targets": 13,
+      "broken_targets": 0,
+      "targets": [
+        {"requested_url":"https://www.youtube.com/watch?v=GU01V83Jrko","effective_url":"https://www.youtube.com/watch?v=GU01V83Jrko","status":200,"content_type":"text/html; charset=utf-8","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431","effective_url":"https://testnet.cspr.live/deploy/6280b8e1964fb341dc82f7bf82213631591a8113abe1df47528de864bcf67431","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928","effective_url":"https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://concordia.47.84.232.193.sslip.io/dashboard/judge","effective_url":"https://concordia.47.84.232.193.sslip.io/dashboard/judge","status":200,"content_type":"text/html; charset=utf-8","redirect_chain":[]},
+        {"requested_url":"https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C","effective_url":"https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C","status":200,"content_type":"text/html; charset=utf-8","redirect_chain":[]},
+        {"requested_url":"https://github.com/asadvendor-boop/concordia-dao-council","effective_url":"https://github.com/asadvendor-boop/concordia-dao-council","status":200,"content_type":"text/html; charset=utf-8","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852","effective_url":"https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live","effective_url":"https://testnet.cspr.live","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/contract-package/992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a","effective_url":"https://testnet.cspr.live/contract-package/992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/contract/a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1","effective_url":"https://testnet.cspr.live/contract/a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://testnet.cspr.live/contract-package/1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96","effective_url":"https://testnet.cspr.live/contract-package/1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96","status":200,"content_type":"text/html","redirect_chain":[]},
+        {"requested_url":"https://x.com/ConcordiaDAO","effective_url":"https://x.com/ConcordiaDAO","status":200,"content_type":"text/html; charset=UTF-8","redirect_chain":[]},
+        {"requested_url":"https://github.com/asadvendor-boop/concordia-dao-council/blob/main/docs/LAUNCH_ROADMAP.md","effective_url":"https://github.com/asadvendor-boop/concordia-dao-council/blob/main/docs/LAUNCH_ROADMAP.md","status":200,"content_type":"text/html; charset=utf-8","redirect_chain":[]}
+      ]
+    }
+  },
+  "visual_baseline": {
+    "viewport": "1440x900",
+    "manually_inspected": true,
+    "screenshots": [
+      {"path": "output/playwright/g0r/dashboard-1440x900.png", "dimensions": "1440x2127", "sha256": "1eb280bd549ff9c661ded751876bd6148c330449262556a1f1f991b4fd3b14d7"},
+      {"path": "output/playwright/g0r/judge-1440x900.png", "dimensions": "1440x3781", "sha256": "8fd1bfffa9e11226460686a3d77e2c2c38729abfeb13a96521e656287fb25272"},
+      {"path": "output/playwright/g0r/proof-1440x900.png", "dimensions": "1440x1188", "sha256": "41f8838bf55cec7328a76d9fd29b07bfcfed4bce2cb301d332e442771f42928c"},
+      {"path": "output/playwright/g0r/certificate-1440x900.png", "dimensions": "1440x1359", "sha256": "510a792f2a94e7486a9a5850781e4cb69c9610c9e731e4e9a24c0665435a89cc"}
+    ],
+    "console_observation": {
+      "release_blocking_errors": 0,
+      "nonblocking_errors": 1,
+      "detail": "The standalone HTML certificate requested /favicon.ico and received 404; certificate content and all audited submission links remained 200."
+    }
+  },
+  "restore_runbook": "handoff/G0R_RESTORE_RUNBOOK.md",
+  "pass_predicate": {
+    "bundle_verified": true,
+    "archive_readable": true,
+    "database_integrity_ok": true,
+    "all_recorded_images_available": true,
+    "disk_snapshot_complete": true,
+    "submission_routes_healthy": true,
+    "anchor_audit_zero_broken": true,
+    "live_buidl_backup_and_13_links_verified": true,
+    "visual_baseline_captured": true,
+    "restore_instructions_written": true
+  }
+}

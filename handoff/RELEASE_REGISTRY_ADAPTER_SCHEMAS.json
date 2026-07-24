@@ -1,0 +1,472 @@
+{
+  "adapter_api": {
+    "official_x402": "verify_official_x402_artifact(document, raw_bytes)",
+    "official_result_required_fields": [
+      "schema_version",
+      "proof_type",
+      "artifact_sha256",
+      "derived_facts",
+      "internal_record",
+      "checks"
+    ],
+    "safepay_result_required_fields": [
+      "schema_version",
+      "proof_type",
+      "artifact_sha256",
+      "derived_facts",
+      "checks"
+    ],
+    "safepay": "verify_safepay_v2_artifact(document, raw_bytes)"
+  },
+  "exact_json_schemas": {
+    "official_x402_artifact": {
+      "path": "handoff/schemas/official-x402-live-artifact.schema.json",
+      "sha256": "82bbd396bc8a2cec9bde2d9626e72cf117ecd3d82ce65b9b762926b76882940c"
+    },
+    "official_x402_result": {
+      "path": "handoff/schemas/official-x402-adapter-result.schema.json",
+      "sha256": "cd6d6a1083da48d2763f9c5e521ab25888fc7cf80eb6d349d7fc868ea0c97bca"
+    },
+    "safepay_artifact": {
+      "path": "handoff/schemas/safepay-v2-live-artifact.schema.json",
+      "sha256": "38620dc4e86a9f803f64baf063b5019ddfcaa2df47f6cf21eaf9b5979a9860d4"
+    },
+    "safepay_result": {
+      "path": "handoff/schemas/safepay-v2-adapter-result.schema.json",
+      "sha256": "269e04fcd9de91a6f1d49be0acbec588a7db53a04e2e301cd957c02ac484f835"
+    }
+  },
+  "assembler_contract": {
+    "cli_inputs": {
+      "official_x402": "--official-x402 artifacts/live/official-x402-settlement-v1.json",
+      "safepay": "--safepay-v2 artifacts/live/safepay-lite-replaysafe-v2.json"
+    },
+    "release_internal_action_count": 2,
+    "release_public_proof_count": 5,
+    "release_public_proof_types": [
+      "historical_odra_receipt_v2",
+      "exact_envelope_v3",
+      "native_treasury_execution_v1",
+      "safepay_v2",
+      "official_x402_settlement_v1"
+    ]
+  },
+  "official_x402_settlement_v1": {
+    "adapter_derived_facts": [
+      "proposal_id",
+      "proposal_hash",
+      "proposal_nonce",
+      "action_id",
+      "action_kind",
+      "action_version",
+      "envelope_hash",
+      "deployment_domain",
+      "network",
+      "package_hash",
+      "contract_hash",
+      "v3_finalized_exact",
+      "finalization_transaction",
+      "finalized_at",
+      "observed_at",
+      "resource_url_hash",
+      "payment_requirements_hash",
+      "signed_payment_payload_hash",
+      "report_hash",
+      "settlement_transaction",
+      "source_commit",
+      "deployment_commit",
+      "captured_at"
+    ],
+    "artifact_path": "artifacts/live/official-x402-settlement-v1.json",
+    "governance_binding_required_fields": [
+      "proposal_id",
+      "proposal_hash",
+      "proposal_nonce",
+      "action_id",
+      "action_kind",
+      "action_version",
+      "envelope_hash",
+      "deployment_domain",
+      "network",
+      "package_hash",
+      "contract_hash",
+      "finalization_transaction",
+      "finalized_at",
+      "observed_at",
+      "resource_url_hash",
+      "payment_requirements_hash",
+      "signed_payment_payload_hash",
+      "report_hash",
+      "v3_proof_sha256",
+      "v3_proof_bytes_base64"
+    ],
+    "required_checks": [
+      "exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash",
+      "resource_object_equals_configured_resource",
+      "accepted_equals_current_payment_requirements",
+      "payment_requirements_argument_equals_accepted",
+      "eip712_signature_verified",
+      "public_key_account_hash_equals_payer",
+      "authorization_equals_envelope_payer_payee_value_nonce_and_window",
+      "resource_url_hash_matches_envelope",
+      "report_hash_matches_envelope",
+      "payment_requirements_hash_matches_envelope",
+      "signed_payment_payload_hash_matches_envelope",
+      "active_wcspr_v8_pre_verify_drift_guard_passed",
+      "facilitator_verify_returned_is_valid_true",
+      "active_wcspr_v8_pre_settle_drift_guard_passed",
+      "facilitator_settlement_response_success_true",
+      "settlement_transaction_finalized_without_execution_error",
+      "active_wcspr_v8_post_settle_target_and_args_readback_passed",
+      "fulfillment_authorization_nonce_unique_binding_matches",
+      "fulfillment_restart_reconciliation_passed",
+      "exact_retry_returned_stored_fulfillment_without_second_settlement",
+      "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission",
+      "protected_report_released_only_after_finalized_state"
+    ],
+    "required_mutation_tests": [
+      {
+        "check": "exact_envelope_v3_verified_for_registry_record_returned_by_signed_payload_hash",
+        "id": "OX-ADAPTER-01",
+        "mutation": "/governance_binding/v3_proof_bytes_base64"
+      },
+      {
+        "check": "resource_object_equals_configured_resource",
+        "id": "OX-ADAPTER-02",
+        "mutation": "/resource_and_payment/configured_resource_json_base64"
+      },
+      {
+        "check": "accepted_equals_current_payment_requirements",
+        "id": "OX-ADAPTER-03",
+        "mutation": "/resource_and_payment/accepted_json_base64"
+      },
+      {
+        "check": "payment_requirements_argument_equals_accepted",
+        "id": "OX-ADAPTER-04",
+        "mutation": "/resource_and_payment/payment_requirements_argument_json_base64"
+      },
+      {
+        "check": "eip712_signature_verified",
+        "id": "OX-ADAPTER-05",
+        "mutation": "/authorization/signature_hex"
+      },
+      {
+        "check": "public_key_account_hash_equals_payer",
+        "id": "OX-ADAPTER-06",
+        "mutation": "/authorization/recovered_payer_account_hash"
+      },
+      {
+        "check": "authorization_equals_envelope_payer_payee_value_nonce_and_window",
+        "id": "OX-ADAPTER-07",
+        "mutation": "/authorization/value_atomic"
+      },
+      {
+        "check": "resource_url_hash_matches_envelope",
+        "id": "OX-ADAPTER-08",
+        "mutation": "/governance_binding/resource_url_hash"
+      },
+      {
+        "check": "report_hash_matches_envelope",
+        "id": "OX-ADAPTER-09",
+        "mutation": "/protected_report/content_base64"
+      },
+      {
+        "check": "payment_requirements_hash_matches_envelope",
+        "id": "OX-ADAPTER-10",
+        "mutation": "/authorization/payment_requirements_hash"
+      },
+      {
+        "check": "signed_payment_payload_hash_matches_envelope",
+        "id": "OX-ADAPTER-11",
+        "mutation": "/authorization/signed_payment_payload_json_base64"
+      },
+      {
+        "check": "active_wcspr_v8_pre_verify_drift_guard_passed",
+        "id": "OX-ADAPTER-12",
+        "mutation": "/wcspr_readbacks/pre_verify/contract_hash"
+      },
+      {
+        "check": "facilitator_verify_returned_is_valid_true",
+        "id": "OX-ADAPTER-13",
+        "mutation": "/facilitator/verify/response_body_base64"
+      },
+      {
+        "check": "active_wcspr_v8_pre_settle_drift_guard_passed",
+        "id": "OX-ADAPTER-14",
+        "mutation": "/wcspr_readbacks/pre_settle/contract_version"
+      },
+      {
+        "check": "facilitator_settlement_response_success_true",
+        "id": "OX-ADAPTER-15",
+        "mutation": "/facilitator/settle/response_body_base64"
+      },
+      {
+        "check": "settlement_transaction_finalized_without_execution_error",
+        "id": "OX-ADAPTER-16",
+        "mutation": "/settlement_chain_evidence/providers/0/info_get_transaction/response_body_base64"
+      },
+      {
+        "check": "active_wcspr_v8_post_settle_target_and_args_readback_passed",
+        "id": "OX-ADAPTER-17",
+        "mutation": "/wcspr_readbacks/post_settle/runtime_args/2/canonical_value_base64"
+      },
+      {
+        "check": "fulfillment_authorization_nonce_unique_binding_matches",
+        "id": "OX-ADAPTER-18",
+        "mutation": "/fulfillment/first_row/row_canonical_json_base64"
+      },
+      {
+        "check": "fulfillment_restart_reconciliation_passed",
+        "id": "OX-ADAPTER-19",
+        "mutation": "/fulfillment/post_restart_row/row_canonical_json_base64"
+      },
+      {
+        "check": "exact_retry_returned_stored_fulfillment_without_second_settlement",
+        "id": "OX-ADAPTER-20",
+        "mutation": "/fulfillment/exact_retry/payment_response_raw_value_base64"
+      },
+      {
+        "check": "cross_binding_or_authorization_reuse_returned_terminal_409_before_submission",
+        "id": "OX-ADAPTER-21",
+        "mutation": "/fulfillment/cross_binding_reuse/response_status"
+      },
+      {
+        "check": "protected_report_released_only_after_finalized_state",
+        "id": "OX-ADAPTER-22",
+        "mutation": "/fulfillment/first_release/observed_at"
+      }
+    ],
+    "required_top_level_fields": [
+      "schema_version",
+      "captured_at",
+      "source_commit",
+      "deployment_commit",
+      "capture_identity",
+      "governance_binding",
+      "resource_and_payment",
+      "authorization",
+      "facilitator",
+      "wcspr_readbacks",
+      "settlement_chain_evidence",
+      "fulfillment",
+      "protected_report",
+      "release_order"
+    ],
+    "transcript_requirements": {
+      "facilitator": [
+        "sanitized_verify_request",
+        "sanitized_verify_response",
+        "sanitized_settle_request",
+        "sanitized_settle_response"
+      ],
+    "finality": [
+      "two_named_rpc_endpoint_identities",
+      "two_release_pinned_rpc_origins",
+      "exact_info_get_transaction_requests_and_responses",
+      "exact_chain_get_block_requests_and_responses",
+      "exact_info_get_status_requests_and_responses",
+      "unique_structurally_valid_casper_block_proof_signer_observations",
+      "distinct_node_signing_identities",
+      "minimum_eight_confirmation_depth",
+      "block_hash",
+      "block_height",
+        "state_root_hash",
+        "block_timestamp",
+        "execution_result",
+        "execution_error"
+      ],
+      "fulfillment": [
+        "first_persisted_row",
+        "post_restart_row",
+        "first_paid_resource_request_and_response_with_payment_headers",
+        "exact_retry_paid_resource_request_and_response_with_payment_headers",
+        "cross_binding_request_and_terminal_409_without_payment_response",
+        "three_sqlite_upstream_settle_journal_snapshots",
+        "canonical_journal_rows_and_root_recomputed_from_each_snapshot",
+        "single_settle_attempt_as_two_append_only_events_bound_to_transcript_and_finalized_fulfillment"
+      ],
+      "signature": [
+        "payment_requirements_canonical_bytes",
+        "signed_payment_payload_canonical_bytes",
+        "eip712_authorization_preimage",
+        "signature",
+        "public_key",
+        "recovered_payer_account_hash"
+      ],
+    "wcspr_v8": [
+      "pre_verify_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "pre_settle_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "post_settle_latest_tip_package_contract_version_entry_point_and_real_clvalue_args",
+      "v8_is_latest_enabled_version"
+    ]
+    }
+  },
+  "safepay_v2": {
+    "adapter_derived_facts": [
+      "proposal_id",
+      "resource_id",
+      "network",
+      "quote_id",
+      "quote_hash",
+      "correlation_id",
+      "payment_hash",
+      "report_hash",
+      "first_fulfillment_hash",
+      "retry_fulfillment_hash",
+      "consumption_count",
+      "source_commit",
+      "deployment_commit",
+      "captured_at"
+    ],
+    "artifact_path": "artifacts/live/safepay-lite-replaysafe-v2.json",
+    "immutable_quote_required_fields": [
+      "schema_version",
+      "quote_id",
+      "proposal_id",
+      "resource_id",
+      "network",
+      "payee_account_hash",
+      "amount_motes",
+      "correlation_id",
+      "report_version",
+      "report_hash",
+      "expires_at",
+      "quote_nonce",
+      "quote_hash"
+    ],
+    "required_checks": [
+      "quote_hash_recomputed",
+      "issued_quote_row_matches_and_survives_restart",
+      "per_quote_correlation_id_recomputed_and_equals_native_transfer_id",
+      "payment_deploy_finalized_without_execution_error",
+      "single_native_transfer_exact",
+      "payee_amount_and_transfer_id_exact",
+      "proposal_resource_and_correlation_exact",
+      "report_hash_recomputed_and_matches_quote",
+      "provider_consumption_row_matches_payment_and_binding",
+      "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
+      "cross_binding_reuse_returned_terminal_409"
+    ],
+    "required_mutation_tests": [
+      {
+        "check": "quote_hash_recomputed",
+        "id": "SP-ADAPTER-01",
+        "mutation": "/quote/quote_hash"
+      },
+      {
+        "check": "issued_quote_row_matches_and_survives_restart",
+        "id": "SP-ADAPTER-02",
+        "mutation": "/issued_quote_rows/after_restart/row/quote_nonce"
+      },
+      {
+        "check": "per_quote_correlation_id_recomputed_and_equals_native_transfer_id",
+        "id": "SP-ADAPTER-03",
+        "mutation": "/quote/correlation_id"
+      },
+      {
+        "check": "payment_deploy_finalized_without_execution_error",
+        "id": "SP-ADAPTER-04",
+        "mutation": "/chain_evidence/providers/0/chain_get_block/response_body_base64"
+      },
+      {
+        "check": "single_native_transfer_exact",
+        "id": "SP-ADAPTER-05",
+        "mutation": "/chain_evidence/parsed_transfer/native_transfer_count"
+      },
+      {
+        "check": "payee_amount_and_transfer_id_exact",
+        "id": "SP-ADAPTER-06",
+        "mutation": "/chain_evidence/parsed_transfer/amount_motes"
+      },
+      {
+        "check": "proposal_resource_and_correlation_exact",
+        "id": "SP-ADAPTER-07",
+        "mutation": "/redemption_observations/first_consumption/resource_id"
+      },
+      {
+        "check": "report_hash_recomputed_and_matches_quote",
+        "id": "SP-ADAPTER-08",
+        "mutation": "/protected_report/content_base64"
+      },
+      {
+        "check": "provider_consumption_row_matches_payment_and_binding",
+        "id": "SP-ADAPTER-09",
+        "mutation": "/consumption_rows/after_restart/row/payment_hash"
+      },
+      {
+        "check": "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
+        "id": "SP-ADAPTER-10",
+        "mutation": "/redemption_observations/exact_retry/response_digest"
+      },
+      {
+        "check": "cross_binding_reuse_returned_terminal_409",
+        "id": "SP-ADAPTER-11",
+        "mutation": "/redemption_observations/cross_binding_reuse/exchange/response_status"
+      }
+    ],
+    "required_top_level_fields": [
+      "schema_version",
+      "captured_at",
+      "source_commit",
+      "deployment_commit",
+      "capture_identity",
+      "quote",
+      "issued_quote_rows",
+      "chain_evidence",
+      "consumption_rows",
+      "ledger_evidence",
+      "redemption_observations",
+      "protected_report"
+    ],
+    "transcript_requirements": {
+      "consumption": [
+        "issued_quote_row_before_restart",
+        "issued_quote_row_after_restart",
+        "consumption_row_before_restart",
+        "consumption_row_after_restart",
+        "capture_tool_commit_equals_source_commit",
+        "two_ordered_provider_runtime_identities",
+        "runtime_identity_bound_quote_consumption_and_snapshot_observations",
+        "unique_network_payment_hash_key",
+        "no_second_consumption_sharing_payment_quote_hash_or_correlation",
+        "repository_migration_bytes_and_digest",
+        "three_progressive_sqlite_backup_snapshots",
+        "sqlite_integrity_and_schema_match",
+        "exact_target_consumption_query_and_observation_sequence",
+        "durable_and_http_observation_chronology"
+      ],
+      "finality": [
+        "two_named_rpc_endpoint_identities",
+        "exact_rpc_exchange_url_equals_provider_origin",
+        "exact_info_get_deploy_requests_and_responses",
+        "exact_chain_get_block_requests_and_responses",
+        "exact_info_get_status_requests_and_responses",
+        "minimum_eight_block_confirmation_depth_from_each_node",
+        "block_hash",
+        "block_height",
+        "state_root_hash",
+        "block_timestamp",
+        "execution_result",
+        "execution_error",
+        "structured_native_transfer"
+      ],
+      "redemption": [
+        "first_request_and_response",
+        "exact_retry_request_and_response",
+        "cross_binding_request_and_terminal_409_response",
+        "first_fulfillment_canonical_bytes",
+        "retry_fulfillment_canonical_bytes"
+      ],
+      "report": [
+        "media_type",
+        "persisted_report_bytes_base64",
+        "decoded_length",
+        "report_hash",
+        "response_hash"
+      ]
+    }
+  },
+  "schema_version": "concordia.release_registry_adapter_contract.v1",
+  "transcript_capture_rule": "The Codex-owned live capture step enriches the provider/service summaries with the exact raw, sanitized transcripts required by the pinned artifact schemas. A single CSPR.live summary is insufficient for SafePay release evidence; two independently named Casper RPC observations are required.",
+  "truth_rule": "No producer verified, passed, status, replay-safe, or success boolean can satisfy a required check."
+}

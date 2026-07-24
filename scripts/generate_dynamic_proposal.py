@@ -43,7 +43,7 @@ from shared.models import (
 from shared.proof_pack import canonicalize_public_evidence
 
 
-PUBLIC_BASE_URL = "https://concordia.47.84.232.193.sslip.io"
+PUBLIC_BASE_URL = "https://concordiadao.xyz"
 UTC = timezone.utc
 DEFAULT_TIMESTAMP = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
 RWA_PROPOSAL_ID = "DAO-PROP-RWA-001"

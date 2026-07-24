@@ -3,15 +3,27 @@
 GET  /approve/{proposal_id} — Renders approval form (Caddy-authenticated).
 POST /approve/{proposal_id} — Consumes nonce via _do_consume_nonce().
 
-Auth layers:
-    1. Caddy basic_auth (TLS + password hash)
-    2. X-Proxy-Secret header (proves request came through Caddy)
-    3. Gateway bcrypt verification (second independent password check)
+Approval boundary v1 (G1 freeze, §12):
+    - Caddy performs Basic Auth and OVERWRITES ``X-Proxy-Secret`` from a
+      server-side secret; it never forwards a caller-supplied value. That
+      Caddy provisioning lives in the Codex-owned release layer
+      (Caddyfile + compose) — see handoff/INTERFACE_MANIFEST_WP3.md.
+    - The Gateway trusts only the overwritten ``X-Proxy-Secret`` header and
+      then independently verifies proxy secret, Basic credentials with
+      bcrypt, the approver allowlist, the CSRF token, and the nonce.
+    - Runtime secrets use ``_FILE`` loading. The five frozen configuration
+      names are ``APPROVAL_PROXY_SECRET_FILE``, ``APPROVAL_UI_USER_FILE``,
+      ``APPROVAL_UI_APPROVER_ID_FILE``, ``APPROVAL_UI_BCRYPT_HASH_FILE``,
+      and ``APPROVAL_UI_CSRF_SECRET_FILE``, each pointing at a
+      ``/run/secrets/...`` file in production. Direct value variables are
+      ignored in production; a clearly-labeled test-mode fallback exists
+      only behind ``CONCORDIA_TEST_MODE``.
 
 CSRF protection via HMAC of nonce + secret.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
+from pathlib import Path
 
 import base64
 import hashlib
@@ -27,6 +39,7 @@ from fastapi.responses import HTMLResponse
 
 from gateway.routes.rooms import store_room_message, store_room_participant
 from shared.config import HUMAN_APPROVER_IDS
+from shared.runtime_secrets import read_secret
 
 logger = logging.getLogger("concordia.approve_ui")
 
@@ -34,23 +47,69 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Configuration (loaded once from env)
+# Configuration (loaded once; _FILE-only in production)
 # ---------------------------------------------------------------------------
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+# Frozen G1 approval-boundary configuration names (spec §12, Approval
+# boundary v1). Each secret is delivered through ``<NAME>_FILE``.
+_SECRET_ENV_NAMES = {
+    "proxy_secret": "APPROVAL_PROXY_SECRET",
+    "user": "APPROVAL_UI_USER",
+    "approver_id": "APPROVAL_UI_APPROVER_ID",
+    "bcrypt_hash": "APPROVAL_UI_BCRYPT_HASH",
+    "csrf_secret": "APPROVAL_UI_CSRF_SECRET",
+}
+
 _config_cache: dict | None = None
+
+
+def _test_mode_enabled() -> bool:
+    """Explicit test-mode gate (same env the repo already uses)."""
+    return os.getenv("CONCORDIA_TEST_MODE", "").strip().lower() in _TRUE_VALUES
+
+
+def _load_secret(env_name: str) -> str:
+    """Load one approval secret.
+
+    Production: ``_FILE``-only — the value is read from the file named by
+    ``<env_name>_FILE`` (``/run/secrets/...``). Direct value variables are
+    ignored, per the frozen approval-boundary contract.
+
+    TEST-MODE FALLBACK (``CONCORDIA_TEST_MODE`` only): resolves through
+    ``shared.runtime_secrets.read_secret`` so tests may inject either the
+    direct variable or a ``_FILE`` pointing at a temporary file.
+    """
+    if _test_mode_enabled():
+        return read_secret(env_name)
+    file_path = os.getenv(f"{env_name}_FILE", "").strip()
+    if not file_path:
+        return ""
+    try:
+        return Path(file_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _get_config() -> dict:
     global _config_cache
     if _config_cache is None:
         _config_cache = {
-            "proxy_secret": os.getenv("APPROVAL_PROXY_SECRET", ""),
-            "user": os.getenv("APPROVAL_UI_USER", ""),
-            "approver_id": os.getenv("APPROVAL_UI_APPROVER_ID", ""),
-            "bcrypt_hash": os.getenv("APPROVAL_UI_BCRYPT_HASH", ""),
-            "csrf_secret": os.getenv("APPROVAL_UI_CSRF_SECRET", ""),
+            key: _load_secret(env_name)
+            for key, env_name in _SECRET_ENV_NAMES.items()
         }
     return _config_cache
+
+
+def _reset_config_for_testing() -> None:
+    """Reset the config cache — call in test fixtures with patched env.
+
+    Mirrors gateway.auth._reset_for_testing: without this, the first
+    _get_config() wins and later tests see stale secrets.
+    """
+    global _config_cache
+    _config_cache = None
 
 
 # ---------------------------------------------------------------------------

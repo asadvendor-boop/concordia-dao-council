@@ -42,7 +42,7 @@ The qualification blocker has been closed with a real Casper Testnet deploy and 
 - Entry point: `store_governance_receipt`
 - Block height: `8340490`
 - Hero proposal ID: `DAO-PROP-6CB25C`
-- Evidence URL: `https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C`
+- Evidence URL: `https://concordiadao.xyz/evidence/DAO-PROP-6CB25C`
 - Explorer URL: `https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852`
 - API proof URL: `https://api.testnet.cspr.live/deploys/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852`
 

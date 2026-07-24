@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
+from shared.proof_registry import ProofRegistryRepository, proof_item_is_green
 
-PUBLIC_BASE_URL = "https://concordia.47.84.232.193.sslip.io"
+
+PUBLIC_BASE_URL = "https://concordiadao.xyz"
 CANONICAL_PROPOSAL_ID = "DAO-PROP-6CB25C"
 CANONICAL_RECEIPT_HASH = "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
 CANONICAL_CONTRACT_HASH = "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1"
@@ -228,17 +230,33 @@ def _collaboration(evidence: dict[str, Any]) -> dict[str, Any]:
     return evidence.get("collaboration") or {}
 
 
-def _quorum_blocking_proof_ok() -> bool:
-    plan = _load_json_artifact("artifacts/live/odra-quorum-exercise-plan.json")
-    criteria = plan.get("acceptance_criteria") or {}
-    pre_quorum = criteria.get("pre_quorum_execution_blocked") or {}
-    final_receipt = criteria.get("final_receipt_after_quorum") or {}
-    return (
-        plan.get("status") == "live_complete"
-        and pre_quorum.get("status") == "verified"
-        and final_receipt.get("status") == "verified"
-        and final_receipt.get("deploy_hash") == CANONICAL_QUORUM_RECEIPT_HASH
+def _quorum_blocking_proof_item(proposal_id: str) -> dict[str, Any] | None:
+    root = os.getenv(
+        "CONCORDIA_PROOF_REGISTRY_DIR",
+        "artifacts/live/proof-registry",
     )
+    try:
+        item = ProofRegistryRepository(root).unique_green_public_item(
+            proposal_id,
+            "exact_envelope_v3",
+            temporal_scope="current",
+        )
+    except (OSError, ValueError):
+        return None
+    if item is None:
+        return None
+    observed = {
+        check.get("name"): check
+        for check in item.get("checks") or []
+        if isinstance(check, dict)
+    }
+    pre_quorum = observed.get("pre_quorum_finalize_reverted_with_code_8", {})
+    if (
+        pre_quorum.get("required") is not True
+        or pre_quorum.get("passed") is not True
+    ):
+        return None
+    return item
 
 
 def _action_hash_guard_rejects_tamper(approved_payload: dict[str, Any], tampered_payload: dict[str, Any]) -> bool:
@@ -360,7 +378,11 @@ def _policy_hash_guard_result(approved_payload: dict[str, Any]) -> dict[str, Any
 def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | None = None) -> dict[str, Any]:
     requested, approved = _requested_and_approved_bps(evidence)
     receipt = _receipt(evidence)
-    safepay = safepay or build_safepay_lite(evidence)
+    # The optional argument remains only for API compatibility.  A caller may
+    # not inject a success-shaped mapping into a machine invariant: SafePay
+    # truth is reloaded from the strict proof registry every time.
+    del safepay
+    safepay = build_safepay_lite(evidence)
     policy_hash_check = _policy_hash_guard_result(
         {
             "proposal_id": evidence.get("proposal_id"),
@@ -381,6 +403,9 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
         "policy_hash": receipt.get("policy_hash"),
         "plan_hash": receipt.get("plan_hash"),
     }
+    quorum_item = _quorum_blocking_proof_item(
+        str(evidence.get("proposal_id") or CANONICAL_PROPOSAL_ID)
+    )
     checks = [
         {
             "id": "allocation_cap",
@@ -391,8 +416,13 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
         {
             "id": "quorum_required",
             "label": "no quorum blocks execution",
-            "passed": _quorum_blocking_proof_ok(),
-            "evidence": f"Supplemental quorum proof {CANONICAL_QUORUM_RECEIPT_HASH}; pre-quorum rejection artifact verified",
+            "passed": quorum_item is not None,
+            "evidence": (
+                f"{quorum_item['proof_id']}: "
+                "pre_quorum_finalize_reverted_with_code_8 independently verified"
+                if quorum_item is not None
+                else "No unique green current exact_envelope_v3 quorum observation"
+            ),
         },
         {
             "id": "tampered_envelope_rejected",
@@ -401,8 +431,8 @@ def build_invariant_runner(evidence: dict[str, Any], safepay: dict[str, Any] | N
             "evidence": "shared.approval.compute_action_hash differs for poisoned 30% envelope",
         },
         {
-            "id": "duplicate_x402_proof_rejected",
-            "label": "duplicate x402 proof rejected",
+            "id": "x402_replay_safety_verified",
+            "label": "x402 replay safety verified",
             "passed": bool(safepay.get("duplicate_proof_rejected")),
             "evidence": safepay.get("duplicate_rejection_reason"),
         },
@@ -448,234 +478,102 @@ def _load_json_artifact(*paths: str) -> dict[str, Any]:
     return {}
 
 
-def _load_json_artifacts(*paths: str) -> list[dict[str, Any]]:
-    artifacts: list[dict[str, Any]] = []
-    for raw_path in paths:
-        path = Path(raw_path)
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            artifacts.append(data)
-    return artifacts
-
-
-def _get_path(data: dict[str, Any], path: tuple[str, ...]) -> Any:
-    cursor: Any = data
-    for part in path:
-        if not isinstance(cursor, dict):
-            return None
-        cursor = cursor.get(part)
-    return cursor
-
-
-def _candidate_reports(artifact: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    paths = [
-        ("paid_response", "risk_report"),
-        ("provider_response", "risk_report"),
-        ("gateway_settlement", "provider_response", "risk_report"),
-        ("provider_settlement", "risk_report"),
-        ("checks", "provider_paid", "body", "risk_report"),
-        ("checks", "gateway_paid", "body", "report", "settlement", "provider_response", "risk_report"),
-        ("checks", "gateway_paid", "body", "report", "risk_report"),
-        ("report",),
-        ("risk_report",),
-    ]
-    reports: list[tuple[str, dict[str, Any]]] = []
-    for path in paths:
-        value = _get_path(artifact, path)
-        if isinstance(value, dict):
-            reports.append((".".join(path), value))
-    return reports
-
-
-def _candidate_settlements(artifact: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    paths = [
-        ("settlement",),
-        ("payment_verification",),
-        ("provider_settlement",),
-        ("gateway_settlement", "provider_response", "settlement"),
-        ("checks", "provider_paid", "body", "settlement"),
-        ("checks", "gateway_paid", "body", "report", "settlement"),
-        ("checks", "gateway_paid", "body", "report", "settlement", "provider_response", "settlement"),
-    ]
-    settlements: list[tuple[str, dict[str, Any]]] = []
-    for path in paths:
-        value = _get_path(artifact, path)
-        if isinstance(value, dict):
-            settlements.append((".".join(path), value))
-    return settlements
-
-
-def _amount_matches(expected: Any, observed: Any) -> bool:
-    if expected in (None, "", 0):
-        return True
+def _current_safepay_registry_item(proposal_id: str) -> dict[str, Any] | None:
+    root = os.getenv(
+        "CONCORDIA_PROOF_REGISTRY_DIR",
+        "artifacts/live/proof-registry",
+    )
     try:
-        expected_int = int(expected)
-    except (TypeError, ValueError):
-        return False
-    if isinstance(observed, list):
-        values = observed
-    else:
-        values = [observed]
-    for value in values:
-        try:
-            if int(value) == expected_int:
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
-
-
-def _settlement_score(settlement: dict[str, Any]) -> int:
-    proof = settlement.get("proof") if isinstance(settlement.get("proof"), dict) else {}
-    payment_hash = settlement.get("payment_hash") or proof.get("payment_hash")
-    status = str(settlement.get("status") or proof.get("status") or "").lower()
-    mode = str(settlement.get("mode") or "").lower()
-    expected = settlement.get("expected_amount_motes") or proof.get("expected_amount_motes")
-    observed = settlement.get("observed_amounts") or proof.get("observed_amounts")
-
-    score = 0
-    if payment_hash == CANONICAL_X402_PAYMENT_HASH:
-        score += 4
-    if status in {"settled", "paid", "verified", "success"}:
-        score += 2
-    if mode == "real_casper_transfer":
-        score += 3
-    if proof.get("valid") is True:
-        score += 3
-    if _amount_matches(expected, observed):
-        score += 1
-    return score
-
-
-def _valid_settlement(settlement: dict[str, Any]) -> bool:
-    proof = settlement.get("proof") if isinstance(settlement.get("proof"), dict) else {}
-    payment_hash = settlement.get("payment_hash") or proof.get("payment_hash")
-    status = str(settlement.get("status") or proof.get("status") or "").lower()
-    expected = settlement.get("expected_amount_motes") or proof.get("expected_amount_motes")
-    observed = settlement.get("observed_amounts") or proof.get("observed_amounts")
-    return (
-        payment_hash == CANONICAL_X402_PAYMENT_HASH
-        and status in {"settled", "paid", "verified", "success"}
-        and proof.get("valid") is True
-        and _amount_matches(expected, observed)
-    )
-
-
-def _best_x402_proof(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
-    best: dict[str, Any] = {
-        "artifact": {},
-        "report": {},
-        "report_source": "",
-        "settlement": {},
-        "settlement_source": "",
-        "score": -1,
-        "handshake_verified": False,
-    }
-    for artifact in artifacts:
-        reports = _candidate_reports(artifact)
-        settlements = _candidate_settlements(artifact)
-        handshake_verified = _x402_handshake_verified(artifact)
-        for settlement_source, settlement in settlements:
-            score = _settlement_score(settlement) + (2 if handshake_verified else 0)
-            report_source, report = reports[0] if reports else ("", {})
-            if score > best["score"]:
-                best = {
-                    "artifact": artifact,
-                    "report": report,
-                    "report_source": report_source,
-                    "settlement": settlement,
-                    "settlement_source": settlement_source,
-                    "score": score,
-                    "handshake_verified": handshake_verified,
-                }
-    return best
-
-
-def _x402_handshake_verified(artifact: dict[str, Any]) -> bool:
-    checks = artifact.get("checks")
-    if not isinstance(checks, dict):
-        return False
-    return (
-        (checks.get("gateway_402") or {}).get("status_code") == 402
-        and (checks.get("gateway_paid") or {}).get("status_code") == 200
-        and (checks.get("provider_402") or {}).get("status_code") == 402
-        and (checks.get("provider_paid") or {}).get("status_code") == 200
-    )
+        document = ProofRegistryRepository(root).public_document(
+            proposal_id,
+            known=True,
+        )
+    except (OSError, ValueError):
+        return None
+    matches = [
+        item
+        for item in document.get("items", [])
+        if isinstance(item, dict)
+        and item.get("proof_type") == "safepay_v2"
+        and item.get("temporal_scope") == "current"
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def build_safepay_lite(evidence: dict[str, Any]) -> dict[str, Any]:
-    artifacts = _load_json_artifacts(
-        "artifacts/live/x402-provider-happy-path-verified.json",
-        "artifacts/live/x402-final-payment-proof.json",
+    """Render SafePay only from one strict, green supplemental-v2 item.
+
+    The historical June payment remains visible for continuity, but neither it,
+    a 402-to-200 handshake, nor an artifact boolean can prove replay safety.
+    """
+
+    proposal_id = str(evidence.get("proposal_id") or CANONICAL_PROPOSAL_ID)
+    item = _current_safepay_registry_item(proposal_id)
+    verified = bool(item is not None and proof_item_is_green(item))
+    checks = {
+        check.get("name"): check
+        for check in (item or {}).get("checks", [])
+        if isinstance(check, dict) and isinstance(check.get("name"), str)
+    }
+    replay_check_names = (
+        "provider_consumption_row_matches_payment_and_binding",
+        "exact_retry_returned_same_fulfillment_hash_without_second_consumption",
+        "cross_binding_reuse_returned_terminal_409",
     )
-    proof = _best_x402_proof(artifacts)
-    artifact = proof["artifact"]
-    report = proof["report"]
-    settlement = proof["settlement"]
+    replay_safe = bool(
+        verified
+        and all(
+            checks.get(name, {}).get("required") is True
+            and checks.get(name, {}).get("passed") is True
+            for name in replay_check_names
+        )
+    )
     payment_hash = (
-        artifact.get("payment_hash")
-        or settlement.get("payment_hash")
-        or CANONICAL_X402_PAYMENT_HASH
+        item.get("settlement_transaction")
+        if verified and item is not None
+        else None
     )
-    report_hash = _sha256(report)
-    expected_report_hash = (
-        artifact.get("report_hash")
-        or artifact.get("expected_report_hash")
-        or artifact.get("provider_report_hash")
-    )
-    payment_verified = _valid_settlement(settlement)
-    malformed_provider_response = not (
-        isinstance(report, dict)
-        and report
-        and report.get("risk_level")
-        and report.get("provider_signal")
-    )
-    report_hash_verified = bool(report_hash) and not malformed_provider_response
-    if expected_report_hash:
-        report_hash_verified = report_hash_verified and str(expected_report_hash).removeprefix("sha256:") == report_hash
-    duplicate_proof_rejected = payment_verified and report_hash_verified and (
-        bool(artifact.get("duplicate_proof_rejected"))
-        or bool(proof["handshake_verified"])
-    )
-    verified = (
-        payment_verified
-        and report_hash_verified
-        and duplicate_proof_rejected
-        and not malformed_provider_response
-    )
+    report_hash = item.get("report_hash") if verified and item is not None else None
+    artifact_path = item.get("artifact_path") if item is not None else None
     return {
         "name": "SafePay Lite",
-        "status": "verified" if verified else "unverified",
+        "status": "verified" if replay_safe else "unverified",
         "claim": (
-            "SafePay Lite demonstrates conditional paid specialist-report settlement: "
-            "Concordia verifies Casper payment, validates the provider report hash, "
-            "shows deterministic duplicate-proof replay, records provider reputation delta, and includes "
-            "the result in the governance proof."
+            "SafePay Lite proves one exact Casper payment was consumed once, "
+            "an exact retry returned the stored fulfillment without consuming "
+            "again, and cross-binding reuse was rejected with terminal HTTP 409."
+            if replay_safe
+            else "The historical SafePay payment remains visible, but replay-safe "
+            "consumption is unavailable until a current supplemental-v2 proof passes."
         ),
         "no_fake_success": True,
         "payment_hash": payment_hash,
-        "payment_verified": payment_verified,
-        "payment_proof_source": proof["settlement_source"],
+        "historical_payment_hash": CANONICAL_X402_PAYMENT_HASH,
+        "payment_verified": replay_safe,
+        "payment_proof_source": artifact_path,
         "provider": "concordia-risk-oracle-provider",
         "report_hash": report_hash,
-        "report_source": proof["report_source"],
-        "report_hash_verified": report_hash_verified,
-        "duplicate_proof_rejected": duplicate_proof_rejected,
+        "report_source": artifact_path,
+        "report_hash_verified": replay_safe and report_hash is not None,
+        # Kept as a compatibility field; its value is now derived from the
+        # three required registry observations above, never from a caller or
+        # legacy artifact boolean.
+        "duplicate_proof_rejected": replay_safe,
         "duplicate_rejection_reason": (
-            "deterministic replay proof: the same x402 payment hash is bound to one specialist report"
-            if duplicate_proof_rejected
-            else "duplicate proof is not accepted unless payment and report verification both pass"
+            "one atomic consumption; exact retry idempotent; cross-binding reuse returned HTTP 409"
+            if replay_safe
+            else "no current verified SafePay v2 replay-safety evidence"
         ),
-        "duplicate_rejection_mode": "deterministic_replay_proof" if duplicate_proof_rejected else "unverified",
-        "malformed_provider_response": malformed_provider_response,
-        "provider_reputation_delta": 1 if verified else 0,
-        "report": report if isinstance(report, dict) else {},
-        "included_in_governance_proof": verified,
+        "duplicate_rejection_mode": (
+            "idempotent_retry_and_cross_binding_rejection"
+            if replay_safe
+            else "unverified"
+        ),
+        "malformed_provider_response": False if replay_safe else None,
+        "provider_reputation_delta": 1 if replay_safe else 0,
+        "report": {},
+        "registry_proof_id": item.get("proof_id") if item is not None else None,
+        "included_in_governance_proof": replay_safe,
     }
 
 
@@ -788,9 +686,11 @@ def build_interactive_adversarial_replay(
         "final_card_hash": receipt.get("final_card_hash"),
     }
     attempted_envelope = {**approved_envelope, "approved_allocation_bps": attempted}
-    approved_action_ok = _action_hash_guard_rejects_tamper(approved_envelope, attempted_envelope)
+    envelope_binding_demonstrated = _action_hash_guard_rejects_tamper(
+        approved_envelope, attempted_envelope
+    )
     invariant_result = "failed_policy_cap" if attempted > approved else "within_cap"
-    unsafe = attempted > approved or approved_action_ok
+    unsafe = attempted > approved
     return {
         "status": "blocked" if unsafe else "within_policy_preview",
         "proof_mode": "interactive_adversarial_replay",
@@ -806,6 +706,7 @@ def build_interactive_adversarial_replay(
         "mandate_result": "capped_to_800_bps" if approved == 800 else "capped_to_policy_limit",
         "approved_envelope_hash": _sha256(approved_envelope),
         "attempted_envelope_hash": _sha256(attempted_envelope),
+        "envelope_binding_demonstrated": envelope_binding_demonstrated,
         "locke_result": "refused_to_sign" if unsafe else "preview_only_no_execution",
         "casper_transaction_triggered": False,
         "network_broadcast_attempted": False,
@@ -843,17 +744,27 @@ def build_rwa_evidence_run() -> dict[str, Any]:
         "note": "Concrete RWA evidence packet; supplemental on-chain receipt only, not the canonical Casper receipt.",
     }
     proof = _load_json_artifact(str(RWA_EXECUTION_PROOF))
-    if proof.get("status") == "processed":
-        deploy_hash = proof.get("deploy_hash") or proof.get("transaction_hash") or SUPPLEMENTAL_RWA_RECEIPT_HASH
+    reported_hash = proof.get("deploy_hash") or proof.get("transaction_hash")
+    packet.update(
+        {
+            "artifact_reported_status": proof.get("status"),
+            "supplemental_receipt_status": "unavailable",
+            "supplemental_receipt_reason": (
+                "The legacy summary has no independently verified raw-observation "
+                "adapter in the proof registry."
+            ),
+            "supplemental_proof_artifact": (
+                str(RWA_EXECUTION_PROOF) if proof else None
+            ),
+        }
+    )
+    if reported_hash == SUPPLEMENTAL_RWA_RECEIPT_HASH:
         packet.update(
             {
-                "supplemental_receipt_status": "processed",
-                "supplemental_receipt_hash": deploy_hash,
-                "supplemental_receipt_url": f"https://testnet.cspr.live/deploy/{deploy_hash}",
-                "supplemental_contract_hash": proof.get("contract_hash") or CANONICAL_CONTRACT_HASH,
-                "supplemental_entry_point": proof.get("entry_point") or "store_governance_receipt",
-                "supplemental_scope": proof.get("scope") or "supplemental_rwa_run",
-                "supplemental_proof_artifact": str(RWA_EXECUTION_PROOF),
+                "supplemental_receipt_hash": reported_hash,
+                "supplemental_receipt_url": (
+                    f"https://testnet.cspr.live/deploy/{reported_hash}"
+                ),
             }
         )
     packet["evidence_hash"] = "sha256:" + _sha256(packet)
@@ -864,6 +775,21 @@ def build_judge_walkthrough(evidence: dict[str, Any]) -> dict[str, Any]:
     safepay = build_safepay_lite(evidence)
     mandate = build_dao_mandate(evidence)
     invariants = build_invariant_runner(evidence, safepay)
+    quorum_item = _quorum_blocking_proof_item(
+        str(evidence.get("proposal_id") or CANONICAL_PROPOSAL_ID)
+    )
+    quorum_step = {
+        "step": 7,
+        "title": "Quorum approval",
+        "summary": (
+            "The current exact-envelope v3 pre-quorum rejection was independently verified."
+            if quorum_item is not None
+            else "No unique green current exact-envelope v3 quorum observation is available."
+        ),
+        "status": "verified" if quorum_item is not None else "unavailable",
+    }
+    if quorum_item is not None:
+        quorum_step["proof_id"] = quorum_item["proof_id"]
     return {
         "title": "Verify Concordia in 90 seconds",
         "positioning": PRODUCT_FRAMING,
@@ -876,7 +802,7 @@ def build_judge_walkthrough(evidence: dict[str, Any]) -> dict[str, Any]:
             {"step": 4, "title": "Invariant runner", "summary": "Machine-verifiable checks catch unsafe conditions.", "status": invariants["status"]},
             {"step": 5, "title": "Verity dissent", "summary": "Dissent and policy violation are preserved in the proof chain."},
             {"step": 6, "title": "DAO Mandate", "summary": mandate["custody_rule"], "mandate_hash": mandate["mandate_hash"]},
-            {"step": 7, "title": "Quorum approval", "summary": "Supplemental quorum proof confirms the safe envelope path."},
+            quorum_step,
             {"step": 8, "title": "Locke execution", "summary": "Locke executes only the approved mandate."},
             {"step": 9, "title": "Public proof", "summary": "CSPR.live, IPFS, proof pack, and certificate verify the result."},
         ],
@@ -1349,8 +1275,11 @@ def check_repo_canonical_consistency(root: Path | str = ".") -> dict[str, Any]:
         "artifacts/live/live-proof-pack-current.json",
         "artifacts/live/judge-walkthrough-current.json",
         "artifacts/live/certificate-current.html",
-        "dashboard/app/proof/page.js",
-        "dashboard/app/judge/page.js",
+        # The dashboard route wrappers intentionally contain no proof literals:
+        # both render the shared, provenance-aware application shell.  Keep one
+        # canonical recorded-facts source for the decomposed frontend instead
+        # of requiring every route wrapper to duplicate historical hashes.
+        "dashboard/app/_components/lib.js",
     ]
     findings: list[dict[str, str]] = []
     checked: list[str] = []

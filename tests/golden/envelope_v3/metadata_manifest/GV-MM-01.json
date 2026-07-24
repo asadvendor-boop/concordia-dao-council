@@ -1,0 +1,47 @@
+{
+  "canonical_entry_order": [
+    "attempt",
+    "receipt_hash",
+    "verified",
+    "z_note"
+  ],
+  "canonical_hex": "000000010000000400000007617474656d707403000000010000000c726563656970745f686173680781818181818181818181818181818181818181818181818181818181818181810000000876657269666965640101000000067a5f6e6f74650a000000154a756467652d76697369626c6520636f6e74657874",
+  "canonical_length": 123,
+  "description": "Metadata entries are sorted by raw ASCII name and preserve explicit type tags.",
+  "expected_error": null,
+  "hashes": {
+    "authorized_metadata_root": "4c322b625c81056ac4a1c566bdf9908e1d59a467d647f537d3098d9405531754"
+  },
+  "kind": "authorized_metadata_manifest_v1",
+  "root_preimage_hex": "434f4e434f524449415f415554484f52495a45445f4d455441444154415f563100000000010000000400000007617474656d707403000000010000000c726563656970745f686173680781818181818181818181818181818181818181818181818181818181818181810000000876657269666965640101000000067a5f6e6f74650a000000154a756467652d76697369626c6520636f6e74657874",
+  "typed_input": {
+    "entries_in_input_order": [
+      {
+        "name": "z_note",
+        "type": "String",
+        "value": "Judge-visible context"
+      },
+      {
+        "name": "attempt",
+        "type": "u32",
+        "value": "1"
+      },
+      {
+        "name": "verified",
+        "type": "bool",
+        "value": true
+      },
+      {
+        "name": "receipt_hash",
+        "type": "Bytes32",
+        "value": "8181818181818181818181818181818181818181818181818181818181818181"
+      }
+    ],
+    "version": {
+      "type": "u32",
+      "value": "1"
+    }
+  },
+  "valid": true,
+  "vector_id": "GV-MM-01"
+}

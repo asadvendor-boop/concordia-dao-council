@@ -166,6 +166,40 @@ CREATE TABLE IF NOT EXISTS proposal_room_messages (
     FOREIGN KEY (proposal_id) REFERENCES proposals(proposal_id)
 );
 
+-- Durable public-demo capability lifecycle and exact run ownership.  These
+-- tables are created at Gateway startup so the first request never becomes a
+-- migration boundary.
+CREATE TABLE IF NOT EXISTS demo_capabilities (
+    capability_id TEXT PRIMARY KEY,
+    scenario_id TEXT NOT NULL,
+    client_binding_hash TEXT NOT NULL,
+    nonce_hash TEXT NOT NULL,
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'ISSUED',
+    demo_run_id TEXT,
+    consumed_at INTEGER,
+    response_status INTEGER,
+    response_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS demo_runs (
+    demo_run_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    scenario_id TEXT NOT NULL,
+    is_demo INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (demo_run_id, proposal_id)
+);
+
+CREATE TABLE IF NOT EXISTS demo_capability_issue_counters (
+    scope TEXT NOT NULL,
+    client_key TEXT NOT NULL,
+    window_start INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, client_key, window_start)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_signals_fingerprint ON signals(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_signals_proposal ON signals(proposal_id);
@@ -177,6 +211,7 @@ CREATE INDEX IF NOT EXISTS idx_nonces_proposal ON nonces(proposal_id);
 CREATE INDEX IF NOT EXISTS idx_proposal_rooms_proposal ON proposal_rooms(proposal_id);
 CREATE INDEX IF NOT EXISTS idx_room_messages_room_id ON proposal_room_messages(room_id, id);
 CREATE INDEX IF NOT EXISTS idx_room_messages_proposal ON proposal_room_messages(proposal_id, id);
+CREATE INDEX IF NOT EXISTS idx_demo_runs_proposal ON demo_runs(proposal_id);
 """
 
 
@@ -211,6 +246,32 @@ def _migrate(db: sqlite3.Connection) -> None:
     cols = {row[1] for row in db.execute("PRAGMA table_info(cards)").fetchall()}
     if "request_fp" not in cols:
         db.execute("ALTER TABLE cards ADD COLUMN request_fp TEXT")
+
+    # Demo capability v1 may predate the explicit lifecycle state.  Migrate it
+    # before any request can claim/reconcile a row, then backfill consumed rows
+    # deterministically from their stored terminal response.
+    demo_capability_cols = {
+        row[1]
+        for row in db.execute("PRAGMA table_info(demo_capabilities)").fetchall()
+    }
+    if "state" not in demo_capability_cols:
+        db.execute(
+            "ALTER TABLE demo_capabilities ADD COLUMN state TEXT NOT NULL "
+            "DEFAULT 'ISSUED'"
+        )
+        db.execute(
+            "UPDATE demo_capabilities SET state='SUCCEEDED' "
+            "WHERE consumed_at IS NOT NULL AND response_status=200"
+        )
+        db.execute(
+            "UPDATE demo_capabilities SET state='FAILED' "
+            "WHERE consumed_at IS NOT NULL "
+            "AND (response_status IS NULL OR response_status<>200)"
+        )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_demo_capabilities_state_expiry "
+        "ON demo_capabilities(state, expires_at)"
+    )
 
     # Nonce consumption: add action_hash, consumed_by, consumed_at
     nonce_cols = {row[1] for row in db.execute("PRAGMA table_info(nonces)").fetchall()}

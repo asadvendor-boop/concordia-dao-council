@@ -1,0 +1,20 @@
+# Cargo and Odra build caches are always reproducible and must never be staged.
+/target/
+/.odra/
+
+# Editor and transient generator output.
+.DS_Store
+*.log
+*.tmp
+*.tmp.*
+*.bak
+
+# Release outputs are allowlisted by their frozen, judge-facing names.  A build
+# must copy the validated Wasm here rather than committing anything from target/.
+/wasm/*
+!/wasm/GovernanceReceiptV3.wasm
+
+# Generated schemas and the deployment manifest are intentionally versioned:
+#   resources/casper_contract_schemas/governance_receiptv3_schema.json
+#   resources/legacy/governance_receiptv3_schema.json
+#   deployment.manifest.json

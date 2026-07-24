@@ -26,8 +26,8 @@ labelled mock/rehearsal responses instead of pretending to be live.
 ## Run Locally
 
 ```bash
-uv sync
-uv run python integrations/mcp/concordia_casper_mcp.py
+uv sync --frozen --python 3.12.11
+uv run --frozen --isolated --python 3.12.11 python integrations/mcp/concordia_casper_mcp.py
 ```
 
 If `fastmcp` is not installed in your environment, install it in the local
@@ -35,7 +35,7 @@ review environment or use the non-MCP verifier instead:
 
 ```bash
 python scripts/verify_concordia_receipt.py \
-  --base-url https://concordia.47.84.232.193.sslip.io \
+  --base-url https://concordiadao.xyz \
   --proposal-id DAO-PROP-6CB25C \
   --live-chain
 ```

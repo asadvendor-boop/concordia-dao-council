@@ -6,6 +6,109 @@ Product framing: Concordia DAO Council is the Casper governance firewall for AI-
 
 Demo hook: a malicious AI tries to push an unsafe 30% treasury allocation. Concordia catches the violation, Verity challenges it with Dissent Receipts, the DAO Mandate caps it to 8%, Locke can execute only the exact approved hash, and browser-wallet quorum proves the same action is reverted before quorum and accepted after quorum.
 
+## Organizer-mandated finals release gate
+
+The release is blocked until all of these checks pass against the exact public
+release commit:
+
+- the GitHub repository is public and correctly named, with its description,
+  website, and topics configured; topics include `casper-blockchain`,
+  `casper-network`, and `buildathon`;
+- the GitHub community profile is complete, CodeQL and Dependabot alerts are
+  enabled, CI/security workflows are green, and no High or Critical alert is
+  open;
+- the deployed MVP is fully functional on Casper Testnet;
+- the judge playbook is concise, step-by-step, and operational rather than
+  marketing copy;
+- the BUIDL page names every current contract package hash and describes the
+  sample Testnet transactions it links; and
+- a fresh incognito crawl checks every application route, anchor, redirect,
+  explorer receipt, documentation link, repository link, video link, and BUIDL
+  link. Any dead link, doubled dashboard base path, unavailable anchor, console
+  error, or failed required request blocks publication.
+
+The qualification-round proof below remains historical context. Finals v3,
+treasury, SafePay v2, and official-x402 claims are published only after their
+separately versioned live artifacts and release gates pass.
+
+### Rendered-link gate invocation
+
+The organizer crawl is a separate, locked, read-only Playwright collector. It
+does not replace or weaken G12 or G13. Its request file fixes the public
+origins, 11 dashboard route states, five Proof tabs, proposal/recording query
+states, custom-domain and documentation surfaces, repository, DoraHacks,
+initial-round video, socials, and every historical Casper receipt linked to
+judges. The collector also discovers rendered anchors, client- and server-side
+downloads, and every rendered asset from the DOM. It binds exact route and tab
+identity, exact query-parameter multisets, same-origin cross-document
+fragments, the tracked `www` 308 to the Concordia apex followed by the frozen
+Next root redirects, and blocks WebSockets before connection while retaining
+the attempt as failing evidence.
+
+It fails closed on any non-read application request, invalid URL, doubled
+`/dashboard/dashboard` base path, missing document anchor, undocumented
+redirect, page/console error, failed or 4xx first-party request, empty download,
+route/query mismatch, or Proof-tab mismatch. Redirects are allowed only when
+their exact source, destination, and status are committed in
+`handoff/ORGANIZER_LINK_GATE_REQUEST.json`; there is no runtime override.
+
+From a fresh clone, install the collector's separately locked Node dependencies
+and its local Chromium binary before invoking either live organizer capture:
+
+```bash
+cd scripts/g13-browser-runtime
+npm ci --ignore-scripts --no-audit --no-fund
+PLAYWRIGHT_BROWSERS_PATH=0 node node_modules/playwright/cli.js install chromium
+cd ../..
+```
+
+CI performs the same locked install and adds Playwright's Linux system
+dependencies with `--with-deps`. The browser remains under
+`scripts/g13-browser-runtime/node_modules`; the collector never falls back to
+an ambient browser installation.
+
+Run this against the exact deployed release-candidate SHA before G12:
+
+```bash
+python scripts/build_release_manifest.py capture-organizer-g12
+```
+
+This fixed capture command publishes both the canonical machine-readable G12
+audit at `release/organizer/G12_RENDERED_LINK_AUDIT.json` and its bound
+no-fixture invocation receipt. Commit both with the exact
+release candidate and bind that commit in the normal release manifest. Direct
+shell redirection into either release path is not authoritative evidence. A
+failed collector publishes neither file.
+
+After the new video and DoraHacks edit, run the independent organizer crawl
+again before G13; G13's existing video/embed/link receipt still runs afterward:
+
+```bash
+python scripts/build_release_manifest.py capture-organizer-g13
+node scripts/run_g13_submission_gate.mjs --help
+```
+
+The G13 result is separately named so the committed G12 audit is never silently
+overwritten at `release/g13/ORGANIZER_RENDERED_LINK_AUDIT.json`. Both
+audit/invocation pairs are generated observations; none may
+be hand-edited into a pass.
+
+For deterministic offline CI, replay the same inventory and validators with
+the committed synthetic fixture:
+
+```bash
+node scripts/run_organizer_link_gate.mjs \
+  --input handoff/ORGANIZER_LINK_GATE_REQUEST.json \
+  --fixture tests/fixtures/organizer-link-gate-pass.json
+```
+
+Fixture mode never launches a browser or opens a network connection. It proves
+the gate mechanics, census, canonical serialization, and refusal paths, but
+returns `verdict: NON_QUALIFYING` and `release_qualified: false`. Fixture output
+is never release evidence and must never be written to either release audit path. Only
+an independently verified `collection_mode: live_incognito`, `verdict: PASS`
+document qualifies for G12/G13.
+
 ## Core proof path
 
 The final proof is Locke submitting the approved governance receipt to a deployed Casper Testnet contract. A mock receipt hash is only for rehearsal.
@@ -88,7 +191,7 @@ The submission has a real Casper Testnet transaction hash for the approved Conco
 Current hosted status:
 
 ```text
-Public URL: https://concordia.47.84.232.193.sslip.io/dashboard
+Public URL: https://concordiadao.xyz/dashboard
 Casper Testnet live read: verified from the hosted gateway
 Hosted execution mode: real
 Hosted receipt contract hash: hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1

@@ -1,0 +1,63 @@
+{
+  "name": "@concordia-dao/verify",
+  "version": "0.1.0",
+  "description": "Read-only, fail-closed verifier for Concordia proof registries and typed v3 envelopes.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Concordia DAO",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asadvendor-boop/concordia-dao-council.git",
+    "directory": "packages/verify"
+  },
+  "homepage": "https://github.com/asadvendor-boop/concordia-dao-council#readme",
+  "bugs": {
+    "url": "https://github.com/asadvendor-boop/concordia-dao-council/issues"
+  },
+  "keywords": [
+    "casper",
+    "proof",
+    "governance",
+    "verification",
+    "x402"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "concordia-verify": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-vectors.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run clean && npm run build && node --test test/*.test.mjs",
+    "test:unit": "node --test test/*.test.mjs",
+    "prepack": "npm run clean && npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "1.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}

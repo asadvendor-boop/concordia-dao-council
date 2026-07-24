@@ -20,7 +20,7 @@ Proof:
 - SafePay Lite x402 proof: dcb35...
 - IPFS archive: bafkrei...
 
-Live walkthrough: https://concordia.47.84.232.193.sslip.io/dashboard/judge
+Live walkthrough: https://concordiadao.xyz/dashboard/judge
 
 ## DoraHacks Short Description
 

@@ -1,0 +1,158 @@
+{
+  "schema_id": "concordia.g1-post-freeze-corrections.v1",
+  "status": "required",
+  "authority_tag": "concordia-g1-freeze-v2.0-a",
+  "authority_commit": "b24c0409023e6c4b56287d4fddc17bdb42d9b1ac",
+  "reason": "Independent cross-language verification found fail-open omissions after the immutable G1 tag was published. The tag remains the common branch root; these corrections are mandatory release deltas and may not be relaxed by either lane.",
+  "corrections": [
+    {
+      "id": "G1-C6-v3-temporal-order",
+      "affected_schema": "concordia.v3-proof.v1",
+      "rules": [
+        "Every raw contract-step finality observation carries its validated block_hash and block_height into the verifier result.",
+        "Ordered contract-step block heights must be nondecreasing.",
+        "The state readback observed_block_height must be greater than or equal to the successful finalize_exact block_height.",
+        "A self-consistent state-readback artifact captured before finalize_exact is invalid even when its hashes and state fields otherwise verify."
+      ],
+      "acceptance_tests": [
+        "test_offline_verifier_rejects_state_readback_before_exact_finalization",
+        "test_offline_verifier_rejects_nonmonotonic_contract_step_finality"
+      ]
+    },
+    {
+      "id": "G1-C7-proof-registry-deployment-domain",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Every public proof item contains deployment_domain, nullable for proof types without a v3 deployment identity.",
+        "A verified exact_envelope_v3 or native_treasury_execution_v1 item requires deployment_domain as lowercase 32-byte hex.",
+        "Two-pass exact-envelope and treasury verification requires exact equality of proposal_id, action_id, envelope_hash, network, package_hash, contract_hash, and deployment_domain.",
+        "Treasury temporal binding is snapshot_block_height < exact_v3_finalization_block_height == treasury_authorization_block_height <= native_execution_block_height."
+      ],
+      "acceptance_tests": [
+        "test_reg_04c_v3_execution_items_require_deployment_domain",
+        "WP8 cross-artifact exact-envelope/treasury parity tests"
+      ]
+    },
+    {
+      "id": "G1-C8-v3-canonical-block-order",
+      "affected_schema": "concordia.v3-proof.v1",
+      "rules": [
+        "Every contract-step finality block height is strictly greater than the installation block height.",
+        "Consecutive contract-step observations at an equal height must carry the identical canonical block hash.",
+        "A state readback at the exact-finalization height must carry the identical canonical block hash as finalize_exact."
+      ],
+      "acceptance_tests": [
+        "test_offline_verifier_rejects_contract_step_at_install_height",
+        "test_offline_verifier_rejects_equal_height_steps_on_different_blocks",
+        "test_offline_verifier_rejects_equal_height_readback_on_different_block"
+      ]
+    },
+    {
+      "id": "G1-C9-treasury-authorization-block-hash",
+      "affected_schema": "concordia.native_treasury_execution.v1",
+      "rules": [
+        "The bounded native-transfer scan exposes the canonical hash observed at authorization_block_height.",
+        "The scan authorization block hash must equal the exact-v3 finalization block hash as well as matching its height.",
+        "A treasury execution on a competing block at the same height is invalid."
+      ],
+      "acceptance_tests": [
+        "test_exact_contiguous_scan_proves_one_transfer_only",
+        "test_proof_gate_rejects_competing_block_at_v3_authorization_height",
+        "WP8 cross-proof competing-fork rejection tests"
+      ]
+    },
+    {
+      "id": "G1-C10-independent-card-chain-artifact",
+      "affected_schema": "concordia.card_chain.v1",
+      "rules": [
+        "The humanized public evidence view is not a cryptographic card-hash preimage.",
+        "Independent card verification consumes the exact stored canonical_card_json bytes for each immutable historical card.",
+        "The adapter recomputes every card hash and previous-card link and ignores asserted chain-validity booleans.",
+        "The exact frozen preimages pass a secret scan before public release and are never modified during publication.",
+        "The producer requires a strict immutable release-root mapping generated only from the verified historical receipt final_card_hash; missing, request-selected, Host-derived, or self-asserted roots fail closed."
+      ],
+      "acceptance_tests": [
+        "WP4 card-chain artifact byte-preservation and non-mutation tests",
+        "WP8 card-chain exact hash and linkage tests",
+        "WP8 forged chain_valid boolean guard"
+      ]
+    },
+    {
+      "id": "G1-C11-proof-type-provenance-binding",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Each proof_type has a closed allowlist for generation, lineage, observation_mode, temporal_scope, and execution_outcome; valid enum values cannot be relabelled across proof semantics.",
+        "exact_envelope_v3 and native_treasury_execution_v1 are v3 supplemental current accepted proof observed live or by dated snapshot.",
+        "safepay_v2 is v2 supplemental current accepted proof observed live or by dated snapshot.",
+        "official_x402_settlement_v1 is v3 supplemental current accepted proof observed live or by dated snapshot and requires the full exact-v3 proposal, action, envelope, network, package, contract, and deployment-domain identity.",
+        "historical_odra_receipt_v2 is v1 or v2 historical accepted or expected-rejection proof and cannot imply current v3 enforcement.",
+        "snapshot is generation none, supplemental, snapshot-observed, not-applicable evidence only.",
+        "The official facilitator check name is normalized to facilitator_verify_returned_is_valid_true so it satisfies the frozen snake-case check-name grammar."
+      ],
+      "acceptance_tests": [
+        "test_reg_04d_current_v3_execution_provenance_cannot_be_relabelled",
+        "test_reg_04e_payment_proof_provenance_is_generation_bound",
+        "test_reg_04f_payment_proof_provenance_cannot_be_relabelled",
+        "test_reg_04g_official_x402_requires_exact_v3_execution_identity",
+        "WP8 proof-type provenance relabelling tests"
+      ]
+    },
+    {
+      "id": "G1-C12-proof-observation-chronology",
+      "affected_schema": "public_proof_registry_v1",
+      "rules": [
+        "Every check observed_at, item captured_at, and registry generated_at is a strict RFC3339 UTC-Z timestamp.",
+        "For every verified item, max(check.observed_at) is less than or equal to item captured_at.",
+        "Every item captured_at is less than or equal to registry generated_at.",
+        "Registry generated_at is less than or equal to the verifier reference time and cannot be trusted as the verifier clock.",
+        "Any malformed, reversed, or future chronology makes the affected item or registry invalid rather than green."
+      ],
+      "acceptance_tests": [
+        "test_reg_05b_check_observation_cannot_follow_item_capture",
+        "test_reg_05c_item_capture_cannot_follow_registry_generation",
+        "test_reg_05d_registry_generation_cannot_be_in_the_verifier_future",
+        "WP8 future and reversed proof chronology tests"
+      ]
+    },
+    {
+      "id": "G1-C13-independent-historical-odra-artifact",
+      "affected_schema": "concordia.historical_odra_receipt.v1",
+      "rules": [
+        "Historical receipt verification consumes raw Casper deploy, canonical-block, state-root, package, and contract JSON-RPC transcripts plus the exact card-chain artifact.",
+        "The legacy humanized receipt summary and all asserted passed, processed, or chain_valid booleans are forbidden as verification inputs.",
+        "The signed receipt deploy, generation-specific session target, exact ordered 17 typed runtime arguments, terminal card hash, package version, contract ownership, and on-chain Wasm state hash are recomputed and equality-bound to a packaged frozen v1/v2 chain-identity inventory.",
+        "The accepted v1 receipt uses StoredContractByHash with the v1 argument order; the accepted v2 receipt uses StoredVersionedContractByHash targeting its package at version 1 with a different signed argument order.",
+        "receiptArgumentDigest is SHA-256 of u32-le argument count followed by each exact Casper bytesrepr NamedArg (bytesrepr String name plus bytesrepr CLValue) in signed order; parsed JSON and reordered presentation fields are forbidden preimages.",
+        "Offline historical verification has scope artifact_transcript_consistency with no observationSources; embedded raw RPC paths are artifactInputs and cannot prove canonical membership or finality without separate trusted live RPC corroboration.",
+        "The canonical exported card chain terminates at the v1 signed root. The v2 receipt signs a different root and cannot be published as a combined receipt-and-card-chain artifact until its own exact chain is independently exported.",
+        "Preserved repo source hashes are verified separately and source_deployment_equivalence is unproven; no source-to-deployed-Wasm equivalence claim is allowed.",
+        "Missing raw evidence is unavailable and contradictory raw evidence is invalid."
+      ],
+      "acceptance_tests": [
+        "test_historical_odra_inventory_separates_chain_identity_from_source_preservation",
+        "test_historical_odra_inventory_pins_exact_v1_and_v2_chain_identities",
+        "generation-specific session variant, target, argument-order, and terminal-root tests",
+        "cross-language receipt-argument digest vector and argument-order mutation tests",
+        "test_preserved_source_manifest_still_matches_every_historical_file",
+        "WP8 historical raw-receipt adapter and forged-summary guard tests"
+      ]
+    },
+    {
+      "id": "G1-C14-official-x402-separate-proposal-and-governance-identity",
+      "affected_schema": "internal_proof_registry_v1,public_proof_registry_v1",
+      "rules": [
+        "NativeTransferV1 and OfficialX402SettlementV1 use distinct proposal IDs, action IDs, and envelope hashes on the same finalized v3 package, contract, network, and deployment domain.",
+        "The canonical public proposal view contains historical, exact-envelope, native-treasury, and SafePay proofs; the official-x402 public proposal view contains only the official settlement proof.",
+        "The internal OfficialX402SettlementV1 authorization record is a pre-settlement v3 record and therefore contains no settlement transaction; the public official settlement item binds the later finalized settlement transaction.",
+        "The official service compares internal registry package, contract, and deployment-domain fields to a strict finalized-v3 governance config file, never to the separate WCSPR token identity.",
+        "Both proposal-scoped public registry documents and the signed-payment internal lookup are independently validated before release."
+      ],
+      "acceptance_tests": [
+        "test_release_registry_requires_distinct_official_proposal_on_same_v3_deployment",
+        "test_release_assembly_rejects_combined_payment_proposal",
+        "official-x402 governance config and interlock tests",
+        "dual hosted proof-registry release-manifest tests"
+      ]
+    }
+  ]
+}

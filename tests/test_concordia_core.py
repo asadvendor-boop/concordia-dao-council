@@ -17,7 +17,6 @@ from shared.casper_executor import (
     build_unsigned_governance_receipt_deploy,
     build_unsigned_odra_call_deploy,
     casper_execution_preflight,
-    submit_odra_call_deploy,
     submit_governance_receipt,
 )
 from shared.approval import (
@@ -55,6 +54,7 @@ from shared.proof_runtime import (
     certificate_html,
     certificate_pdf_bytes,
     check_canonical_text,
+    check_repo_canonical_consistency,
     redact_public_payload,
     redaction_findings,
 )
@@ -443,7 +443,7 @@ def test_dao_mandate_uses_approval_expiry_not_now():
     assert mandate["expires_at"] == "2026-08-01T00:00:00+00:00"
 
 
-def test_invariant_runner_covers_required_no_fake_success_checks():
+def test_invariant_runner_covers_required_checks_without_trusting_caller_success():
     invariants = build_invariant_runner(
         _canonical_evidence_sample(),
         {
@@ -454,11 +454,11 @@ def test_invariant_runner_covers_required_no_fake_success_checks():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "passed"
+    assert invariants["status"] == "failed"
     assert checks["allocation_cap"]["passed"]
-    assert checks["quorum_required"]["passed"]
+    assert checks["quorum_required"]["passed"] is False
     assert checks["tampered_envelope_rejected"]["passed"]
-    assert checks["duplicate_x402_proof_rejected"]["passed"]
+    assert checks["x402_replay_safety_verified"]["passed"] is False
     assert checks["old_nonce_rejected"]["passed"]
     assert checks["llm_numeric_mutation_ignored"]["passed"]
     assert checks["policy_hash_mismatch_rejected"]["passed"]
@@ -488,7 +488,7 @@ def test_invariant_runner_fails_if_safepay_duplicate_proof_not_rejected():
     checks = {check["id"]: check for check in invariants["checks"]}
 
     assert invariants["status"] == "failed"
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is False
+    assert checks["x402_replay_safety_verified"]["passed"] is False
 
 
 def test_invariant_runner_missing_policy_hash_is_incomplete_not_failed():
@@ -502,7 +502,7 @@ def test_invariant_runner_missing_policy_hash_is_incomplete_not_failed():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "incomplete"
+    assert invariants["status"] == "failed"
     assert checks["policy_hash_mismatch_rejected"]["passed"] is None
     assert checks["policy_hash_mismatch_rejected"]["status"] == "missing_evidence"
     assert "missing" in checks["policy_hash_mismatch_rejected"]["evidence"]
@@ -515,7 +515,7 @@ def test_invariant_runner_fails_when_policy_hash_missing():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert invariants["status"] == "incomplete"
+    assert invariants["status"] == "failed"
     assert checks["policy_hash_mismatch_rejected"]["passed"] is None
     assert checks["policy_hash_mismatch_rejected"]["status"] == "missing_evidence"
 
@@ -570,7 +570,7 @@ def test_invariant_runner_rejects_llm_numeric_mutation():
     assert "caps 3000 bps to 800 bps" in checks["llm_numeric_mutation_ignored"]["evidence"]
 
 
-def test_invariant_runner_rejects_duplicate_x402_proof():
+def test_invariant_runner_rejects_caller_asserted_duplicate_x402_proof():
     invariants = build_invariant_runner(
         _canonical_evidence_sample(),
         {
@@ -581,7 +581,7 @@ def test_invariant_runner_rejects_duplicate_x402_proof():
     )
     checks = {check["id"]: check for check in invariants["checks"]}
 
-    assert checks["duplicate_x402_proof_rejected"]["passed"] is True
+    assert checks["x402_replay_safety_verified"]["passed"] is False
 
 
 def test_certificate_pdf_bytes_is_real_downloadable_pdf():
@@ -637,33 +637,36 @@ def test_public_llm_readiness_status_redacts_provider_details():
     assert public["model_roles"] == ["commander", "operator"]
 
 
-def test_safepay_lite_parses_current_x402_artifact():
+def test_safepay_lite_does_not_promote_historical_x402_artifact():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["status"] == "verified"
-    assert safepay["payment_verified"] is True
-    assert safepay["report_hash_verified"] is True
-    assert safepay["duplicate_proof_rejected"] is True
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
-    assert safepay["provider_reputation_delta"] == 1
-    assert safepay["included_in_governance_proof"] is True
+    assert safepay["status"] == "unverified"
+    assert safepay["payment_verified"] is False
+    assert safepay["report_hash_verified"] is False
+    assert safepay["duplicate_proof_rejected"] is False
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["provider_reputation_delta"] == 0
+    assert safepay["included_in_governance_proof"] is False
 
 
-def test_safepay_lite_is_verified_with_real_payment_artifact():
+def test_safepay_lite_real_historical_payment_is_not_replay_proof():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["status"] == "verified"
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
-    assert safepay["payment_verified"] is True
-    assert safepay["report_hash_verified"] is True
-    assert safepay["included_in_governance_proof"] is True
+    assert safepay["status"] == "unverified"
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_verified"] is False
+    assert safepay["report_hash_verified"] is False
+    assert safepay["included_in_governance_proof"] is False
 
 
 def test_safepay_lite_is_unverified_without_payment_artifact(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["payment_hash"] == CANONICAL_X402_PAYMENT_HASH
+    assert safepay["payment_hash"] is None
+    assert safepay["historical_payment_hash"] == CANONICAL_X402_PAYMENT_HASH
     assert safepay["status"] == "unverified"
     assert safepay["payment_verified"] is False
     assert safepay["included_in_governance_proof"] is False
@@ -711,16 +714,16 @@ def test_safepay_lite_unverified_on_report_hash_mismatch(monkeypatch, tmp_path):
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
     assert safepay["status"] == "unverified"
-    assert safepay["payment_verified"] is True
+    assert safepay["payment_verified"] is False
     assert safepay["report_hash_verified"] is False
     assert safepay["included_in_governance_proof"] is False
 
 
-def test_safepay_lite_duplicate_proof_rejected():
+def test_safepay_lite_requires_current_registry_for_replay_rejection():
     safepay = build_safepay_lite(_canonical_evidence_sample())
 
-    assert safepay["duplicate_proof_rejected"] is True
-    assert safepay["duplicate_rejection_mode"] == "deterministic_replay_proof"
+    assert safepay["duplicate_proof_rejected"] is False
+    assert safepay["duplicate_rejection_mode"] == "unverified"
 
 
 def test_dynamic_preview_computes_hashes_from_payload():
@@ -823,6 +826,15 @@ def test_canonical_manifest_and_text_check_require_final_hierarchy():
     assert check_canonical_text("test", text + "\nhttp://concordia.47.84.232.193.sslip.io/dashboard")
 
 
+def test_repo_canonical_consistency_follows_the_decomposed_dashboard_source():
+    result = check_repo_canonical_consistency(Path("."))
+
+    assert result["status"] == "passed", result["findings"]
+    assert "dashboard/app/_components/lib.js" in result["checked"]
+    assert "dashboard/app/proof/page.js" not in result["checked"]
+    assert "dashboard/app/judge/page.js" not in result["checked"]
+
+
 def test_public_redaction_removes_secret_values_and_paths():
     payload = {
         "payment_hash": CANONICAL_X402_PAYMENT_HASH,
@@ -897,6 +909,7 @@ def test_council_reputation_counts_evidence_cards():
                 "data": {
                     "card_type": "CasperExecutionReceipt",
                     "actions_taken": [{"status": "success", "deploy_hash": "e" * 64}],
+                    "governance_archive": {"archive_hash": "sha256:" + "a" * 64},
                 },
             },
             {
@@ -914,6 +927,7 @@ def test_council_reputation_counts_evidence_cards():
     assert by_metric["Rogue executions blocked"] == 1
     assert by_metric["Live Casper reads"] == 1
     assert by_metric["Archives sealed"] == 1
+    assert by_metric["Optional summaries"] == 1
 
 
 def test_rate_limiter_does_not_starve_dashboard_or_agent_control_plane():
@@ -1021,7 +1035,7 @@ def test_ipfs_default_gateway_uses_concordia_proxy_not_public_ipfs(monkeypatch):
 
     status = ipfs_status()
 
-    assert status["gateway_base"] == "https://concordia.47.84.232.193.sslip.io/api/ipfs"
+    assert status["gateway_base"] == "https://concordiadao.xyz/api/ipfs"
     assert "ipfs.io" not in status["gateway_base"]
 
 
@@ -1148,7 +1162,27 @@ def test_unsigned_cspr_click_receipt_deploy_is_wallet_ready(monkeypatch):
 
 
 def test_unsigned_x402_transfer_deploy_is_wallet_ready(monkeypatch):
-    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper-test")
+    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper")
+    result = build_unsigned_casper_transfer_deploy(
+        signer_public_key="01" + ("2" * 64),
+        target_public_key="01" + ("3" * 64),
+        amount_motes=1_000_000,
+        correlation_id=42,
+        chain_name="casper-test",
+    )
+    assert result["status"] == "ready"
+    assert result["payload_kind"] == "deploy"
+    assert result["chain_name"] == "casper-test"
+    assert result["wallet_payload"]["header"]["chain_name"] == "casper-test"
+    assert result["transfer_amount_motes"] == 1_000_000
+    assert result["wallet_payload"]["session"]["Transfer"]["args"][0][0] == "amount"
+    assert result["wallet_payload"]["approvals"] == []
+
+
+def test_unsigned_x402_transfer_legacy_caller_still_uses_chain_environment(
+    monkeypatch,
+):
+    monkeypatch.setenv("CASPER_CHAIN_NAME", "casper-test-legacy")
     result = build_unsigned_casper_transfer_deploy(
         signer_public_key="01" + ("2" * 64),
         target_public_key="01" + ("3" * 64),
@@ -1156,10 +1190,10 @@ def test_unsigned_x402_transfer_deploy_is_wallet_ready(monkeypatch):
         correlation_id=42,
     )
     assert result["status"] == "ready"
-    assert result["payload_kind"] == "deploy"
-    assert result["transfer_amount_motes"] == 1_000_000
-    assert result["wallet_payload"]["session"]["Transfer"]["args"][0][0] == "amount"
-    assert result["wallet_payload"]["approvals"] == []
+    assert result["chain_name"] == "casper-test-legacy"
+    assert result["wallet_payload"]["header"]["chain_name"] == (
+        "casper-test-legacy"
+    )
 
 
 def test_unsigned_odra_quorum_call_is_wallet_ready(monkeypatch):
@@ -1677,20 +1711,26 @@ def test_x402_demo_payment_proof_round_trip(monkeypatch):
     assert verify_demo_payment_proof("/reports/dao-prop-test", proof)
 
 
-def test_x402_transfer_proof_parser_requires_processed_transfer(monkeypatch):
+def test_x402_transfer_proof_parser_requires_exact_processed_transfer(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_AMOUNT", "1000000")
     monkeypatch.setenv("X402_PAYMENT_ADDRESS", "account-hash-" + ("a" * 64))
-    payload = {
+    exact = {
         "status": "processed",
         "error_message": None,
         "transfers": [
             {
                 "target_account_hash": "account-hash-" + ("a" * 64),
-                "amount": "1200000",
+                "amount": "1000000",
             }
         ],
     }
-    assert _extract_transfer_proof_status(payload)["valid"] is True
+    assert _extract_transfer_proof_status(exact)["valid"] is True
+
+    overpayment = {
+        **exact,
+        "transfers": [{**exact["transfers"][0], "amount": "1200000"}],
+    }
+    assert _extract_transfer_proof_status(overpayment)["valid"] is False
 
 
 def test_x402_payment_correlation_id_is_stable():
@@ -1829,16 +1869,31 @@ def test_revised_capped_policy_assessment_can_reach_human_plan():
 
 def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_path):
     db = init_db(tmp_path / "concordia.db")
+    demo_run_id = "run-reset-test"
+    proposal_id = "DAO-DEMO-RESET"
     db.execute(
         "INSERT INTO proposals (proposal_id, state, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        ("DAO-PROP-RESET", "CHALLENGED", "2026-06-29T00:00:00Z", "2026-06-29T00:00:00Z"),
+        (proposal_id, "CHALLENGED", "2026-06-29T00:00:00Z", "2026-06-29T00:00:00Z"),
+    )
+    db.execute(
+        """
+        INSERT INTO demo_runs (
+            demo_run_id, proposal_id, scenario_id, is_demo, created_at
+        ) VALUES (?, ?, ?, 1, ?)
+        """,
+        (
+            demo_run_id,
+            proposal_id,
+            "treasury-cap",
+            "2026-06-29T00:00:00Z",
+        ),
     )
     db.execute(
         "INSERT INTO proposal_rooms (room_id, proposal_id, title, created_by, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (
             "room-reset",
-            "DAO-PROP-RESET",
+            proposal_id,
             "Reset Test",
             "recorder",
             "2026-06-29T00:00:00Z",
@@ -1852,7 +1907,7 @@ def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_pat
         (
             "msg-reset",
             "room-reset",
-            "DAO-PROP-RESET",
+            proposal_id,
             "recorder",
             "demo message",
             "2026-06-29T00:00:00Z",
@@ -1860,7 +1915,7 @@ def test_demo_cleanup_detaches_preserved_rooms_before_deleting_proposals(tmp_pat
         ),
     )
 
-    result = remove_demo_proposals(db)
+    result = remove_demo_proposals(db, demo_run_id)
 
     assert result["cleaned_proposals"] == 1
     assert db.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0

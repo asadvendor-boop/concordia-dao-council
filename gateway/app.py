@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from .database import init_db
-from .rate_limit import RateLimitMiddleware
+from .rate_limit import RateLimitMiddleware, SafePayAdmissionLimiter
 from shared import llm_reasoning as llm_runtime
 from shared.casper_executor import (
     CasperReceiptRequest,
@@ -39,6 +40,13 @@ from shared.casper_executor import (
     typed_runtime_args_preview,
 )
 from shared.casper_mcp import cspr_trade_status, get_cspr_trade_quote
+from shared.card_chain_artifact import (
+    CardChainArtifactError,
+    CardChainNotFound,
+    CardChainRootsError,
+    build_card_chain_artifact,
+    load_card_chain_release_roots,
+)
 from shared.config import MODELS, get_llm_api_key, get_llm_base_url, llm_readiness_status, public_llm_readiness_status
 from shared.cspr_cloud import cspr_cloud_status
 from shared.ipfs_client import fetch_ipfs_cid, ipfs_status, upload_json_to_ipfs
@@ -68,14 +76,38 @@ from shared.proof_pack import (
     canonicalize_public_evidence,
     requested_and_approved_bps,
 )
-from shared.approval import compute_action_hash
-from shared.runtime_secrets import read_secret
+from shared.proof_registry import (
+    AmbiguousGovernanceBinding,
+    ProofRegistryRepository,
+    RegistryNotFound,
+)
+from gateway.auth import validate_agent_identity_configuration
+from shared.approval import (
+    compute_action_hash,
+    compute_plan_hash,
+    normalize_plan_for_hash,
+)
+from shared.runtime_secrets import read_secret, read_secret_file_only
 from shared.telemetry import init_telemetry, instrument_fastapi_app, instrument_httpx, telemetry_status
 from shared.x402_payments import (
+    SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES,
+    SAFEPAY_V2_QUOTE_CAPABILITY_HEADER,
+    SAFEPAY_V2_QUOTE_REQUEST_SCHEMA,
+    SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA,
+    SAFEPAY_V2_SCHEMA_VERSION,
+    SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA,
+    SAFEPAY_V2_WALLET_INTENT_SCHEMA,
     build_payment_request,
+    issue_safepay_v2_quote_capability,
+    parse_safepay_v2_strict_json,
     payment_required_headers,
+    redeem_safepay_v2_quote,
+    request_safepay_v2_quote,
+    safepay_v2_error_body,
+    safepay_v2_account_hash_from_public_key,
+    validate_safepay_v2_gateway_quote,
+    verify_safepay_v2_quote_capability,
     settle_x402_payment_with_retry,
-    verify_demo_payment_proof,
     x402_payment_correlation_id,
     x402_receiver_public_key,
     x402_status,
@@ -89,12 +121,8 @@ logger = logging.getLogger("concordia.gateway")
 # but maddening to debug at 2 AM).
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
-    # Load approval secrets (only available on prod VM)
-    try:
-        load_dotenv("/etc/concordia/approval.env", override=False)
-    except Exception:
-        pass
 except ImportError:
     pass  # python-dotenv not installed — env vars must be set externally
 
@@ -162,6 +190,231 @@ def infer_legacy_sender_role_from_text(content: str) -> str | None:
     if "recorder" in lowered:
         return "concordia_core"
     return None
+
+
+def _normalized_safepay_ip(value: Any) -> str | None:
+    if not isinstance(value, str) or not value or "%" in value or "," in value:
+        return None
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+def _parse_safepay_trusted_proxy_networks(
+    raw: str | None,
+) -> tuple[
+    ipaddress.IPv4Network | ipaddress.IPv6Network, ...
+]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in (raw or "").split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(
+                "SAFEPAY_TRUSTED_PROXY_CIDRS contains an invalid CIDR"
+            ) from exc
+    test_mode = os.getenv("CONCORDIA_TEST_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not networks and not test_mode:
+        raise RuntimeError(
+            "SAFEPAY_TRUSTED_PROXY_CIDRS requires at least one valid CIDR"
+        )
+    return tuple(networks)
+
+
+def _safepay_proxy_headers(request: Request) -> dict[str, str] | None:
+    """Resolve one trusted client identity and overwrite provider auth headers."""
+
+    proxy_secret = read_secret_file_only("SAFEPAY_PROXY_SECRET")
+    if len(proxy_secret.encode("utf-8")) < 32:
+        return None
+    peer = _normalized_safepay_ip(
+        request.client.host if request.client is not None else None
+    )
+    # An invalid socket identity collapses into one non-routable quota bucket;
+    # caller-controlled text is never forwarded as an identity.
+    resolved = peer or "0.0.0.0"
+    if peer is not None:
+        peer_address = ipaddress.ip_address(peer)
+        peer_is_trusted = any(
+            peer_address.version == network.version and peer_address in network
+            for network in request.app.state.safepay_trusted_proxy_networks
+        )
+        supplied_attestation = request.headers.get(
+            "X-Concordia-SafePay-Proxy", ""
+        )
+        forwarded = _normalized_safepay_ip(
+            request.headers.get("X-Concordia-Client-IP")
+        )
+        if (
+            peer_is_trusted
+            and forwarded is not None
+            and hmac.compare_digest(supplied_attestation, proxy_secret)
+        ):
+            resolved = forwarded
+    return {
+        "X-Concordia-Client-IP": resolved,
+        "X-Concordia-SafePay-Proxy": proxy_secret,
+    }
+
+
+async def _read_safepay_v2_request_body(request: Request) -> bytes | None:
+    """Read no more than the frozen public-body limit plus one sentinel byte."""
+
+    content_lengths = request.headers.getlist("content-length")
+    if content_lengths:
+        if (
+            len(content_lengths) != 1
+            or not content_lengths[0].isascii()
+            or not content_lengths[0].isdigit()
+        ):
+            return None
+        if int(content_lengths[0]) > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES:
+            return None
+
+    body = bytearray()
+    async for chunk in request.stream():
+        remaining = SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES + 1 - len(body)
+        if remaining <= 0:
+            return None
+        body.extend(chunk[:remaining])
+        if (
+            len(chunk) > remaining
+            or len(body) > SAFEPAY_V2_MAX_PUBLIC_REQUEST_BYTES
+        ):
+            return None
+    return bytes(body)
+
+
+def _safepay_u512_cl_bytes(value: int) -> str:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("SafePay U512 value is invalid")
+    raw = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "little")
+    if len(raw) > 64:
+        raise ValueError("SafePay U512 value is too large")
+    return (bytes([len(raw)]) + raw).hex()
+
+
+def _safepay_unsigned_transfer_matches(
+    unsigned: Any,
+    *,
+    signer_public_key: str,
+    receiver_public_key: str,
+    quote: dict[str, Any],
+) -> bool:
+    """Independently verify both summary fields and serialized transfer bytes."""
+
+    try:
+        expected_signer = signer_public_key.strip().lower()
+        expected_target = receiver_public_key.strip().lower()
+        expected_amount = int(quote["amount_motes"])
+        expected_correlation = int(quote["correlation_id"])
+        expected_chain = "casper-test"
+        if (
+            not isinstance(unsigned, dict)
+            or unsigned.get("status") != "ready"
+            or unsigned.get("payload_kind") != "deploy"
+            or unsigned.get("chain_name") != expected_chain
+            or unsigned.get("signer_public_key") != expected_signer
+            or unsigned.get("target_public_key") != expected_target
+            or type(unsigned.get("transfer_amount_motes")) is not int
+            or unsigned["transfer_amount_motes"] != expected_amount
+            or type(unsigned.get("correlation_id")) is not int
+            or unsigned["correlation_id"] != expected_correlation
+            or not hmac.compare_digest(
+                safepay_v2_account_hash_from_public_key(expected_target),
+                quote["payee_account_hash"],
+            )
+        ):
+            return False
+
+        deploy = unsigned.get("deploy_json")
+        if (
+            not isinstance(deploy, dict)
+            or deploy != unsigned.get("wallet_payload")
+            or unsigned.get("wallet_payload_wrapped") != {"deploy": deploy}
+            or unsigned.get("deploy_hash") != deploy.get("hash")
+            or deploy.get("approvals") != []
+        ):
+            return False
+        header = deploy.get("header")
+        if (
+            not isinstance(header, dict)
+            or header.get("chain_name") != expected_chain
+            or not isinstance(header.get("account"), str)
+            or header["account"].lower() != expected_signer
+        ):
+            return False
+        session = deploy.get("session")
+        if not isinstance(session, dict) or set(session) != {"Transfer"}:
+            return False
+        transfer = session["Transfer"]
+        if not isinstance(transfer, dict) or set(transfer) != {"args"}:
+            return False
+        args = transfer["args"]
+        if (
+            not isinstance(args, list)
+            or len(args) != 3
+            or any(
+                not isinstance(item, (list, tuple)) or len(item) != 2
+                for item in args
+            )
+            or [item[0] for item in args] != ["amount", "target", "id"]
+        ):
+            return False
+        amount_cl, target_cl, id_cl = (item[1] for item in args)
+        if (
+            not isinstance(amount_cl, dict)
+            or set(amount_cl) != {"cl_type", "bytes", "parsed"}
+            or amount_cl["cl_type"] != "U512"
+            or amount_cl["parsed"] != str(expected_amount)
+            or not isinstance(amount_cl["bytes"], str)
+            or amount_cl["bytes"].lower()
+            != _safepay_u512_cl_bytes(expected_amount)
+            or not isinstance(target_cl, dict)
+            or set(target_cl) != {"cl_type", "bytes", "parsed"}
+            or target_cl["cl_type"] != "PublicKey"
+            or not isinstance(target_cl["parsed"], str)
+            or target_cl["parsed"].lower() != expected_target
+            or not isinstance(target_cl["bytes"], str)
+            or target_cl["bytes"].lower() != expected_target
+            or not hmac.compare_digest(
+                safepay_v2_account_hash_from_public_key(target_cl["parsed"]),
+                quote["payee_account_hash"],
+            )
+            or not isinstance(id_cl, dict)
+            or set(id_cl) != {"cl_type", "bytes", "parsed"}
+            or id_cl["cl_type"] != {"Option": "U64"}
+            or type(id_cl["parsed"]) is not int
+            or id_cl["parsed"] != expected_correlation
+            or not isinstance(id_cl["bytes"], str)
+            or id_cl["bytes"].lower()
+            != (
+                "01"
+                + expected_correlation.to_bytes(
+                    8, "little", signed=False
+                ).hex()
+            )
+        ):
+            return False
+        return True
+    except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _safepay_quote_capability_secret() -> bytes | None:
+    secret = read_secret_file_only("SAFEPAY_QUOTE_TOKEN_SECRET").encode("utf-8")
+    return secret if len(secret) >= 32 else None
 
 
 def _safe_json_dict(value: Any) -> dict[str, Any]:
@@ -383,16 +636,78 @@ def _usage_dict(response: Any) -> dict[str, int]:
     }
 
 
+def _run_receipt_is_verified(
+    repository: ProofRegistryRepository,
+    *,
+    proposal_id: str,
+    receipt_card_present: bool,
+) -> bool:
+    """Require one green historical-receipt proof for run-summary verification."""
+
+    if not receipt_card_present:
+        return False
+    try:
+        item = repository.unique_green_public_item(
+            proposal_id,
+            "historical_odra_receipt_v2",
+            temporal_scope="historical",
+        )
+    except (OSError, ValueError):
+        return False
+    return item is not None
+
+
+def _approval_ui_is_configured() -> bool:
+    """Require every approval-boundary value through its mounted secret file."""
+
+    return all(
+        read_secret_file_only(name)
+        for name in (
+            "APPROVAL_PROXY_SECRET",
+            "APPROVAL_UI_USER",
+            "APPROVAL_UI_APPROVER_ID",
+            "APPROVAL_UI_BCRYPT_HASH",
+            "APPROVAL_UI_CSRF_SECRET",
+        )
+    )
+
+
+def _response_plan_public_bindings(plan_data: dict[str, Any]) -> dict[str, str]:
+    """Derive the exact approval hashes from the stored plan for public verification."""
+
+    plan = dict(plan_data)
+    plan.pop("approval_binding_hash", None)
+    plan.pop("action_binding_hash", None)
+    envelopes = plan.get("envelopes")
+    if (
+        not isinstance(envelopes, list)
+        or not envelopes
+        or any(not isinstance(envelope, dict) for envelope in envelopes)
+    ):
+        return {}
+    try:
+        return {
+            "approval_binding_hash": compute_plan_hash(
+                normalize_plan_for_hash(plan)
+            ),
+            "action_binding_hash": compute_action_hash(envelopes),
+        }
+    except (TypeError, ValueError):
+        return {}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup."""
     import logging
 
+    validate_agent_identity_configuration()
     db_path = getattr(app.state, "_db_path", None) or os.getenv("GATEWAY_DB_PATH", "concordia.db")
     app.state.db = init_db(db_path)
-    csrf = os.getenv("APPROVAL_UI_CSRF_SECRET", "")
-    if not csrf:
-        logging.getLogger("gateway").warning("APPROVAL_UI_CSRF_SECRET not set — approval UI disabled")
+    if not _approval_ui_is_configured():
+        logging.getLogger("gateway").warning(
+            "approval UI file-secret set is incomplete — approval UI disabled"
+        )
     try:
         yield
     finally:
@@ -413,12 +728,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
         title="Concordia DAO Council Gateway",
         description=(
             "Multi-agent DAO governance gateway. "
-            "Coordinates a six-agent core through Gateway-owned Council Chambers."
+            "Coordinates four deliberative agents, authorization-bound Locke, "
+            "deterministic Concordia Core, and presentation-only Wells through "
+            "Gateway-owned Council Chambers."
         ),
         version="0.1.0",
         lifespan=lifespan,
     )
+    new_app.state.safepay_trusted_proxy_networks = (
+        _parse_safepay_trusted_proxy_networks(
+            os.getenv("SAFEPAY_TRUSTED_PROXY_CIDRS")
+        )
+    )
     new_app.state._db_path = db_path
+    # Tests replace this with an httpx MockTransport. Production leaves it
+    # unset and always uses the pinned internal provider origin.
+    new_app.state.safepay_v2_transport = None
+    new_app.state.safepay_admission = SafePayAdmissionLimiter()
+    new_app.state.proof_registry = ProofRegistryRepository(
+        os.getenv("CONCORDIA_PROOF_REGISTRY_DIR", "artifacts/live/proof-registry")
+    )
+    try:
+        new_app.state.card_chain_release_roots = load_card_chain_release_roots(
+            os.getenv("CONCORDIA_CARD_CHAIN_ROOTS_FILE")
+        )
+    except CardChainRootsError:
+        new_app.state.card_chain_release_roots = None
     instrument_fastapi_app(new_app)
 
     new_app.add_middleware(
@@ -426,6 +761,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
         allow_origins=cors_origins,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Agent-Key", "X-Operator-Token", "X-CSRF-Token"],
+        expose_headers=[SAFEPAY_V2_QUOTE_CAPABILITY_HEADER],
     )
     new_app.add_middleware(RateLimitMiddleware)
 
@@ -452,6 +788,372 @@ def create_app(db_path: str | None = None) -> FastAPI:
             },
             status_code=status_code,
         )
+
+    @new_app.get("/proof-registry/v1/{proposal_id}")
+    async def public_proof_registry(proposal_id: str):
+        """Return provenance-separated proof observations for one proposal."""
+
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            known = proposal_id == CANONICAL_PROPOSAL_ID or repository.has_public_proposal(proposal_id)
+            if not known:
+                db = new_app.state.db
+                known = db.execute(
+                    "SELECT 1 FROM proposals WHERE proposal_id=?",
+                    (proposal_id,),
+                ).fetchone() is not None
+            if not known:
+                known = load_dynamic_evidence(proposal_id) is not None
+            return repository.public_document(proposal_id, known=known)
+        except RegistryNotFound:
+            return JSONResponse({"error": "proposal_not_found"}, status_code=404)
+        except ValueError:
+            logger.exception("proof_registry_public_load_failed", extra={"proposal_id": proposal_id})
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    @new_app.get("/proof-artifacts/v1/{proposal_id}/card-chain")
+    async def public_card_chain_artifact(proposal_id: str):
+        """Publish exact stored card-hash preimages without mutating the chain."""
+
+        no_store = {"Cache-Control": "no-store"}
+        if not public_base_url:
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        source_url = f"{public_base_url}/proof-artifacts/v1/{proposal_id}/card-chain"
+        roots = new_app.state.card_chain_release_roots
+        expected_final_card_hash = roots.get(proposal_id) if roots is not None else None
+        captured_at = datetime.now(UTC).isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        )
+        try:
+            artifact = build_card_chain_artifact(
+                new_app.state.db,
+                proposal_id=proposal_id,
+                captured_at=captured_at,
+                source_url=source_url,
+                expected_final_card_hash=expected_final_card_hash,
+            )
+        except CardChainNotFound:
+            return JSONResponse(
+                {"error": "proposal_not_found"},
+                status_code=404,
+                headers=no_store,
+            )
+        except CardChainArtifactError:
+            logger.warning(
+                "card_chain_artifact_publication_blocked",
+                extra={"proposal_id": proposal_id},
+            )
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        except Exception:
+            logger.exception(
+                "card_chain_artifact_publication_failed",
+                extra={"proposal_id": proposal_id},
+            )
+            return JSONResponse(
+                {"error": "card_chain_artifact_unavailable"},
+                status_code=503,
+                headers=no_store,
+            )
+        return JSONResponse(artifact, headers=no_store)
+
+    def _proof_registry_service_authorized(request: Request) -> bool:
+        expected = read_secret_file_only("X402_GATEWAY_TOKEN")
+        supplied = request.headers.get("X-Concordia-Service-Token", "")
+        return bool(expected and supplied) and hmac.compare_digest(expected, supplied)
+
+    @new_app.get("/internal/proof-registry/v1/actions/{action_id_hex}")
+    async def internal_proof_registry_action(action_id_hex: str, request: Request):
+        """Internal exact-action lookup; authentication never reveals existence."""
+
+        if not _proof_registry_service_authorized(request):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            return repository.by_action_id(action_id_hex)
+        except RegistryNotFound:
+            return JSONResponse({"error": "action_not_found"}, status_code=404)
+        except AmbiguousGovernanceBinding:
+            return JSONResponse({"error": "ambiguous_governance_binding"}, status_code=409)
+        except ValueError:
+            logger.exception("proof_registry_action_load_failed")
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    @new_app.get("/internal/proof-registry/v1/x402/{signed_payment_payload_hash}")
+    async def internal_proof_registry_x402(signed_payment_payload_hash: str, request: Request):
+        """Internal x402 lookup with exact current-verified uniqueness."""
+
+        if not _proof_registry_service_authorized(request):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        repository: ProofRegistryRepository = new_app.state.proof_registry
+        try:
+            return repository.by_signed_payment_payload_hash(signed_payment_payload_hash)
+        except RegistryNotFound:
+            return JSONResponse({"error": "action_not_found"}, status_code=404)
+        except AmbiguousGovernanceBinding:
+            return JSONResponse({"error": "ambiguous_governance_binding"}, status_code=409)
+        except ValueError:
+            logger.exception("proof_registry_x402_load_failed")
+            return JSONResponse({"error": "proof_registry_unavailable"}, status_code=503)
+
+    def _safepay_v2_gateway_response(result: Any) -> Response:
+        return Response(
+            content=result.content,
+            status_code=result.status_code,
+            media_type="application/json",
+            headers=result.headers,
+        )
+
+    def _safepay_v2_local_error(
+        status_code: int,
+        code: str,
+        *,
+        retryable: bool,
+        replay_disposition: str,
+    ) -> JSONResponse:
+        return JSONResponse(
+            safepay_v2_error_body(code, retryable, replay_disposition),
+            status_code=status_code,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Concordia-SafePay-Version": SAFEPAY_V2_SCHEMA_VERSION,
+            },
+        )
+
+    async def _strict_safepay_json(request: Request) -> dict[str, Any] | None:
+        try:
+            raw_body = await _read_safepay_v2_request_body(request)
+            if raw_body is None:
+                return None
+            body = parse_safepay_v2_strict_json(raw_body)
+        except (TypeError, ValueError, RecursionError, RuntimeError):
+            return None
+        return body if isinstance(body, dict) else None
+
+    @new_app.post("/x402/v2/quotes")
+    async def safepay_v2_quote_proxy(request: Request):
+        """Proxy a quote request to the pinned provider and validate its quote."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body) != {"schema_version", "proposal_id", "resource_id"}
+            or body.get("schema_version") != SAFEPAY_V2_QUOTE_REQUEST_SCHEMA
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        quote_secret = _safepay_quote_capability_secret()
+        proxy_headers = _safepay_proxy_headers(request)
+        if quote_secret is None or proxy_headers is None:
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="not_attempted",
+            )
+        if not new_app.state.safepay_admission.admit(
+            "quotes", proxy_headers["X-Concordia-Client-IP"]
+        ):
+            return _safepay_v2_local_error(
+                429,
+                "quote_rate_limited",
+                retryable=True,
+                replay_disposition="not_attempted",
+            )
+        result = await request_safepay_v2_quote(
+            proposal_id=body.get("proposal_id"),
+            resource_id=body.get("resource_id"),
+            transport=new_app.state.safepay_v2_transport,
+            proxy_headers=proxy_headers,
+        )
+        if result.status_code == 402:
+            capability = issue_safepay_v2_quote_capability(
+                result.body["quote"], quote_secret
+            )
+            result = type(result)(
+                status_code=result.status_code,
+                content=result.content,
+                body=result.body,
+                headers={
+                    **result.headers,
+                    SAFEPAY_V2_QUOTE_CAPABILITY_HEADER: capability,
+                },
+            )
+        return _safepay_v2_gateway_response(result)
+
+    @new_app.post("/x402/v2/payment-intent")
+    async def safepay_v2_payment_intent(request: Request):
+        """Build a wallet intent from the exact provider-issued quote."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body)
+            != {
+                "schema_version",
+                "quote",
+                "quote_capability",
+                "signer_public_key",
+            }
+            or body.get("schema_version") != SAFEPAY_V2_WALLET_INTENT_REQUEST_SCHEMA
+            or not isinstance(body.get("signer_public_key"), str)
+            or not body["signer_public_key"].strip()
+            or validate_safepay_v2_gateway_quote(
+                body.get("quote"), require_unexpired=True
+            )
+            is not None
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+
+        quote = body["quote"]
+        proxy_headers = _safepay_proxy_headers(request)
+        if proxy_headers is None or not new_app.state.safepay_admission.admit(
+            "payment_intents", proxy_headers["X-Concordia-Client-IP"]
+        ):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        quote_secret = _safepay_quote_capability_secret()
+        if quote_secret is None:
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        if not verify_safepay_v2_quote_capability(
+            quote,
+            body.get("quote_capability"),
+            quote_secret,
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        signer_public_key = body["signer_public_key"].strip().lower()
+        receiver_public_key = (
+            os.getenv("X402_PAYMENT_RECEIVER_PUBLIC_KEY", "").strip().lower()
+        )
+        try:
+            derived_payee = safepay_v2_account_hash_from_public_key(receiver_public_key)
+        except (TypeError, ValueError):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        if not hmac.compare_digest(derived_payee, quote["payee_account_hash"]):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+
+        try:
+            unsigned = build_unsigned_casper_transfer_deploy(
+                signer_public_key=signer_public_key,
+                target_public_key=receiver_public_key,
+                amount_motes=int(quote["amount_motes"]),
+                correlation_id=int(quote["correlation_id"]),
+                chain_name="casper-test",
+            )
+        except Exception:
+            unsigned = {}
+        if not _safepay_unsigned_transfer_matches(
+            unsigned,
+            signer_public_key=signer_public_key,
+            receiver_public_key=receiver_public_key,
+            quote=quote,
+        ):
+            return _safepay_v2_local_error(
+                503,
+                "wallet_intent_unavailable",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        return JSONResponse(
+            {
+                **unsigned,
+                "schema_version": SAFEPAY_V2_WALLET_INTENT_SCHEMA,
+                "status": "ready",
+                "quote": quote,
+                "payment_requirements": {
+                    "network": quote["network"],
+                    "payee_account_hash": quote["payee_account_hash"],
+                    "amount_motes": quote["amount_motes"],
+                    "correlation_id": quote["correlation_id"],
+                    "expires_at": quote["expires_at"],
+                },
+            },
+            headers={
+                "Cache-Control": "no-store",
+                "X-Concordia-SafePay-Version": SAFEPAY_V2_SCHEMA_VERSION,
+            },
+        )
+
+    @new_app.post("/x402/v2/redemptions")
+    async def safepay_v2_redemption_proxy(request: Request):
+        """Redeem the exact issued quote; provider remains sole authority."""
+
+        body = await _strict_safepay_json(request)
+        if (
+            body is None
+            or set(body) != {"schema_version", "quote", "payment_hash"}
+            or body.get("schema_version") != SAFEPAY_V2_REDEMPTION_REQUEST_SCHEMA
+        ):
+            return _safepay_v2_local_error(
+                400,
+                "invalid_request",
+                retryable=False,
+                replay_disposition="not_attempted",
+            )
+        proxy_headers = _safepay_proxy_headers(request)
+        if proxy_headers is None:
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="verification_pending",
+            )
+        if not new_app.state.safepay_admission.admit(
+            "redemptions", proxy_headers["X-Concordia-Client-IP"]
+        ):
+            return _safepay_v2_local_error(
+                503,
+                "provider_unavailable",
+                retryable=True,
+                replay_disposition="verification_pending",
+            )
+        result = await redeem_safepay_v2_quote(
+            quote=body.get("quote"),
+            payment_hash=body.get("payment_hash"),
+            transport=new_app.state.safepay_v2_transport,
+            proxy_headers=proxy_headers,
+        )
+        return _safepay_v2_gateway_response(result)
 
     @new_app.get("/x402/governance-report")
     async def x402_governance_report(request: Request, proposal_id: str = "demo"):
@@ -591,18 +1293,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 response = await client.post(rpc_url, json=rpc_payload)
             response.raise_for_status()
             rpc_response = response.json()
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 {
                     "status": "failed",
                     "deploy_hash": deploy_hash,
-                    "error": f"Casper JSON-RPC broadcast failed: {type(exc).__name__}: {exc}",
+                    "error": "casper_rpc_broadcast_failed",
                 },
                 status_code=502,
             )
         if rpc_response.get("error"):
             return JSONResponse(
-                {"status": "failed", "deploy_hash": deploy_hash, "rpc_response": rpc_response},
+                {
+                    "status": "failed",
+                    "deploy_hash": deploy_hash,
+                    "error": "casper_rpc_rejected",
+                },
                 status_code=400,
             )
         finality = await await_casper_finality(deploy_hash, rpc_url=rpc_url, max_attempts=3)
@@ -682,12 +1388,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "yield_ms": int((time.perf_counter() - started) * 1000),
                 "usage": _usage_dict(response),
             }
-        except Exception as exc:
+        except Exception:
             probe = {
                 "ok": False,
                 "provider": "llm",
                 "requested_model": model,
-                "error_type": type(exc).__name__,
+                "error": "llm_probe_failed",
                 "yield_ms": int((time.perf_counter() - started) * 1000),
             }
 
@@ -825,7 +1531,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "GovernanceSummary": {
                 "key": "wells",
                 "name": "Wells",
-                "role": "Governance Archivist",
+                "role": "Non-reasoning Archive Presentation Persona",
             },
         }
 
@@ -876,6 +1582,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "name": "Concordia Core",
                 "role": "Deterministic Control Plane",
             })
+            public_data = public_evidence_value(data)
+            if row["card_type"] == "ResponsePlan":
+                public_data.update(_response_plan_public_bindings(data))
             parsed_cards.append({
                 "sequence": row["sequence_number"],
                 "card_type": row["card_type"],
@@ -883,7 +1592,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "agent": persona,
                 "hash": row["card_hash"],
                 "published": row["published_at"] is not None,
-                "data": public_evidence_value(data),
+                "data": public_data,
             })
         role_sequence = [card["role"] for card in parsed_cards]
         handoffs = [
@@ -1322,10 +2031,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Read-only public gateway for Concordia-pinned evidence CIDs."""
         try:
             body, content_type = await fetch_ipfs_cid(cid)
-        except ValueError as exc:
-            return JSONResponse({"status": "invalid_cid", "error": str(exc)}, status_code=400)
-        except httpx.HTTPError as exc:
-            return JSONResponse({"status": "unavailable", "error": f"IPFS fetch failed: {exc}"}, status_code=502)
+        except ValueError:
+            return JSONResponse(
+                {"status": "invalid_cid", "error": "invalid_ipfs_cid"},
+                status_code=400,
+            )
+        except httpx.HTTPError:
+            return JSONResponse(
+                {"status": "unavailable", "error": "ipfs_fetch_unavailable"},
+                status_code=502,
+            )
         return Response(body, media_type=content_type or "application/json")
 
     @new_app.get("/api/ipfs/{cid}")
@@ -1735,12 +2450,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
         try:
             evidence = await get_evidence_public(proposal_id)
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 {
                     "status": "evidence_not_ready",
                     "proposal_id": proposal_id,
-                    "message": f"Canonical quorum receipt requires sealed evidence cards ({type(exc).__name__}).",
+                    "message": "Canonical quorum receipt requires sealed evidence cards.",
                 },
                 status_code=422,
             )
@@ -2074,9 +2789,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
     from .routes.rooms import router as rooms_router
     new_app.include_router(rooms_router, prefix="/api")
 
-    # Wells, the Governance Archivist, produces the public GovernanceSummary and
-    # audit archive for the canonical reviewer proof. Any legacy /scribe route
-    # remains an internal compatibility hook, not a missing final archive path.
+    # Concordia Core builds the deterministic archive and Locke seals it in the
+    # receipt. Wells is presentation-only. Any legacy /scribe label remains a
+    # compatibility/presentation hook, never an authority or archive boundary.
 
     # -----------------------------------------------------------------------
     # Council Chamber Messages (for dashboard viewer)
@@ -2303,7 +3018,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 (proposal_id,),
             ).fetchone()
             human_intervention = human_auth is not None
-            receipt_verified = receipt_time is not None
+            receipt_verified = _run_receipt_is_verified(
+                new_app.state.proof_registry,
+                proposal_id=proposal_id,
+                receipt_card_present=receipt_time is not None,
+            )
 
             agent_secs = _seconds_between(signal_time, plan_time)
             resolution_secs = _seconds_between(signal_time, terminal_time)

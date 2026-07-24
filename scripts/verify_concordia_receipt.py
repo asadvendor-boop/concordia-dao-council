@@ -9,11 +9,42 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _load_proof_item_is_green():
+    """Load the stdlib-only registry module without importing shared.__init__.
+
+    ``shared.__init__`` intentionally exports application models that require
+    third-party packages.  This reviewer-facing checker is advertised as
+    dependency-free, so it loads the fixed repository module directly and
+    exposes only its fail-closed predicate.
+    """
+
+    module_path = ROOT / "shared" / "proof_registry.py"
+    spec = importlib.util.spec_from_file_location(
+        "_concordia_receipt_proof_registry", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("proof registry verifier could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    predicate = getattr(module, "proof_item_is_green", None)
+    if not callable(predicate):
+        raise RuntimeError("proof registry verifier is unavailable")
+    return predicate
+
+
+proof_item_is_green = _load_proof_item_is_green()
 
 
 HASH64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -342,53 +373,38 @@ def _failures_for_packet(packet: dict) -> list[str]:
 
 
 def _quorum_failures_for_packet(packet: dict) -> list[str]:
-    """Validate the optional live Odra quorum exercise if the proof pack includes it."""
+    """Require derived registry evidence for any verified quorum claim."""
     quorum = packet.get("odra_quorum_exercise") or (packet.get("proof_center") or {}).get("odra_quorum_exercise") or {}
     if not quorum:
         return []
-
-    failures: list[str] = []
-    summary = quorum.get("summary") or {}
-    live_deploys = quorum.get("live_deploys") or {}
-    option1 = quorum.get("option1_backend_signed_receipt") or {}
-    option1_finality = option1.get("finality") or {}
-
-    required_flags = {
-        "pre_quorum_blocked": "Pre-quorum execution was not recorded as blocked.",
-        "two_signers_approved": "Two quorum approvals were not recorded.",
-        "final_receipt_after_threshold": "Wallet final receipt after threshold is not recorded.",
-        "backend_signed_final_receipt_after_quorum": "Backend-signed final receipt after quorum is not recorded.",
-    }
-    for key, message in required_flags.items():
-        if summary.get(key) is not True:
-            failures.append(message)
-
-    required_hashes = {
-        "configure_quorum": "configure_quorum deploy hash is missing.",
-        "propose_envelope": "propose_envelope deploy hash is missing.",
-        "pre_quorum_expected_failure": "pre-quorum expected-failure deploy hash is missing.",
-        "approve_envelope_server": "server approval deploy hash is missing.",
-        "approve_envelope_browser_wallet": "browser-wallet approval deploy hash is missing.",
-        "final_store_governance_receipt": "browser-wallet final receipt deploy hash is missing.",
-        "backend_final_store_governance_receipt": "backend-signed final receipt deploy hash is missing.",
-    }
-    for key, message in required_hashes.items():
-        if not HASH64_RE.match(str(live_deploys.get(key) or "")):
-            failures.append(message)
-
-    backend_hash = str(summary.get("backend_signed_final_receipt") or option1.get("deploy_hash") or "")
-    if not HASH64_RE.match(backend_hash):
-        failures.append("Backend-signed final receipt is missing or malformed.")
-    elif live_deploys.get("backend_final_store_governance_receipt") and backend_hash != live_deploys.get(
-        "backend_final_store_governance_receipt"
+    status = quorum.get("verification_status")
+    if status == "unavailable":
+        return []
+    registry_proof = quorum.get("registry_proof")
+    if (
+        status != "verified"
+        or not isinstance(registry_proof, dict)
+        or registry_proof.get("proof_type") != "exact_envelope_v3"
+        or registry_proof.get("temporal_scope") != "current"
+        or not proof_item_is_green(registry_proof)
     ):
-        failures.append("Backend-signed final receipt hash does not match live_deploys.")
-
-    if option1 and option1.get("entry_point") != "store_governance_receipt":
-        failures.append("Backend-signed quorum receipt entry point is not store_governance_receipt.")
-    if option1 and option1_finality.get("success") is not True:
-        failures.append("Backend-signed quorum receipt finality is not successful.")
-    return failures
+        return [
+            "Quorum claim lacks a derived proof-registry exact-envelope v3 observation."
+        ]
+    observed = {
+        check.get("name"): check
+        for check in registry_proof.get("checks") or []
+        if isinstance(check, dict)
+    }
+    pre_quorum = observed.get("pre_quorum_finalize_reverted_with_code_8", {})
+    if (
+        pre_quorum.get("required") is not True
+        or pre_quorum.get("passed") is not True
+    ):
+        return [
+            "Derived proof-registry quorum observation lacks the pre-quorum code-8 check."
+        ]
+    return []
 
 
 def main() -> int:
@@ -441,11 +457,9 @@ def main() -> int:
         print(f"contract_receipts_dictionary: {live_summary.get('contract_receipts_dictionary', {}).get('status')}")
     quorum = packet.get("odra_quorum_exercise") or (packet.get("proof_center") or {}).get("odra_quorum_exercise") or {}
     if quorum:
-        summary = quorum.get("summary") or {}
-        live_deploys = quorum.get("live_deploys") or {}
-        print("quorum_threshold:", summary.get("quorum_threshold"))
-        print("quorum_wallet_final_receipt:", live_deploys.get("final_store_governance_receipt"))
-        print("quorum_backend_final_receipt:", live_deploys.get("backend_final_store_governance_receipt"))
+        registry_proof = quorum.get("registry_proof") or {}
+        print("quorum_verification_status:", quorum.get("verification_status"))
+        print("quorum_registry_proof_id:", registry_proof.get("proof_id"))
     return 0
 
 

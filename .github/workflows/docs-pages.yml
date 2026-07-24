@@ -1,0 +1,68 @@
+name: Docs (GitHub Pages)
+
+# Deploys the curated MkDocs site (docs-site/ via mkdocs.yml) to GitHub Pages.
+# Triggers are deliberately narrow: manual dispatch, or a push to main that
+# touches the docs toolchain. Nothing deploys from feature branches.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - "mkdocs.yml"
+      - "docs/requirements-docs.txt"
+      - "scripts/write_docs_release_identity.py"
+      - ".github/workflows/docs-pages.yml"
+
+# Least privilege: read-only by default; the deploy job alone gets
+# pages/id-token write.
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build docs (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned docs toolchain (hash-checked)
+        run: python -m pip install --require-hashes -r docs/requirements-docs.txt
+
+      - name: Build site (strict — warnings are errors)
+        run: mkdocs build --strict
+
+      - name: Bind deployed docs to this workflow run
+        run: >-
+          python scripts/write_docs_release_identity.py
+          --output site/release-identity.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

@@ -1,0 +1,14 @@
+{
+  "schema_version": "concordia.organizer_rendered_link_fixture.v1",
+  "started_at": "2026-07-24T00:00:00.000Z",
+  "captured_at": "2026-07-24T00:01:00.000Z",
+  "runtime": {
+    "node": "fixture-node-v22.12.0",
+    "playwright": "fixture-playwright-1.58.2",
+    "chromium": "fixture-chromium",
+    "chromium_executable_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "route_overrides": {},
+  "proof_tab_overrides": {},
+  "link_overrides": {}
+}

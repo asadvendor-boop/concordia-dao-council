@@ -23,6 +23,11 @@ from typing import Any
 
 import httpx
 
+from shared.exact_casper_deploy_json import (
+    exact_deploy_body_hash,
+    exact_deploy_rpc_json,
+)
+
 try:  # Optional: production deployments can install opentelemetry-sdk.
     from opentelemetry import trace
 except Exception:  # pragma: no cover - optional dependency
@@ -194,34 +199,6 @@ def _generic_deploy_arguments(argument_specs: dict[str, Any]) -> list[Any]:
     return [DeployArgument(name, args[name]) for name in argument_specs]
 
 
-def _bytesrepr_vector(items: list[bytes]) -> bytes:
-    """Encode a Casper bytesrepr vector of already-encoded items."""
-    return len(items).to_bytes(4, "little") + b"".join(items)
-
-
-def _versioned_package_session_bytes(session: Any) -> bytes:
-    """Return Casper node-compatible bytesrepr for a versioned package call.
-
-    pycspr 1.2 calculates the body hash for versioned package calls with the
-    legacy stored-contract discriminant and raw U32 version encoding. Casper
-    Testnet validates the JSON `StoredVersionedContractByHash` path as the
-    current package-call discriminant plus an optional U32 version. Concordia
-    corrects the body hash before signing, while keeping pycspr's normal JSON
-    shape for broadcast.
-    """
-    from pycspr import serializer
-    from pycspr.types.cl import CLT_Type_U32, CLV_ByteArray, CLV_Option, CLV_String, CLV_U32
-
-    version_value = None if session.version is None else CLV_U32(int(session.version))
-    return (
-        bytes([3])
-        + serializer.to_bytes(CLV_ByteArray(session.hash))
-        + serializer.to_bytes(CLV_Option(version_value, CLT_Type_U32()))
-        + serializer.to_bytes(CLV_String(session.entry_point))
-        + _bytesrepr_vector([serializer.to_bytes(argument) for argument in session.arguments])
-    )
-
-
 def _normalize_versioned_package_deploy_hash(deploy: Any) -> Any:
     """Patch pycspr's body/deploy hash for `StoredVersionedContractByHash`.
 
@@ -229,15 +206,12 @@ def _normalize_versioned_package_deploy_hash(deploy: Any) -> Any:
     `deploy.hash`, so this keeps signatures, header body_hash, and Casper's
     network-side validation aligned.
     """
-    from pycspr import crypto, serializer
     from pycspr.factory.digests import create_digest_of_deploy
     from pycspr.types.node.rpc import DeployOfStoredContractByHashVersioned
 
     if not isinstance(deploy.session, DeployOfStoredContractByHashVersioned):
         return deploy
-    deploy.header.body_hash = crypto.get_hash(
-        serializer.to_bytes(deploy.payment) + _versioned_package_session_bytes(deploy.session)
-    )
+    deploy.header.body_hash = exact_deploy_body_hash(deploy)
     deploy.hash = create_digest_of_deploy(deploy.header)
     return deploy
 
@@ -747,7 +721,7 @@ def build_unsigned_governance_receipt_deploy(
             call_target=call_target,
             contract_version=contract_version,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
     except Exception as exc:
         return {
@@ -807,7 +781,7 @@ def build_unsigned_odra_call_deploy(
             call_target=call_target,
             contract_version=contract_version,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
         preview = _generic_runtime_args_preview(argument_specs)
     except Exception as exc:
@@ -875,7 +849,7 @@ async def submit_odra_call_deploy(
             contract_version=contract_version,
         )
         deploy.approve(private_key)
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_hash = str(deploy_json["hash"])
         preview = _generic_runtime_args_preview(argument_specs)
     except Exception as exc:
@@ -941,6 +915,7 @@ def build_unsigned_casper_transfer_deploy(
     target_public_key: str,
     amount_motes: int,
     correlation_id: int | None = None,
+    chain_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a wallet-ready unsigned native CSPR transfer deploy.
 
@@ -956,10 +931,16 @@ def build_unsigned_casper_transfer_deploy(
     try:
         payer = _public_key_from_account_hex(signer_public_key)
         target = _public_key_from_account_hex(target_public_key)
-        chain_name = os.getenv("CASPER_CHAIN_NAME", "casper-test")
+        resolved_chain_name = (
+            os.getenv("CASPER_CHAIN_NAME", "casper-test")
+            if chain_name is None
+            else chain_name
+        )
+        if not isinstance(resolved_chain_name, str) or not resolved_chain_name:
+            raise ValueError("chain_name must be a non-empty string")
         payment_amount = int(os.getenv("X402_TRANSFER_PAYMENT_AMOUNT", "100000000"))
         ttl = os.getenv("CASPER_DEPLOY_TTL", "30minutes")
-        params = create_deploy_parameters(payer, chain_name, ttl=ttl)
+        params = create_deploy_parameters(payer, resolved_chain_name, ttl=ttl)
         deploy = create_transfer(
             params,
             amount=amount_motes,
@@ -967,7 +948,7 @@ def build_unsigned_casper_transfer_deploy(
             correlation_id=correlation_id,
             payment=payment_amount,
         )
-        deploy_json = serializer.to_json(deploy)
+        deploy_json = exact_deploy_rpc_json(deploy)
         deploy_json["approvals"] = []
     except Exception as exc:
         return {
@@ -979,7 +960,7 @@ def build_unsigned_casper_transfer_deploy(
         "status": "ready",
         "driver": "pycspr",
         "payload_kind": "deploy",
-        "chain_name": chain_name,
+        "chain_name": resolved_chain_name,
         "payment_amount": payment_amount,
         "transfer_amount_motes": amount_motes,
         "correlation_id": correlation_id,
@@ -1101,7 +1082,7 @@ async def submit_governance_receipt(request: CasperReceiptRequest) -> dict[str, 
                 contract_version=contract_version,
             )
             deploy.approve(private_key)
-            deploy_json = serializer.to_json(deploy)
+            deploy_json = exact_deploy_rpc_json(deploy)
     except Exception as exc:
         return {
             "status": "failed",

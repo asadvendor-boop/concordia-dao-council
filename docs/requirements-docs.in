@@ -1,0 +1,7 @@
+# Documentation-site toolchain (MkDocs + Material theme).
+# Direct pins only; the fully hash-pinned lockfile consumed by CI is
+# docs/requirements-docs.txt, regenerated with:
+#   uv pip compile docs/requirements-docs.in -o docs/requirements-docs.txt \
+#     --python-version 3.12 --generate-hashes
+mkdocs==1.6.1
+mkdocs-material==9.7.7

@@ -27,14 +27,14 @@ Contract lineage note: the v1 GovernanceReceipt receipt anchor, deployed Jun 29,
 
 Reviewer links:
 
-- Dashboard: <https://concordia.47.84.232.193.sslip.io/dashboard>
-- Proof Center: <https://concordia.47.84.232.193.sslip.io/dashboard/proof>
-- Judge Walkthrough: <https://concordia.47.84.232.193.sslip.io/dashboard/judge>
-- Evidence chain: <https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C>
-- Proof pack: <https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C>
-- Technical jury note: <https://concordia.47.84.232.193.sslip.io/technical-jury-note>
-- HTML certificate: <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C>
-- PDF certificate: <https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf>
+- Dashboard: <https://concordiadao.xyz/dashboard>
+- Proof Center: <https://concordiadao.xyz/dashboard/proof>
+- Judge Walkthrough: <https://concordiadao.xyz/dashboard/judge>
+- Evidence chain: <https://concordiadao.xyz/evidence/DAO-PROP-6CB25C>
+- Proof pack: <https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C>
+- Technical jury note: <https://concordiadao.xyz/technical-jury-note>
+- HTML certificate: <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C>
+- PDF certificate: <https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf>
 - Launch roadmap: [docs/LAUNCH_ROADMAP.md](docs/LAUNCH_ROADMAP.md)
 - Social launch kit: [docs/SOCIAL_LAUNCH.md](docs/SOCIAL_LAUNCH.md)
 - Demo video: <https://www.youtube.com/watch?v=GU01V83Jrko>
@@ -46,7 +46,7 @@ Reviewer links:
 |---|---|
 | Concordia DAO Council framing and Casper-specific council personas | Implemented |
 | DAO Constitution with 30% request capped to 8% | Implemented |
-| Verity dissent receipt and Wells governance archive | Implemented |
+| Verity dissent receipt and deterministic governance archive (presented by Wells) | Implemented |
 | Native Python Casper deploy construction with typed CLValues | Implemented |
 | Odra `GovernanceReceipt` canonical receipt proof | Implemented |
 | Supplemental Odra quorum proof with browser-wallet approval | Implemented |
@@ -87,7 +87,7 @@ Concordia keeps deliberation off-chain for speed, explainability, and traceabili
 | Casper Node API via CSPR.cloud/direct node | **Live read available.** MCP bridge includes `casper_node_status`, a real JSON-RPC `info_get_status` read, and `casper_public_status`, a public HTTPS GET probe. | `shared/cspr_cloud.py`, `shared/casper_mcp.py`, `integrations/mcp/` |
 | CSPR.cloud REST / Streaming | **Credential-gated optional reads.** Real mode requires `CSPR_CLOUD_ACCESS_TOKEN`; otherwise the adapter reports `not_configured` instead of pretending. | `shared/cspr_cloud.py`, `integrations/cspr-cloud/` |
 | Casper MCP / CSPR.trade MCP | **Optional external MCP bridge.** Live external calls require `CASPER_MCP_URL` or `CSPR_TRADE_MCP_URL`; local rehearsal mode is labelled mock. | `shared/casper_mcp.py`, `integrations/mcp/` |
-| x402 payment rail | **Implemented with a separate Concordia Risk Oracle provider.** `X402_SETTLEMENT_MODE=real` verifies Casper transfer hashes with bounded indexer-lag retry; the hosted proof configures `X402_PROVIDER_URL` so Concordia redeems paid reports from `x402-provider.47.84.232.193.sslip.io` instead of short-circuiting to itself. | `shared/x402_payments.py`, `x402_provider/` |
+| x402 payment rail | **Implemented with a separate SafePay v2 Risk Oracle provider.** `X402_SETTLEMENT_MODE=real` verifies Casper transfer hashes with bounded indexer-lag retry; the hosted proof configures `X402_PROVIDER_URL` for `https://safepay.concordiadao.xyz` instead of short-circuiting to itself. This native-CSPR provider is distinct from the official WCSPR facilitator surface at `https://x402.concordiadao.xyz`. | `shared/x402_payments.py`, `x402_provider/` |
 | IPFS evidence pinning | **Implemented with Concordia-hosted Kubo and optional Pinata.** The hosted deployment can add the governance archive to an internal Kubo node and expose the CID through `/api/ipfs/{cid}`; Pinata remains an optional external pinner. Web3.Storage/NFT.Storage adapters are legacy/experimental unless their current auth flows are configured. | `shared/ipfs_client.py`, `/ipfs/evidence/{proposal_id}`, `/api/ipfs/{cid}` |
 | Odra | **Live Odra receipt proof, live quorum exercise, and supplemental topology genesis.** The canonical judging proof uses the deployed v1 Odra `GovernanceReceipt.store_governance_receipt` path at `e926...d852`. A supplemental quorum exercise uses the Jun 30 v2 quorum-enabled package and is live-complete with configure/propose/pre-quorum failure/server approval/browser-wallet approval/final receipt hashes recorded in `artifacts/live/odra-quorum-exercise-plan.json`. `CouncilRegistry` was exercised through a representative `register_agent` call, while `TreasuryPolicy` and `CardIndexLedger` were independently called through `validate_allocation` and `seal_card_root`; hashes are recorded in `artifacts/live/odra-topology-genesis-proof.json`. This proves the auxiliary modules execute; it does not replace the canonical receipt or claim a fully productized four-contract DAO suite. | `contracts/odra-governance-receipt/`, `artifacts/live/odra-module-exercise-plan.json`, `artifacts/live/odra-quorum-exercise-plan.json`, `artifacts/live/odra-topology-genesis-proof.json` |
 | Casper Wallet custody path | **Browser-wallet signing verified.** The live proof uses the configured Testnet signer for the canonical receipt, and the browser-wallet custody path produced receipt `56b6...12bf`, quorum approval `7ee7...75da`, and final quorum receipt `9d63...2928`. The compatibility-named `/cspr-click/unsigned-receipt/{proposal_id}`, `/cspr-click/quorum-approval/{proposal_id}`, and `/cspr-click/quorum-receipt/{proposal_id}` routes package wallet-ready typed deploys; the dashboard signs with the active Casper Wallet account directly. | `integrations/cspr-click/`, dashboard Proof Center |
@@ -107,8 +107,8 @@ Technical jury note: Concordia freezes the canonical proof for reproducibility. 
 | **Mercer** | Treasury Intelligence Agent | Reviews treasury exposure, liquidity context, RWA impact, and Casper ecosystem signals. |
 | **Verity** | Risk & Legal Agent | Challenges unsafe proposals and flags treasury, compliance, or policy violations. |
 | **Alden** | Protocol Strategy Agent | Converts the deliberation into an exact governance execution envelope. |
-| **Locke** | Casper Execution Agent | Executes only the approved envelope and anchors the receipt to Casper Testnet. |
-| **Wells** | Governance Archivist | Summarizes the session and records the sealed governance evidence trail. |
+| **Locke** | Casper Execution Agent | Authorization-bound, model-involved execution role (not a deliberative agent): executes only the approved envelope and anchors the receipt to Casper Testnet. |
+| **Wells** | Governance Archivist | Non-reasoning archival/presentation persona: presents the sealed evidence trail; the deterministic archive is produced by Locke/Core. |
 | **Concordia Core** | Deterministic Evidence Core | Seals cards, owns state transitions, validates nonces, and enforces exact-envelope execution. |
 
 ## Evidence model
@@ -139,8 +139,9 @@ Changing any historical card breaks the evidence chain. The `/evidence/{proposal
 
 ## Local quick start
 
-The production container uses Python 3.12. For a fresh local install, Python
-3.12 is the recommended runtime for the full backend dependency graph. The
+The production and release-test runtime is pinned to Python 3.12.11. For a
+fresh local install, use the frozen `uv` environment so local, CI, and release
+gates execute the same dependency and interpreter contract. The
 standalone proof verifier is dependency-free and can be run with plain
 `python3 scripts/verify_concordia_receipt.py ...` from the source archive.
 When network access is available, add `--live-chain` to query Casper
@@ -149,7 +150,7 @@ typed runtime arguments against the proof pack.
 
 ```bash
 cp .env.example .env
-uv sync
+uv sync --frozen --python 3.12.11
 make gateway
 ```
 
@@ -162,13 +163,13 @@ make simulator
 Start the agents in separate terminals:
 
 ```bash
-uv run python -m agents.rowan
-uv run python -m agents.mercer
-uv run python -m agents.verity
-uv run python -m agents.alden
-uv run python -m agents.locke
-uv run python -m agents.recorder.heartbeat
-uv run python -m agents.wells  # optional governance summary
+uv run --frozen --isolated --python 3.12.11 python -m agents.rowan
+uv run --frozen --isolated --python 3.12.11 python -m agents.mercer
+uv run --frozen --isolated --python 3.12.11 python -m agents.verity
+uv run --frozen --isolated --python 3.12.11 python -m agents.alden
+uv run --frozen --isolated --python 3.12.11 python -m agents.locke
+uv run --frozen --isolated --python 3.12.11 python -m agents.recorder.heartbeat
+uv run --frozen --isolated --python 3.12.11 python -m agents.wells
 ```
 
 The Concordia-native module names (`agents.rowan`, `agents.mercer`,
@@ -243,7 +244,7 @@ See `docs/SUBMISSION_ASSETS_STATUS.md` for the current split between verified te
 5. Alden revises the plan to an 8% capped allocation with guardrails.
 6. A multisig approver approves the exact execution envelope.
 7. Locke anchors the approved governance receipt and dissent hash to Casper Testnet.
-8. Wells produces the final governance archive.
+8. The deterministic core seals the final governance archive; Wells presents it for review.
 
 ## LLM model policy
 
@@ -254,7 +255,7 @@ CONCORDIA_TEST_MODE=1
 CONCORDIA_DISABLE_LLM_REASONING=1
 ```
 
-For the recorded and hosted walkthrough, configure a live OpenAI-compatible model endpoint through `LLM_BASE_URL`, `LLM_API_KEY`, and the per-agent model variables. The hosted walkthrough uses the Qwen assignment documented in [docs/LLM_PROVIDER.md](docs/LLM_PROVIDER.md). In production mode the Gateway refuses to trigger the workflow when live LLM readiness fails.
+For the recorded and hosted walkthrough, configure a live OpenAI-compatible model endpoint through `LLM_BASE_URL`, `LLM_API_KEY`, and the per-agent model variables. The hosted walkthrough uses the provider-agnostic, role-tiered model assignment documented in [docs/LLM_PROVIDER.md](docs/LLM_PROVIDER.md). In production mode the Gateway refuses to trigger the workflow when live LLM readiness fails.
 
 ## Safety boundaries
 

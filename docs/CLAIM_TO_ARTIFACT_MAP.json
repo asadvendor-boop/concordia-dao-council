@@ -1,0 +1,78 @@
+{
+  "schema_version": "concordia.claim_to_artifact_map.v1",
+  "audited_documents": [
+    {
+      "path": "README.md",
+      "sha256": "98709214cc49ce5e837e83f8cfcc0fd154e14dcdc3a3ef9839fbfa1d3614fc89"
+    },
+    {
+      "path": "docs/POLICY_TEMPLATES.md",
+      "sha256": "e84c8268f23a55286140ffae5d5b62b77328b686fa3066221e8753cf2738b07e"
+    },
+    {
+      "path": "docs/TECHNICAL_JURY_NOTE.md",
+      "sha256": "a8115b889061eec37c15dd27b567c7b6f85d3d91d4a744d2d75770ff1e85860f"
+    },
+    {
+      "path": "docs/DEMO_SCRIPT.md",
+      "sha256": "37757208227bccc537b2b3c53493b0476e65a34fb3415886e5ece70a7a3432ae"
+    },
+    {
+      "path": "docs/DORAHACKS_SUBMISSION_TEXT.md",
+      "sha256": "86e9ce1aa2fa93e0e8a9b6248b2549353c8f8827fd569872afeaf42176050cf8"
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "constitutional-execution-firewall",
+      "claim_text": "The constitutional execution firewall for AI-run DAOs on Casper.",
+      "sources": [
+        {
+          "path": "docs/DORAHACKS_SUBMISSION_TEXT.md",
+          "exact_text": "The constitutional execution firewall for AI-run DAOs on Casper."
+        }
+      ],
+      "artifacts": [
+        {
+          "proof_id": "PENDING_PROOF:G11-lead",
+          "path": "PENDING_PROOF",
+          "sha256": "PENDING_PROOF"
+        }
+      ]
+    },
+    {
+      "claim_id": "old-receipt-never-proves-v3",
+      "claim_text": "an old receipt never proves a v3 property",
+      "sources": [
+        {
+          "path": "docs/DORAHACKS_SUBMISSION_TEXT.md",
+          "exact_text": "an old receipt never proves a v3 property"
+        }
+      ],
+      "artifacts": [
+        {
+          "proof_id": "PENDING_PROOF:G7a-v3",
+          "path": "PENDING_PROOF",
+          "sha256": "PENDING_PROOF"
+        }
+      ]
+    },
+    {
+      "claim_id": "three-claims-never-conflated",
+      "claim_text": "three separate claims, never conflated",
+      "sources": [
+        {
+          "path": "docs/DORAHACKS_SUBMISSION_TEXT.md",
+          "exact_text": "three separate claims, never conflated"
+        }
+      ],
+      "artifacts": [
+        {
+          "proof_id": "PENDING_PROOF:G6-G7a-G7b-payments",
+          "path": "PENDING_PROOF",
+          "sha256": "PENDING_PROOF"
+        }
+      ]
+    }
+  ]
+}

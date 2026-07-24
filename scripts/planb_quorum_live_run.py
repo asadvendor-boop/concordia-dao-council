@@ -139,7 +139,7 @@ def prepare(
             "envelope_hash": _envelope_hash(proposal_id),
             "typed_runtime_args": receipt_args,
             "wallet_approval_url": (
-                f"https://concordia.47.84.232.193.sslip.io/dashboard/proof"
+                f"https://concordiadao.xyz/dashboard/proof"
                 f"?proposal={proposal_id}&quorum_demo=1"
             ),
             "live_deploys": packet.get("live_deploys") or {},

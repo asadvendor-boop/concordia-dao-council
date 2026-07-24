@@ -1,0 +1,170 @@
+/**
+ * Golden vectors for the §6 hash preimages.
+ *
+ * Every expected constant below was computed independently with Python:
+ *   hashlib.blake2b(preimage, digest_size=32).hexdigest()
+ * so the TypeScript implementation (blakejs) is cross-checked against a
+ * second RFC 7693 implementation, not against itself.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  SEPARATORS,
+  blake2b256,
+  lp,
+  lpAscii,
+  paymentRequirementsHash,
+  reportHash,
+  resourceUrlHash,
+  signedPaymentPayloadHash,
+  u256be,
+  u32be,
+  u64be,
+} from "../src/hashes.js";
+import {
+  AMOUNT,
+  FROZEN,
+  PAYEE,
+  REPORT_BYTES,
+  RESOURCE_DESCRIPTION,
+  RESOURCE_MIME,
+  RESOURCE_URL,
+} from "./helpers.js";
+
+describe("domain separators (§2 authoritative table)", () => {
+  it("resource URL separator is the exact 26 frozen bytes", () => {
+    expect(SEPARATORS.resourceUrl.length).toBe(26);
+    expect(SEPARATORS.resourceUrl.toString("hex")).toBe(
+      "434f4e434f524449415f5245534f555243455f55524c5f563100",
+    );
+  });
+  it("payment requirements separator is the exact 34 frozen bytes", () => {
+    expect(SEPARATORS.paymentRequirements.length).toBe(34);
+    expect(SEPARATORS.paymentRequirements.toString("hex")).toBe(
+      "434f4e434f524449415f5041594d454e545f524551554952454d454e54535f563100",
+    );
+  });
+  it("signed payment payload separator is the exact 36 frozen bytes", () => {
+    expect(SEPARATORS.signedPaymentPayload.length).toBe(36);
+    expect(SEPARATORS.signedPaymentPayload.toString("hex")).toBe(
+      "434f4e434f524449415f5349474e45445f5041594d454e545f5041594c4f41445f563100",
+    );
+  });
+  it("x402 report separator is the exact 25 frozen bytes", () => {
+    expect(SEPARATORS.x402Report.length).toBe(25);
+    expect(SEPARATORS.x402Report.toString("hex")).toBe(
+      "434f4e434f524449415f583430325f5245504f52545f563100",
+    );
+  });
+  it("separators end with a real 0x00 byte, not the printable pair 5c30", () => {
+    for (const sep of Object.values(SEPARATORS)) {
+      expect(sep[sep.length - 1]).toBe(0x00);
+      expect(sep.subarray(sep.length - 2).toString("hex")).not.toBe("5c30");
+    }
+  });
+});
+
+describe("BLAKE2b-256 is digest_size=32, not a truncation", () => {
+  it("matches Python hashlib.blake2b(b'abc', digest_size=32)", () => {
+    expect(blake2b256(Buffer.from("abc")).toString("hex")).toBe(
+      "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+    );
+  });
+});
+
+describe("scalar encodings", () => {
+  it("u256be is exactly 32 big-endian bytes with leading zeroes", () => {
+    expect(u256be(0n).toString("hex")).toBe("00".repeat(32));
+    expect(u256be(1000000000n).length).toBe(32);
+    expect(u256be((1n << 256n) - 1n).toString("hex")).toBe("ff".repeat(32));
+    expect(() => u256be(1n << 256n)).toThrow();
+    expect(() => u256be(-1n)).toThrow();
+  });
+  it("u64be/u32be reject out-of-range values", () => {
+    expect(u64be((1n << 64n) - 1n).toString("hex")).toBe("ffffffffffffffff");
+    expect(() => u64be(1n << 64n)).toThrow();
+    expect(u32be(0).toString("hex")).toBe("00000000");
+    expect(() => u32be(-1)).toThrow();
+  });
+  it("lp/lpAscii prefix a u32_be byte length and reject non-ASCII", () => {
+    expect(lp(Buffer.from("ab")).toString("hex")).toBe("000000026162");
+    expect(lpAscii("A").toString("hex")).toBe("0000000141");
+    expect(() => lpAscii("é")).toThrow();
+    expect(() => lpAscii("a\u0000b")).toThrow();
+  });
+});
+
+describe("§6 golden vectors (Python-computed constants)", () => {
+  it("resource_url_hash of the finals resource URL", () => {
+    expect(resourceUrlHash(RESOURCE_URL).toString("hex")).toBe(
+      "465c2360327a26919e6d39820411de72029648fba4643455e5ab3f96ae9df85a",
+    );
+  });
+
+  it("report_hash of the exact report bytes", () => {
+    expect(reportHash(REPORT_BYTES).toString("hex")).toBe(
+      "b5eab8066c7e4240b86ca04dfbe8ef756c02def06107e1ca28fd15bf7a4c9a21",
+    );
+  });
+
+  const requirementsHash = paymentRequirementsHash({
+    scheme: "exact",
+    caip2Network: FROZEN.network,
+    wcsprPackage: Buffer.from(FROZEN.packageHash, "hex"),
+    value: BigInt(AMOUNT),
+    payeeAccountHash: Buffer.from(PAYEE.slice(2), "hex"),
+    maxTimeoutSeconds: 600,
+    tokenName: FROZEN.tokenName,
+    eip712DomainVersion: FROZEN.tokenDomainVersion,
+    tokenDecimals: FROZEN.tokenDecimals,
+    tokenSymbol: FROZEN.tokenSymbol,
+  });
+
+  it("payment_requirements_hash full hand-computed vector", () => {
+    expect(requirementsHash.toString("hex")).toBe(
+      "abee5695a72bb31bc34898575875d8127559925a59c58e57cd45375d9e72e26d",
+    );
+  });
+
+  it("signed_payment_payload_hash full hand-computed vector", () => {
+    const hash = signedPaymentPayloadHash({
+      x402Version: 2,
+      resourceUrl: RESOURCE_URL,
+      resourceDescription: RESOURCE_DESCRIPTION,
+      resourceMimeType: RESOURCE_MIME,
+      paymentRequirementsHash: requirementsHash,
+      signature: Buffer.concat([Buffer.from([0x01]), Buffer.alloc(64, 0x11)]),
+      canonicalPublicKey: Buffer.concat([Buffer.from([0x01]), Buffer.alloc(32, 0x22)]),
+      payerAccountHash: Buffer.alloc(32, 0x33),
+      payeeAccountHash: Buffer.from(PAYEE.slice(2), "hex"),
+      value: BigInt(AMOUNT),
+      validAfter: 1753142400n,
+      validBefore: 1753146000n,
+      eip712AuthNonce: Buffer.alloc(32, 0x55),
+    });
+    expect(hash.toString("hex")).toBe(
+      "b5fb79bac080c38e6983c63f40f6c82083949b06799ed14eaf8d434c757efd21",
+    );
+  });
+
+  it("rejects a signature that is not exactly 65 bytes", () => {
+    expect(() =>
+      signedPaymentPayloadHash({
+        x402Version: 2,
+        resourceUrl: RESOURCE_URL,
+        resourceDescription: RESOURCE_DESCRIPTION,
+        resourceMimeType: RESOURCE_MIME,
+        paymentRequirementsHash: requirementsHash,
+        signature: Buffer.alloc(64, 0x11),
+        canonicalPublicKey: Buffer.concat([Buffer.from([0x01]), Buffer.alloc(32, 0x22)]),
+        payerAccountHash: Buffer.alloc(32, 0x33),
+        payeeAccountHash: Buffer.from(PAYEE.slice(2), "hex"),
+        value: 1n,
+        validAfter: 0n,
+        validBefore: 1n,
+        eip712AuthNonce: Buffer.alloc(32, 0x55),
+      }),
+    ).toThrow();
+  });
+});

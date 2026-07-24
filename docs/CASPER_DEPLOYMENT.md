@@ -35,7 +35,7 @@ On the shared ECS host, after the key is funded:
 
 ```bash
 cd /opt/apps/concordia/src
-uv run python scripts/finalize_casper_shared_host.py
+uv run --frozen --isolated --python 3.12.11 python scripts/finalize_casper_shared_host.py
 ```
 
 The setup script uses Python-native Casper deploy assembly:
@@ -115,7 +115,7 @@ The transaction hash must be visible in the demo and copied into `docs/SUBMISSIO
 Current hosted review deployment:
 
 ```text
-https://concordia.47.84.232.193.sslip.io/dashboard
+https://concordiadao.xyz/dashboard
 ```
 
 Current state until funding/deployment is completed:
