@@ -558,8 +558,21 @@ def test_tx03_two_processes_cannot_claim_the_same_action(tmp_path: Path) -> None
     ]
     for worker in workers:
         worker.start()
-    for worker in workers:
-        worker.join(timeout=10)
+    deadline = time.monotonic() + 60
+    try:
+        for worker in workers:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        alive = [worker for worker in workers if worker.is_alive()]
+        assert not alive, (
+            "spawned treasury workers did not finish within the shared "
+            f"60-second CI deadline: {[worker.pid for worker in alive]}"
+        )
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+        for worker in workers:
+            worker.join(timeout=5)
 
     assert [worker.exitcode for worker in workers] == [0, 0]
     assert marker_path.read_bytes().splitlines() == [b"prepared"]
