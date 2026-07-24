@@ -1,5 +1,19 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+ARG CONCORDIA_IMAGE_REVISION
+ARG CONCORDIA_IMAGE_DEPLOYMENT
+ARG CONCORDIA_IMAGE_SOURCE
+
+COPY scripts/validate_oci_image_identity.sh /usr/local/bin/validate-oci-image-identity
+RUN /bin/sh /usr/local/bin/validate-oci-image-identity \
+    "${CONCORDIA_IMAGE_REVISION}" \
+    "${CONCORDIA_IMAGE_DEPLOYMENT}" \
+    "${CONCORDIA_IMAGE_SOURCE}"
+
+LABEL org.opencontainers.image.revision="${CONCORDIA_IMAGE_REVISION}" \
+      org.opencontainers.image.source="${CONCORDIA_IMAGE_SOURCE}" \
+      io.concordia.deployment-commit="${CONCORDIA_IMAGE_DEPLOYMENT}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \

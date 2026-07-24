@@ -239,10 +239,8 @@ def test_official_x402_service_is_frozen_internal_and_persistent() -> None:
     service = document["services"]["x402-official"]
     environment = service["environment"]
 
-    assert service["build"] == {
-        "context": "../..",
-        "dockerfile": "services/x402-official/Dockerfile",
-    }
+    assert service["build"]["context"] == "../.."
+    assert service["build"]["dockerfile"] == "services/x402-official/Dockerfile"
     assert service["restart"] == "unless-stopped"
     assert "ports" not in service
     assert environment == {

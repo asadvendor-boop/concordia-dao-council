@@ -90,6 +90,7 @@ test -f "${ENV_FILE}"
 export CONCORDIA_RELEASE_ARTIFACTS_HOST_DIR="${RELEASE_SOURCE}/artifacts"
 export CONCORDIA_PROOF_REGISTRY_HOST_DIR="${RELEASE_SOURCE}/artifacts/live/proof-registry"
 export X402_OFFICIAL_CONFIG_DIR="${RELEASE_ROOT}/config/x402-official"
+export CONCORDIA_DEPLOYMENT_COMMIT="${RELEASE_COMMIT}"
 ```
 
 Each bind uses `read_only: true` and `create_host_path: false`; a missing source
@@ -293,6 +294,30 @@ CADDY_CONTAINER=<shared-caddy-container> \
 
 Do not adapt or reload the shared Caddy configuration unless this preflight
 passes.
+
+## Validate image identity
+
+Every project-owned image must carry the same reviewed deployment commit in
+`org.opencontainers.image.revision` and
+`io.concordia.deployment-commit`; `org.opencontainers.image.source` is fixed to
+the public Concordia repository. Validate these inputs before accepting the
+rendered Compose configuration; the Dockerfiles repeat the same check before
+installing dependencies or compiling application code.
+
+```bash
+"${RELEASE_SOURCE}/scripts/validate_oci_image_identity.sh" \
+  "${CONCORDIA_DEPLOYMENT_COMMIT}" \
+  "${CONCORDIA_DEPLOYMENT_COMMIT}" \
+  "https://github.com/asadvendor-boop/concordia-dao-council"
+
+docker compose --project-name concordia \
+  --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" config --quiet
+```
+
+Missing, uppercase, non-40-character, divergent, or wrong-source identities
+stop here. The immutable third-party index digests and their Linux platform
+manifests are recorded in
+[`OCI_IMAGE_PINS.md`](./OCI_IMAGE_PINS.md).
 
 ## Start
 

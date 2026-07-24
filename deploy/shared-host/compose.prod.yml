@@ -105,6 +105,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
     image: concordia-dao-council:local
     restart: unless-stopped
     environment:
@@ -217,6 +221,10 @@ services:
     build:
       context: ../..
       dockerfile: services/x402-official/Dockerfile
+      args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
     image: concordia-x402-official:local
     restart: unless-stopped
     environment:
@@ -285,6 +293,9 @@ services:
       context: ../..
       dockerfile: dashboard/Dockerfile
       args:
+        CONCORDIA_IMAGE_REVISION: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_DEPLOYMENT: "${CONCORDIA_DEPLOYMENT_COMMIT:?Set exact 40-hex CONCORDIA_DEPLOYMENT_COMMIT}"
+        CONCORDIA_IMAGE_SOURCE: https://github.com/asadvendor-boop/concordia-dao-council
         NEXT_PUBLIC_GATEWAY_URL: ""
         NEXT_PUBLIC_CONCORDIA_MODE: reviewer
         NEXT_PUBLIC_CSPR_CLICK_APP_ID: ${NEXT_PUBLIC_CSPR_CLICK_APP_ID:?required public CSPR.click AppID}
@@ -443,7 +454,7 @@ services:
     logging: *bounded-logging
 
   ipfs:
-    image: ipfs/kubo:v0.32.1
+    image: ipfs/kubo@sha256:7cc0e0de8f845d6c9fa1dce414c069974c34ed3cd3742e0d4f5bccda4adc376d
     container_name: concordia-ipfs
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
@@ -463,7 +474,7 @@ services:
     logging: *bounded-logging
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.114.0
+    image: otel/opentelemetry-collector-contrib@sha256:37fa87091cfaaec7234a27e4e395a40c31c2bfaea97a349a4afef6d9e9681197
     container_name: concordia-otel-collector
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yml"]
@@ -483,7 +494,7 @@ services:
     logging: *bounded-logging
 
   jaeger:
-    image: jaegertracing/all-in-one:1.62.0
+    image: jaegertracing/all-in-one@sha256:836e9b69c88afbedf7683ea7162e179de63b1f981662e83f5ebb68badadc710f
     container_name: concordia-jaeger
     restart: unless-stopped
     environment:
