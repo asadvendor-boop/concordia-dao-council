@@ -6116,7 +6116,7 @@ def test_caddy_live_probe_uses_human_password_without_persisting_it(
     )
     assert password.decode() not in serialized
     assert bcrypt_hash.decode() not in serialized
-    assert len(calls) == 8
+    assert len(calls) == len(unauthenticated) + len(authenticated)
 
 
 def test_caddy_live_probe_rejects_wrong_human_password_before_network(
