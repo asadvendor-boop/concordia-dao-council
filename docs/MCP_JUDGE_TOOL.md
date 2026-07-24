@@ -26,8 +26,8 @@ labelled mock/rehearsal responses instead of pretending to be live.
 ## Run Locally
 
 ```bash
-uv sync
-uv run python integrations/mcp/concordia_casper_mcp.py
+uv sync --frozen --python 3.12.11
+uv run --frozen --isolated --python 3.12.11 python integrations/mcp/concordia_casper_mcp.py
 ```
 
 If `fastmcp` is not installed in your environment, install it in the local

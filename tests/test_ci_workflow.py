@@ -6,6 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+MAKEFILE = ROOT / "Makefile"
+CONTRIBUTING = ROOT / ".github" / "CONTRIBUTING.md"
+PULL_REQUEST_TEMPLATE = ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md"
 
 
 def test_ci_checks_out_complete_history_with_immutable_actions() -> None:
@@ -51,7 +54,23 @@ def test_ci_does_not_shadow_pinned_runtime_entrypoints_with_detached_copies() ->
     assert '"$HOME/.local/bin/npm"' not in source
     assert "readlink -f" not in source
     assert re.search(
-        r"uv run --frozen --isolated --python python3\.12\s+"
+        r"uv run --frozen --isolated --python 3\.12\.11\s+"
         r"python -m pytest -q",
         source,
     )
+
+
+def test_local_release_entrypoints_pin_the_same_frozen_python_runtime() -> None:
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    contributing = CONTRIBUTING.read_text(encoding="utf-8")
+    pull_request = PULL_REQUEST_TEMPLATE.read_text(encoding="utf-8")
+    command = "uv run --frozen --isolated --python 3.12.11"
+
+    assert "UV ?= uv" in makefile
+    assert "UV_RUN ?= $(UV) run --frozen --isolated --python 3.12.11" in makefile
+    assert "PYTHON ?= $(UV_RUN) python" in makefile
+    assert "runtime-preflight:" in makefile
+    assert 'sys.version_info[:3] == (3, 12, 11)' in makefile
+    assert "test: runtime-preflight smoke" in makefile
+    assert f"{command} python -m pytest -q" in contributing
+    assert f"`{command} python -m pytest -q`" in pull_request

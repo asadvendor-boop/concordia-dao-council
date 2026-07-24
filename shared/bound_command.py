@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -169,6 +170,23 @@ class _StagedTree:
 
 
 @dataclass(frozen=True)
+class _BoundLauncherRuntime:
+    directory: tempfile.TemporaryDirectory[str]
+    source: _TreeBinding
+    staged: _StagedTree
+    executable: Path
+    critical_paths: tuple[str, ...]
+    critical_directories: tuple[str, ...]
+    critical_source_states: Mapping[str, tuple[int, ...]]
+    critical_staged_states: Mapping[str, tuple[int, ...]]
+    identity: Mapping[str, object]
+
+
+_BOUND_LAUNCH_RUNTIME_LOCK = threading.Lock()
+_BOUND_LAUNCH_RUNTIME: _BoundLauncherRuntime | None = None
+
+
+@dataclass(frozen=True)
 class _DataBinding:
     path: Path
     raw: bytes
@@ -194,6 +212,155 @@ class _StagedPrivateOutput:
 
 _BOUND_PROCESS_NONCE_ENV = "CONCORDIA_INTERNAL_BOUND_PROCESS_NONCE"
 _MAX_TRACKED_DESCENDANTS = 4096
+_BOUND_LAUNCH_FRAME_PREFIX = b"CONCORDIA_BOUND_LAUNCH_V1\0"
+_BOUND_LAUNCH_READY = b"\x01"
+_MAX_BOUND_LAUNCH_FRAME = 1024 * 1024
+_BOUND_LAUNCHER_STARTUP_ENV = MappingProxyType(
+    {
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+)
+try:
+    _BOUND_LAUNCH_RUNTIME_EXECUTABLE = Path(sys.executable).resolve(strict=True)
+except OSError as exc:  # pragma: no cover - the runner cannot work without itself
+    raise RuntimeError("bound launch runtime is unavailable") from exc
+_BOUND_LAUNCHER = (
+    "import _signal,os,sys\n"
+    "gate_fd=int(sys.argv[1]);status_fd=int(sys.argv[2])\n"
+    "def fail():\n"
+    " try: os.write(status_fd,b'\\x02')\n"
+    " except OSError: pass\n"
+    " os._exit(126)\n"
+    "try:\n"
+    " if os.write(status_fd,b'\\x01')!=1: fail()\n"
+    " frame=bytearray()\n"
+    " while True:\n"
+    "  chunk=os.read(gate_fd,65536)\n"
+    "  if not chunk: break\n"
+    "  frame.extend(chunk)\n"
+    "  if len(frame)>1048576: raise ValueError()\n"
+    " os.close(gate_fd)\n"
+    " prefix=b'CONCORDIA_BOUND_LAUNCH_V1\\0'\n"
+    " if not frame.startswith(prefix) or not frame.endswith(b'\\0'):\n"
+    "  raise ValueError()\n"
+    " payload=bytes(frame[len(prefix):-1])\n"
+    " values=[] if not payload else payload.split(b'\\0')\n"
+    " target_env={}\n"
+    " for value in values:\n"
+    "  key,separator,item=value.partition(b'=')\n"
+    "  if not separator or not key or key in target_env:\n"
+    "   raise ValueError()\n"
+    "  target_env[key]=item\n"
+    " for name in ('SIGPIPE','SIGXFZ','SIGXFSZ'):\n"
+    "  if hasattr(_signal,name):\n"
+    "   _signal.signal(getattr(_signal,name),_signal.SIG_DFL)\n"
+    " os.set_inheritable(status_fd,False)\n"
+    " os.execve(os.fsencode(sys.argv[3]),"
+    "[os.fsencode(value) for value in sys.argv[4:]],target_env)\n"
+    "except BaseException:\n"
+    " fail()\n"
+)
+
+
+@dataclass
+class _BoundProcessLifecycle:
+    tracker_armed: bool = False
+    release_may_have_occurred: bool = False
+    target_released: bool = False
+    target_exec_crossed: bool = False
+    leader_exited: bool = False
+
+
+def _bound_launch_frame(environment: Mapping[str, str]) -> bytes:
+    encoded: list[tuple[bytes, bytes]] = []
+    try:
+        for key, value in environment.items():
+            if type(key) is not str or type(value) is not str:
+                raise BoundCommandError("bound command environment is malformed")
+            raw_key = os.fsencode(key)
+            raw_value = os.fsencode(value)
+            if not raw_key or b"\0" in raw_key or b"=" in raw_key or b"\0" in raw_value:
+                raise BoundCommandError("bound command environment is malformed")
+            encoded.append((raw_key, raw_value))
+    except (UnicodeError, ValueError) as exc:
+        raise BoundCommandError("bound command environment is malformed") from exc
+    encoded.sort(key=lambda item: item[0])
+    if len({key for key, _value in encoded}) != len(encoded):
+        raise BoundCommandError("bound command environment is malformed")
+    frame = (
+        _BOUND_LAUNCH_FRAME_PREFIX
+        + b"\0".join(key + b"=" + value for key, value in encoded)
+        + b"\0"
+    )
+    if len(frame) > _MAX_BOUND_LAUNCH_FRAME:
+        raise BoundCommandError("bound command environment is oversized")
+    return frame
+
+
+def _wait_until_readable(descriptor: int, deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BoundCommandError("bound command could not start before its timeout")
+    try:
+        readable, _writable, _exceptional = select.select(
+            (descriptor,),
+            (),
+            (),
+            remaining,
+        )
+    except (OSError, ValueError) as exc:
+        raise BoundCommandError("bound command start status is unavailable") from exc
+    if readable != [descriptor] and readable != (descriptor,):
+        if not readable:
+            raise BoundCommandError("bound command could not start before its timeout")
+        raise BoundCommandError("bound command start status is malformed")
+
+
+def _read_bound_launcher_ready(descriptor: int, deadline: float) -> None:
+    _wait_until_readable(descriptor, deadline)
+    try:
+        value = os.read(descriptor, 2)
+    except OSError as exc:
+        raise BoundCommandError("bound command start status is unavailable") from exc
+    if value != _BOUND_LAUNCH_READY:
+        raise BoundCommandError("bound command could not start")
+
+
+def _await_bound_target_exec(descriptor: int, deadline: float) -> None:
+    _wait_until_readable(descriptor, deadline)
+    try:
+        value = os.read(descriptor, 2)
+    except OSError as exc:
+        raise BoundCommandError("bound command start status is unavailable") from exc
+    if value:
+        raise BoundCommandError("bound command could not start")
+
+
+def _write_bound_launch_frame(descriptor: int, frame: bytes) -> None:
+    offset = 0
+    try:
+        while offset < len(frame):
+            written = os.write(descriptor, frame[offset:])
+            if written <= 0:
+                raise BoundCommandError("bound launcher could not be released")
+            offset += written
+    except OSError as exc:
+        raise BoundCommandError("bound launcher could not be released") from exc
+
+
+def _close_owned_descriptors(descriptors: Sequence[int]) -> None:
+    failure: OSError | None = None
+    for descriptor in descriptors:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise BoundCommandError("bound launcher descriptor could not be closed") from failure
 
 
 def _spec_from_contract(tool_id: str, value: Mapping[str, object]) -> ToolSpec:
@@ -725,6 +892,243 @@ def _revalidate_staged_tree(staged: _StagedTree) -> None:
             raise BoundCommandError("private tool runtime snapshot symlink differs")
 
 
+def _create_bound_launcher_runtime() -> _BoundLauncherRuntime:
+    executable = _BOUND_LAUNCH_RUNTIME_EXECUTABLE
+    try:
+        root = executable.parents[1]
+        relative = executable.relative_to(root)
+    except (IndexError, ValueError) as exc:
+        raise BoundCommandError("bound launch runtime layout is invalid") from exc
+    source = _tree_binding(root, label="bound launch Python")
+    stdlib = f"lib/python{sys.version_info.major}.{sys.version_info.minor}"
+    critical: set[str] = {
+        relative.as_posix(),
+        f"{stdlib}/os.py",
+        f"{stdlib}/encodings/__init__.py",
+        f"{stdlib}/encodings/aliases.py",
+        f"{stdlib}/encodings/utf_8.py",
+    }
+    critical.update(
+        path
+        for path in (*source.files, *source.links)
+        if (
+            Path(path).parent == Path("lib")
+            and Path(path).name.startswith(
+                f"libpython{sys.version_info.major}.{sys.version_info.minor}"
+            )
+        )
+        or (
+            Path(path).parent == Path(f"{stdlib}/encodings/__pycache__")
+            and Path(path).name.startswith(
+                ("__init__.", "aliases.", "utf_8.")
+            )
+        )
+    )
+    pending = list(critical)
+    while pending:
+        path = pending.pop()
+        target = source.links.get(path)
+        if target is None:
+            continue
+        normalized = Path(
+            os.path.normpath(
+                (Path(path).parent / Path(target)).as_posix()
+            )
+        )
+        if normalized.is_absolute() or normalized.parts[:1] == ("..",):
+            raise BoundCommandError("bound launch runtime link escapes")
+        normalized_text = normalized.as_posix()
+        if normalized_text not in critical:
+            critical.add(normalized_text)
+            pending.append(normalized_text)
+    if any(
+        path not in source.files and path not in source.links for path in critical
+    ):
+        raise BoundCommandError("bound launch runtime closure is incomplete")
+    critical_directories = tuple(
+        sorted(
+            {
+                parent.as_posix()
+                for path in critical
+                for parent in Path(path).parents
+                if parent.as_posix() not in {".", ""}
+            }
+            | {f"{stdlib}/lib-dynload"}
+        )
+    )
+    if any(
+        directory not in source.directories
+        for directory in critical_directories
+    ):
+        raise BoundCommandError("bound launch runtime directory closure is incomplete")
+    directory = tempfile.TemporaryDirectory(prefix="concordia-bound-launch-runtime-")
+    private_root = Path(directory.name)
+    os.chmod(private_root, int(BOUND_TOOL_POLICY["private_directory_mode"]))
+    try:
+        staged = _stage_tree(
+            private_root,
+            source,
+            name="python_runtime",
+        )
+        staged_executable = staged.root / relative
+        metadata = staged_executable.stat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o111 == 0
+        ):
+            raise BoundCommandError("bound launch runtime executable is invalid")
+        critical_state_paths = (
+            ".",
+            *critical_directories,
+            *sorted(critical),
+        )
+        critical_source_states = MappingProxyType(
+            {
+                path: _stat_tuple(
+                    (
+                        source.root
+                        if path == "."
+                        else source.root / path
+                    ).lstat()
+                )
+                for path in critical_state_paths
+            }
+        )
+        critical_staged_states = MappingProxyType(
+            {
+                path: _stat_tuple(
+                    (
+                        staged.root
+                        if path == "."
+                        else staged.root / path
+                    ).lstat()
+                )
+                for path in critical_state_paths
+            }
+        )
+    except BaseException:
+        directory.cleanup()
+        raise
+    identity = MappingProxyType(
+        {
+            "schema_version": "concordia.bound_process_launcher.v1",
+            "runtime_tree": dict(source.safe_identity),
+            "active_closure_sha256": hashlib.sha256(
+                _canonical_json(
+                    {
+                        "paths": sorted(critical),
+                        "directories": critical_directories,
+                    }
+                )
+            ).hexdigest(),
+            "executable_relative_sha256": hashlib.sha256(
+                os.fsencode(relative.as_posix())
+            ).hexdigest(),
+            "shim_sha256": hashlib.sha256(
+                _BOUND_LAUNCHER.encode("utf-8")
+            ).hexdigest(),
+            "invocation": ["-I", "-S"],
+            "startup_environment": dict(_BOUND_LAUNCHER_STARTUP_ENV),
+            "environment_transport": "exact_parent_frame",
+            "exec_status": "ready_then_cloexec_eof_or_fixed_failure",
+        }
+    )
+    return _BoundLauncherRuntime(
+        directory=directory,
+        source=source,
+        staged=staged,
+        executable=staged_executable,
+        critical_paths=tuple(sorted(critical)),
+        critical_directories=critical_directories,
+        critical_source_states=critical_source_states,
+        critical_staged_states=critical_staged_states,
+        identity=identity,
+    )
+
+
+def _revalidate_bound_launcher_active_closure(
+    runtime: _BoundLauncherRuntime,
+) -> None:
+    for relative in (
+        ".",
+        *runtime.critical_directories,
+        *runtime.critical_paths,
+    ):
+        for root, expected_states in (
+            (runtime.source.root, runtime.critical_source_states),
+            (runtime.staged.root, runtime.critical_staged_states),
+        ):
+            path = root if relative == "." else root / relative
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise BoundCommandError("bound launch runtime closure changed") from exc
+            if _stat_tuple(metadata) != expected_states[relative]:
+                raise BoundCommandError("bound launch runtime closure changed")
+    for relative in runtime.critical_paths:
+        source_file = runtime.source.files.get(relative)
+        source_link = runtime.source.links.get(relative)
+        staged_path = runtime.staged.root / relative
+        source_path = runtime.source.root / relative
+        if source_file is not None:
+            observed_source, _source_metadata = _read_tree_file(source_path)
+            observed_staged, staged_metadata = _read_tree_file(staged_path)
+            if (
+                observed_source != source_file
+                or observed_staged != source_file
+                or staged_metadata.st_uid != os.getuid()
+            ):
+                raise BoundCommandError("bound launch runtime file changed")
+            continue
+        if source_link is None:
+            raise BoundCommandError("bound launch runtime closure changed")
+        try:
+            observed_source_link = os.readlink(source_path)
+            observed_staged_link = os.readlink(staged_path)
+        except OSError as exc:
+            raise BoundCommandError("bound launch runtime link changed") from exc
+        if (
+            observed_source_link != source_link
+            or observed_staged_link != source_link
+        ):
+            raise BoundCommandError("bound launch runtime link changed")
+
+
+def _bound_launcher_runtime() -> _BoundLauncherRuntime:
+    global _BOUND_LAUNCH_RUNTIME
+    with _BOUND_LAUNCH_RUNTIME_LOCK:
+        if _BOUND_LAUNCH_RUNTIME is None:
+            _BOUND_LAUNCH_RUNTIME = _create_bound_launcher_runtime()
+        runtime = _BOUND_LAUNCH_RUNTIME
+        _revalidate_bound_launcher_active_closure(runtime)
+        return runtime
+
+
+def _revalidate_bound_launcher_runtime(runtime: _BoundLauncherRuntime) -> None:
+    with _BOUND_LAUNCH_RUNTIME_LOCK:
+        if runtime is not _BOUND_LAUNCH_RUNTIME:
+            raise BoundCommandError("bound launch runtime identity changed")
+        _revalidate_bound_launcher_active_closure(runtime)
+
+
+def bound_process_launcher_identity() -> Mapping[str, object]:
+    """Return a fresh JSON-safe identity for the universal launch barrier."""
+
+    runtime = _bound_launcher_runtime()
+    return MappingProxyType(
+        json.loads(
+            json.dumps(
+                dict(runtime.identity),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+        )
+    )
+
+
 def _system_immutable(path: Path, metadata: os.stat_result) -> bool:
     if metadata.st_uid != 0 or metadata.st_mode & 0o022:
         return False
@@ -1039,20 +1443,39 @@ class _NonReapingExitObserver:
 def _signal_process_group(
     process: subprocess.Popen[bytes],
     *,
-    leader_exited: bool,
+    lifecycle: _BoundProcessLifecycle,
 ) -> None:
     """Signal the dedicated group while its unreaped leader still owns the PGID."""
 
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    except ProcessLookupError as group_error:
+        if (
+            lifecycle.leader_exited
+            and lifecycle.tracker_armed
+            and lifecycle.release_may_have_occurred
+        ):
+            return
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except (PermissionError, OSError) as exc:
+            raise BoundCommandError("bound process group could not be killed") from exc
+        raise BoundCommandError(
+            "bound process group could not be killed"
+        ) from group_error
     except PermissionError as group_error:
         # Darwin reports EPERM for a process group containing only its zombie
         # leader. Because the unreaped leader prevents PGID reuse, and a live
         # same-session child would make killpg succeed, this completed-leader
         # case has no signalable group member left.
-        if leader_exited and sys.platform == "darwin":
+        if (
+            lifecycle.leader_exited
+            and lifecycle.tracker_armed
+            and lifecycle.release_may_have_occurred
+            and sys.platform == "darwin"
+        ):
             return
         try:
             process.kill()
@@ -1079,13 +1502,13 @@ def _contain_and_reap_process(
     process: subprocess.Popen[bytes],
     tracker: _DescendantTracker,
     *,
-    leader_exited: bool,
+    lifecycle: _BoundProcessLifecycle,
 ) -> int:
     """Contain the complete tree, then perform the only reap of its leader."""
 
     failure: BaseException | None = None
     try:
-        _signal_process_group(process, leader_exited=leader_exited)
+        _signal_process_group(process, lifecycle=lifecycle)
     except BaseException as exc:
         failure = exc
     try:
@@ -1093,12 +1516,28 @@ def _contain_and_reap_process(
     except BaseException as exc:
         if failure is None:
             failure = exc
-    try:
-        returncode = process.wait()
-    except BaseException as exc:
-        if failure is None:
-            failure = exc
-        returncode = 1
+    while True:
+        try:
+            returncode = process.wait()
+            break
+        except KeyboardInterrupt as exc:
+            if failure is None:
+                failure = exc
+            continue
+        except OSError as exc:
+            if exc.errno == getattr(errno, "EINTR", 4):
+                if failure is None:
+                    failure = exc
+                continue
+            if failure is None:
+                failure = exc
+            returncode = 1
+            break
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+            returncode = 1
+            break
     if failure is not None:
         if isinstance(failure, BoundCommandError):
             raise failure
@@ -1385,9 +1824,29 @@ class _DescendantTracker:
         self._seen: dict[int, tuple[int, int, int]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._failure: BaseException | None = None
         self._thread: threading.Thread | None = None
         self._contained = False
+
+    def _assert_root_boundary(self) -> None:
+        root_pid = self._root_pid
+        root_identity = self._root_identity
+        if root_pid is None or root_identity is None:
+            raise BoundCommandError("detached descendant tracker state is invalid")
+        try:
+            session_id = os.getsid(root_pid)
+            process_group_id = os.getpgid(root_pid)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            raise BoundCommandError(
+                "bound process boundary could not be verified"
+            ) from exc
+        if (
+            _process_identity(root_pid) != root_identity
+            or session_id != root_pid
+            or process_group_id != root_pid
+        ):
+            raise BoundCommandError("bound process boundary is invalid")
 
     def start(self, root_pid: int) -> None:
         if self._root_pid is not None or root_pid <= 0:
@@ -1397,6 +1856,7 @@ class _DescendantTracker:
             raise BoundCommandError("bound process disappeared before containment")
         self._root_pid = root_pid
         self._root_identity = root_identity
+        self._assert_root_boundary()
         self._sample()
         self._thread = threading.Thread(
             target=self._monitor,
@@ -1404,6 +1864,15 @@ class _DescendantTracker:
             daemon=True,
         )
         self._thread.start()
+        if not self._ready.wait(timeout=5):
+            raise BoundCommandError("detached descendant monitor did not start")
+        if self._failure is not None:
+            if isinstance(self._failure, BoundCommandError):
+                raise self._failure
+            raise BoundCommandError(
+                "detached descendant monitor could not start"
+            ) from self._failure
+        self._assert_root_boundary()
 
     def _sample(self) -> None:
         root = self._root_pid
@@ -1447,11 +1916,14 @@ class _DescendantTracker:
 
     def _monitor(self) -> None:
         try:
+            self._sample()
+            self._ready.set()
             while not self._stop.wait(0.001):
                 self._sample()
         except BaseException as exc:  # pragma: no cover - surfaced by contain()
             self._failure = exc
             self._stop.set()
+            self._ready.set()
 
     def contain(self) -> None:
         if self._contained:
@@ -1459,53 +1931,88 @@ class _DescendantTracker:
         if self._root_pid is None:
             self._contained = True
             return
+        failure: BaseException | None = self._failure
+
+        def remember(exc: BaseException) -> None:
+            nonlocal failure
+            if failure is None:
+                failure = exc
+
         try:
             self._sample()
         except BaseException as exc:
-            self._failure = exc
+            remember(exc)
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
             if self._thread.is_alive():
-                raise BoundCommandError("detached descendant monitor did not stop")
+                remember(
+                    BoundCommandError("detached descendant monitor did not stop")
+                )
         if self._failure is not None:
-            if isinstance(self._failure, BoundCommandError):
-                raise self._failure
-            raise BoundCommandError(
-                "detached descendant containment failed"
-            ) from self._failure
+            remember(self._failure)
 
+        contained = False
         for _attempt in range(100):
-            self._sample()
+            try:
+                self._sample()
+            except BaseException as exc:
+                remember(exc)
             with self._lock:
-                for pid in (
+                candidates_by_pid = dict(self._seen)
+            try:
+                discovered = (
                     *_linux_nonce_pids(self._nonce),
                     *_descriptor_holder_pids(self._marker_path),
-                ):
+                )
+            except BaseException as exc:
+                remember(exc)
+                discovered = ()
+            for pid in discovered:
+                try:
                     identity = _process_identity(pid)
-                    if identity is not None:
-                        self._seen[pid] = identity
-                candidates = tuple(sorted(self._seen.items()))
+                except BaseException as exc:
+                    remember(exc)
+                    continue
+                if identity is not None:
+                    candidates_by_pid[pid] = identity
+            candidates = tuple(sorted(candidates_by_pid.items()))
             if not candidates:
-                self._contained = True
-                return
+                contained = True
+                break
             survivors: dict[int, tuple[int, int, int]] = {}
             for pid, identity in candidates:
-                if pid == os.getpid() or _process_identity(pid) != identity:
+                try:
+                    current_identity = _process_identity(pid)
+                except BaseException as exc:
+                    remember(exc)
+                    survivors[pid] = identity
+                    continue
+                if pid == os.getpid() or current_identity != identity:
                     continue
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     continue
-                except (PermissionError, OSError) as exc:
-                    raise BoundCommandError(
-                        "detached descendant could not be killed"
-                    ) from exc
+                except (PermissionError, OSError):
+                    remember(
+                        BoundCommandError(
+                            "detached descendant could not be killed"
+                        )
+                    )
                 survivors[pid] = identity
             with self._lock:
                 self._seen = survivors
             time.sleep(0.01)
-        raise BoundCommandError("detached descendant survived containment")
+        if not contained:
+            remember(BoundCommandError("detached descendant survived containment"))
+        self._contained = True
+        if failure is not None:
+            if isinstance(failure, BoundCommandError):
+                raise failure
+            raise BoundCommandError(
+                "detached descendant containment failed"
+            ) from failure
 
 
 def _run_bounded_process_once(
@@ -1519,33 +2026,96 @@ def _run_bounded_process_once(
     timeout_s: int,
     tracker: _DescendantTracker,
     inherited_descriptor: int,
+    launcher_executable: Path,
     inherited_private_descriptor: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     with tempfile.TemporaryFile(mode="w+b") as stdout_file:
         with tempfile.TemporaryFile(mode="w+b") as stderr_file:
-            try:
-                process = subprocess.Popen(
-                    list(argv),
-                    executable=executable.as_posix(),
-                    cwd=cwd,
-                    env=dict(env),
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    start_new_session=True,
-                    pass_fds=(
-                        (inherited_descriptor,)
-                        if inherited_private_descriptor is None
-                        else (inherited_descriptor, inherited_private_descriptor)
-                    ),
-                )
-            except OSError as exc:
-                raise BoundCommandError("bound command could not start") from exc
+            launch_read = -1
+            launch_write = -1
+            status_read = -1
+            status_write = -1
+            process: subprocess.Popen[bytes] | None = None
             observer: _NonReapingExitObserver | None = None
-            leader_exited = False
+            lifecycle = _BoundProcessLifecycle()
+            returncode = 1
             try:
-                tracker.start(process.pid)
+                try:
+                    launch_read, launch_write = os.pipe()
+                    status_read, status_write = os.pipe()
+                except OSError as exc:
+                    raise BoundCommandError(
+                        "bound launcher descriptors could not be created"
+                    ) from exc
+                if (
+                    min(launch_read, launch_write, status_read, status_write) <= 2
+                    or len({launch_read, launch_write, status_read, status_write}) != 4
+                ):
+                    raise BoundCommandError(
+                        "bound launcher descriptors are invalid"
+                    )
+                launch_frame = _bound_launch_frame(env)
+                startup_deadline = time.monotonic() + timeout_s
+                try:
+                    pass_fds = (
+                        (inherited_descriptor, launch_read, status_write)
+                        if inherited_private_descriptor is None
+                        else (
+                            inherited_descriptor,
+                            inherited_private_descriptor,
+                            launch_read,
+                            status_write,
+                        )
+                    )
+                    process = subprocess.Popen(
+                        (
+                            launcher_executable.as_posix(),
+                            "-I",
+                            "-S",
+                            "-c",
+                            _BOUND_LAUNCHER,
+                            str(launch_read),
+                            str(status_write),
+                            executable.as_posix(),
+                            *argv,
+                        ),
+                        executable=launcher_executable.as_posix(),
+                        cwd=cwd,
+                        env=dict(_BOUND_LAUNCHER_STARTUP_ENV),
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        start_new_session=True,
+                        pass_fds=pass_fds,
+                    )
+                except OSError as exc:
+                    raise BoundCommandError(
+                        "bound command could not start"
+                    ) from exc
                 observer = _NonReapingExitObserver(process.pid)
+                parent_child_descriptors = (launch_read, status_write)
+                launch_read = -1
+                status_write = -1
+                _close_owned_descriptors(parent_child_descriptors)
+                _read_bound_launcher_ready(status_read, startup_deadline)
+                tracker.start(process.pid)
+                lifecycle.tracker_armed = True
+                if observer.exited():
+                    lifecycle.leader_exited = True
+                    raise BoundCommandError(
+                        "bound launcher exited before containment release"
+                    )
+                lifecycle.release_may_have_occurred = True
+                _write_bound_launch_frame(launch_write, launch_frame)
+                released_descriptor = launch_write
+                launch_write = -1
+                _close_owned_descriptors((released_descriptor,))
+                lifecycle.target_released = True
+                _await_bound_target_exec(status_read, startup_deadline)
+                lifecycle.target_exec_crossed = True
+                completed_status_descriptor = status_read
+                status_read = -1
+                _close_owned_descriptors((completed_status_descriptor,))
                 deadline = time.monotonic() + timeout_s
                 while True:
                     stdout_size = os.fstat(stdout_file.fileno()).st_size
@@ -1555,23 +2125,59 @@ def _run_bounded_process_once(
                             "bound command exceeded its output limit"
                         )
                     if observer.exited():
-                        leader_exited = True
+                        lifecycle.leader_exited = True
                         break
                     if time.monotonic() >= deadline:
                         raise BoundCommandError("bound command timed out")
                     time.sleep(0.002)
             finally:
+                active_failure = sys.exc_info()[1]
+                cleanup_failure: BaseException | None = None
                 try:
-                    # Keep the leader unreaped until both its process group and
-                    # any detached, identity-bound descendants are contained.
-                    returncode = _contain_and_reap_process(
-                        process,
-                        tracker,
-                        leader_exited=leader_exited,
+                    pending_descriptors = (
+                        launch_read,
+                        launch_write,
+                        status_read,
+                        status_write,
                     )
-                finally:
-                    if observer is not None:
+                    launch_read = -1
+                    launch_write = -1
+                    status_read = -1
+                    status_write = -1
+                    _close_owned_descriptors(pending_descriptors)
+                except BaseException as exc:
+                    cleanup_failure = exc
+                if process is not None:
+                    if observer is not None and not lifecycle.leader_exited:
+                        try:
+                            lifecycle.leader_exited = observer.exited()
+                        except BaseException as exc:
+                            if cleanup_failure is None:
+                                cleanup_failure = exc
+                    try:
+                        # Keep the leader unreaped until both its process
+                        # group and identity-bound descendants are contained.
+                        returncode = _contain_and_reap_process(
+                            process,
+                            tracker,
+                            lifecycle=lifecycle,
+                        )
+                    except BaseException as exc:
+                        if cleanup_failure is None:
+                            cleanup_failure = exc
+                if observer is not None:
+                    try:
                         observer.close()
+                    except BaseException as exc:
+                        if cleanup_failure is None:
+                            cleanup_failure = exc
+                if cleanup_failure is not None:
+                    if active_failure is None:
+                        raise cleanup_failure
+                    active_failure.add_note(
+                        "Additional bounded-process cleanup failure: "
+                        f"{type(cleanup_failure).__name__}: {cleanup_failure}"
+                    )
             stdout_size = os.fstat(stdout_file.fileno()).st_size
             stderr_size = os.fstat(stderr_file.fileno()).st_size
             if stdout_size > stdout_limit or stderr_size > stderr_limit:
@@ -1643,6 +2249,7 @@ def run_bounded_process(
     maximum_stream = int(BOUND_TOOL_POLICY["maximum_stream_bytes"])
     if stdout_limit > maximum_stream or stderr_limit > maximum_stream:
         raise BoundCommandError("bounded command output limit is invalid")
+    launcher_runtime = _bound_launcher_runtime()
     nonce = secrets.token_hex(32)
     execution_env = dict(env)
     execution_env[_BOUND_PROCESS_NONCE_ENV] = nonce
@@ -1665,6 +2272,7 @@ def run_bounded_process(
                 timeout_s=timeout_s,
                 tracker=tracker,
                 inherited_descriptor=marker.fileno(),
+                launcher_executable=launcher_runtime.executable,
                 inherited_private_descriptor=inherited_private_descriptor,
             )
         finally:
@@ -1679,6 +2287,8 @@ def run_bounded_process(
             raise BoundCommandError(
                 "detached descendant marker could not be removed"
             ) from exc
+        finally:
+            _revalidate_bound_launcher_runtime(launcher_runtime)
 
 
 def _sanitize_environment(
@@ -1832,7 +2442,9 @@ def _inspect_with_staging(
     cwd: Path,
 ) -> SafeToolIdentity:
     primary = _source_binding(spec)
-    dependencies: dict[str, SafeToolIdentity | Mapping[str, object]] = {}
+    dependencies: dict[str, SafeToolIdentity | Mapping[str, object]] = {
+        "bound_process_launcher": _bound_launcher_runtime().identity
+    }
     launcher: _SourceBinding | None = None
     if spec.launcher_tool_id is not None:
         launcher_spec = tool_spec(spec.launcher_tool_id)
@@ -2584,7 +3196,9 @@ def run_bound_command(
     with tempfile.TemporaryDirectory(prefix="concordia-bound-command-") as name:
         directory = Path(name)
         os.chmod(directory, int(BOUND_TOOL_POLICY["private_directory_mode"]))
-        tree_dependencies: dict[str, Mapping[str, object]] = {}
+        tree_dependencies: dict[str, Mapping[str, object]] = {
+            "bound_process_launcher": _bound_launcher_runtime().identity
+        }
         if runtime_tree is None:
             primary_path, primary_snapshot = _stage_if_needed(
                 directory, primary, suffix=".source"
@@ -3115,6 +3729,7 @@ __all__ = [
     "SafeToolIdentity",
     "ToolSpec",
     "accepted_tool_authority_from_receipt",
+    "bound_process_launcher_identity",
     "build_host_toolchain_receipt_candidate",
     "derive_accepted_runner_sha256",
     "derive_bound_host_id",

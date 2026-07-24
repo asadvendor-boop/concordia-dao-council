@@ -1,27 +1,28 @@
-.PHONY: gateway simulator agents dashboard casper-contract casper-preflight casper-shared-host-setup smoke test package clean
+.PHONY: gateway simulator agents dashboard casper-contract casper-preflight casper-shared-host-setup runtime-preflight smoke test package clean
 
-PYTHON ?= python3
 UV ?= uv
+UV_RUN ?= $(UV) run --frozen --isolated --python 3.12.11
+PYTHON ?= $(UV_RUN) python
 PACKAGE_NAME ?= concordia-dao-council.zip
 CASPER_CONTRACT_TOOLCHAIN ?= nightly-2025-02-01
 
 # Run the FastAPI gateway only.
 gateway:
-	$(UV) run uvicorn gateway.app:app --reload --host 0.0.0.0 --port 8000
+	$(UV_RUN) uvicorn gateway.app:app --reload --host 0.0.0.0 --port 8000
 
 # Run the local DAO proposal simulator used for offline rehearsals.
 simulator:
-	$(UV) run uvicorn app:app --app-dir proposal-simulator --reload --host 0.0.0.0 --port 9000
+	$(UV_RUN) uvicorn app:app --app-dir proposal-simulator --reload --host 0.0.0.0 --port 9000
 
 # Start these in separate terminals for the full council workflow.
 agents:
-	@echo "uv run python -m agents.rowan             # Rowan"
-	@echo "uv run python -m agents.mercer            # Mercer"
-	@echo "uv run python -m agents.verity            # Verity"
-	@echo "uv run python -m agents.alden             # Alden"
-	@echo "uv run python -m agents.locke             # Locke"
-	@echo "uv run python -m agents.recorder.heartbeat # Concordia Core"
-	@echo "uv run python -m agents.wells              # Wells (optional summary)"
+	@echo "$(UV_RUN) python -m agents.rowan             # Rowan"
+	@echo "$(UV_RUN) python -m agents.mercer            # Mercer"
+	@echo "$(UV_RUN) python -m agents.verity            # Verity"
+	@echo "$(UV_RUN) python -m agents.alden             # Alden"
+	@echo "$(UV_RUN) python -m agents.locke             # Locke"
+	@echo "$(UV_RUN) python -m agents.recorder.heartbeat # Concordia Core"
+	@echo "$(UV_RUN) python -m agents.wells              # Wells (optional summary)"
 
 # Run the dashboard from dashboard/.
 dashboard:
@@ -38,11 +39,14 @@ casper-preflight:
 casper-shared-host-setup:
 	$(PYTHON) scripts/finalize_casper_shared_host.py
 
+runtime-preflight:
+	$(PYTHON) -c "import sys; assert sys.version_info[:3] == (3, 12, 11), sys.version"
+
 smoke:
 	$(PYTHON) -m compileall -q shared gateway agents proposal-simulator scripts
 	$(PYTHON) scripts/check_repo_hygiene.py
 
-test: smoke
+test: runtime-preflight smoke
 	$(PYTHON) -m pytest -q
 
 package: smoke

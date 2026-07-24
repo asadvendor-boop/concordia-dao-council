@@ -117,6 +117,13 @@ def test_fixed_tool_contract_is_immutable_and_exposes_host_receipt_schema() -> N
         == "after_group_and_detached_descendant_containment"
     )
     assert (
+        release_gate_contract.BOUND_TOOL_POLICY["process_launch_barrier"]
+        == "trusted_runtime_parent_release_pipe_before_target_exec"
+    )
+    assert release_gate_contract.BOUND_TOOL_POLICY[
+        "process_launcher_environment"
+    ] == {"LANG": "C", "LC_ALL": "C"}
+    assert (
         release_gate_contract.BOUND_TOOL_POLICY["bound_data_input_execution"]
         == "explicit_exact_regular_file_private_fsync_snapshot"
     )
@@ -178,6 +185,13 @@ def test_bound_command_ignores_path_and_executes_private_snapshot(
     assert (
         result.tool_identity["source_sha256"]
         == hashlib.sha256(safe.read_bytes()).hexdigest()
+    )
+    launcher_identity = result.tool_identity["dependencies"][
+        "bound_process_launcher"
+    ]
+    assert launcher_identity == json.loads(json.dumps(launcher_identity))
+    assert launcher_identity == dict(
+        bound_command.bound_process_launcher_identity()
     )
     assert not marker.exists()
 
@@ -500,10 +514,12 @@ def test_process_group_and_detached_descendants_are_contained_before_single_reap
         def __init__(self, pid: int) -> None:
             assert pid == 4242
             events.append("observer-opened")
+            self.calls = 0
 
         def exited(self) -> bool:
+            self.calls += 1
             events.append("exit-observed-without-reap")
-            return True
+            return self.calls > 1
 
         def close(self) -> None:
             events.append("observer-closed")
@@ -532,6 +548,34 @@ def test_process_group_and_detached_descendants_are_contained_before_single_reap
         "killpg",
         lambda pid, _signal: events.append(f"group-killed:{pid}"),
     )
+    pipes = iter(((70, 71), (73, 74)))
+    statuses = iter((bound_command._BOUND_LAUNCH_READY, b""))
+    monkeypatch.setattr(bound_command.os, "pipe", lambda: next(pipes))
+    monkeypatch.setattr(
+        bound_command.os,
+        "close",
+        lambda descriptor: events.append(f"fd-closed:{descriptor}"),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "write",
+        lambda descriptor, value: (
+            events.append(f"frame-written:{descriptor}:{len(value)}")
+            or len(value)
+        ),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "read",
+        lambda descriptor, _limit: (
+            events.append(f"status-read:{descriptor}") or next(statuses)
+        ),
+    )
+    monkeypatch.setattr(
+        bound_command.select,
+        "select",
+        lambda readers, _writers, _errors, _timeout: (list(readers), [], []),
+    )
 
     result = bound_command._run_bounded_process_once(
         cwd=tmp_path,
@@ -542,14 +586,266 @@ def test_process_group_and_detached_descendants_are_contained_before_single_reap
         stderr_limit=1024,
         timeout_s=5,
         tracker=FakeTracker(),  # type: ignore[arg-type]
-        inherited_descriptor=-1,
+        inherited_descriptor=72,
+        launcher_executable=Path(sys.executable),
     )
 
     assert result.returncode == 0
     assert "poll-reaped" not in events
     assert events.count("wait-reaped") == 1
+    assert events.index("observer-opened") < events.index("tracker-started")
+    assert events.index("tracker-started") < next(
+        index
+        for index, event in enumerate(events)
+        if event.startswith("frame-written:71:")
+    )
     assert events.index("group-killed:4242") < events.index("detached-contained")
     assert events.index("detached-contained") < events.index("wait-reaped")
+
+
+def test_target_exec_waits_for_observer_and_tracker_release_barrier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    popen_call: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 4242
+        returncode: int | None = None
+
+        def kill(self) -> None:
+            events.append("leader-killed")
+
+        def wait(self) -> int:
+            events.append("wait-reaped")
+            self.returncode = 0
+            return 0
+
+    class FakeObserver:
+        def __init__(self, pid: int) -> None:
+            assert pid == 4242
+            events.append("observer-opened")
+            self.calls = 0
+
+        def exited(self) -> bool:
+            self.calls += 1
+            events.append(f"exit-observed:{self.calls}")
+            return self.calls > 1
+
+        def close(self) -> None:
+            events.append("observer-closed")
+
+    class FakeTracker:
+        def start(self, root_pid: int) -> None:
+            assert root_pid == 4242
+            events.append("tracker-started")
+
+        def contain(self) -> None:
+            events.append("detached-contained")
+
+    def fake_popen(
+        arguments: tuple[str, ...],
+        **kwargs: object,
+    ) -> FakeProcess:
+        popen_call["arguments"] = arguments
+        popen_call["kwargs"] = kwargs
+        events.append("launcher-started")
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        bound_command.subprocess,
+        "Popen",
+        fake_popen,
+    )
+    monkeypatch.setattr(
+        bound_command,
+        "_NonReapingExitObserver",
+        FakeObserver,
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "killpg",
+        lambda pid, _signal: events.append(f"group-killed:{pid}"),
+    )
+    pipes = iter(((70, 71), (73, 74)))
+    statuses = iter((bound_command._BOUND_LAUNCH_READY, b""))
+    written_frames: list[bytes] = []
+    monkeypatch.setattr(bound_command.os, "pipe", lambda: next(pipes))
+    monkeypatch.setattr(
+        bound_command.os,
+        "close",
+        lambda descriptor: events.append(f"fd-closed:{descriptor}"),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "write",
+        lambda descriptor, value: (
+            written_frames.append(bytes(value))
+            or events.append(f"frame-written:{descriptor}")
+            or len(value)
+        ),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "read",
+        lambda _descriptor, _limit: next(statuses),
+    )
+    monkeypatch.setattr(
+        bound_command.select,
+        "select",
+        lambda readers, _writers, _errors, _timeout: (list(readers), [], []),
+    )
+
+    result = bound_command._run_bounded_process_once(
+        cwd=tmp_path,
+        argv=("fake",),
+        executable=Path("/bin/sh"),
+        env={"LANG": "C"},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+        tracker=FakeTracker(),  # type: ignore[arg-type]
+        inherited_descriptor=72,
+        launcher_executable=Path(sys.executable),
+    )
+
+    assert result.returncode == 0
+    assert popen_call["arguments"] == (
+        sys.executable,
+        "-I",
+        "-S",
+        "-c",
+        bound_command._BOUND_LAUNCHER,
+        "70",
+        "74",
+        "/bin/sh",
+        "fake",
+    )
+    kwargs = popen_call["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["executable"] == sys.executable
+    assert kwargs["pass_fds"] == (72, 70, 74)
+    assert kwargs["start_new_session"] is True
+    assert events.index("observer-opened") < events.index("tracker-started")
+    assert events.index("tracker-started") < events.index("frame-written:71")
+    assert events.index("frame-written:71") < events.index(
+        "exit-observed:2"
+    )
+    assert written_frames == [
+        bound_command._BOUND_LAUNCH_FRAME_PREFIX + b"LANG=C\0"
+    ]
+    assert events.index("detached-contained") < events.index("wait-reaped")
+    assert events.count("fd-closed:70") == 1
+    assert events.count("fd-closed:71") == 1
+    assert events.count("fd-closed:73") == 1
+    assert events.count("fd-closed:74") == 1
+
+
+def test_tracker_failure_never_releases_target_and_still_contains_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 4242
+
+        def kill(self) -> None:
+            events.append("leader-killed")
+
+        def wait(self) -> int:
+            events.append("wait-reaped")
+            return -9
+
+    class FakeObserver:
+        def __init__(self, pid: int) -> None:
+            assert pid == 4242
+            events.append("observer-opened")
+
+        def exited(self) -> bool:
+            events.append("exit-observed")
+            return False
+
+        def close(self) -> None:
+            events.append("observer-closed")
+
+    class FailingTracker:
+        def start(self, root_pid: int) -> None:
+            assert root_pid == 4242
+            events.append("tracker-started")
+            raise BoundCommandError("tracker refused")
+
+        def contain(self) -> None:
+            events.append("detached-contained")
+
+    monkeypatch.setattr(
+        bound_command,
+        "_NonReapingExitObserver",
+        FakeObserver,
+    )
+    monkeypatch.setattr(
+        bound_command.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "killpg",
+        lambda pid, _signal: events.append(f"group-killed:{pid}"),
+    )
+    pipes = iter(((70, 71), (73, 74)))
+    monkeypatch.setattr(bound_command.os, "pipe", lambda: next(pipes))
+    monkeypatch.setattr(
+        bound_command.os,
+        "close",
+        lambda descriptor: events.append(f"fd-closed:{descriptor}"),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "write",
+        lambda _descriptor, _value: (
+            events.append("release-written") or 1
+        ),
+    )
+    monkeypatch.setattr(
+        bound_command.os,
+        "read",
+        lambda _descriptor, _limit: bound_command._BOUND_LAUNCH_READY,
+    )
+    monkeypatch.setattr(
+        bound_command.select,
+        "select",
+        lambda readers, _writers, _errors, _timeout: (list(readers), [], []),
+    )
+
+    with pytest.raises(
+        BoundCommandError,
+        match="tracker refused",
+    ):
+        bound_command._run_bounded_process_once(
+            cwd=tmp_path,
+            argv=("fake",),
+            executable=Path("/bin/sh"),
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+            tracker=FailingTracker(),  # type: ignore[arg-type]
+            inherited_descriptor=72,
+            launcher_executable=Path(sys.executable),
+        )
+
+    assert "release-written" not in events
+    assert events.index("tracker-started") < events.index("group-killed:4242")
+    assert events.index("group-killed:4242") < events.index(
+        "detached-contained"
+    )
+    assert events.index("detached-contained") < events.index("wait-reaped")
+    assert events.count("fd-closed:70") == 1
+    assert events.count("fd-closed:71") == 1
+    assert events.count("fd-closed:73") == 1
+    assert events.count("fd-closed:74") == 1
 
 
 def test_process_group_signal_failure_contains_reaps_and_fails_closed(
@@ -581,7 +877,7 @@ def test_process_group_signal_failure_contains_reaps_and_fails_closed(
         bound_command._contain_and_reap_process(
             FakeProcess(),  # type: ignore[arg-type]
             FakeTracker(),  # type: ignore[arg-type]
-            leader_exited=False,
+            lifecycle=bound_command._BoundProcessLifecycle(),
         )
 
     assert events == ["leader-killed", "detached-contained", "wait-reaped"]
@@ -616,7 +912,13 @@ def test_darwin_completed_leader_eperm_is_not_a_group_kill_failure(
     returncode = bound_command._contain_and_reap_process(
         FakeProcess(),  # type: ignore[arg-type]
         FakeTracker(),  # type: ignore[arg-type]
-        leader_exited=True,
+        lifecycle=bound_command._BoundProcessLifecycle(
+            tracker_armed=True,
+            release_may_have_occurred=True,
+            target_released=True,
+            target_exec_crossed=True,
+            leader_exited=True,
+        ),
     )
 
     assert returncode == 0
@@ -710,9 +1012,135 @@ def test_bounded_process_preserves_nonzero_and_signal_returncodes(
         stderr_limit=1024,
         timeout_s=5,
     )
+    sigpipe = bound_command.run_bounded_process(
+        cwd=tmp_path,
+        argv=("sh", "-c", "kill -PIPE $$"),
+        executable=Path("/bin/sh"),
+        env={"LANG": "C"},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+    )
+    legitimate_126 = bound_command.run_bounded_process(
+        cwd=tmp_path,
+        argv=("sh", "-c", "exit 126"),
+        executable=Path("/bin/sh"),
+        env={"LANG": "C"},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+    )
 
     assert nonzero.returncode == 23
     assert signaled.returncode == -15
+    assert sigpipe.returncode == -13
+    assert legitimate_126.returncode == 126
+
+
+def test_bounded_process_reconstructs_exact_target_environment(
+    tmp_path: Path,
+) -> None:
+    empty = bound_command.run_bounded_process(
+        cwd=tmp_path,
+        argv=("env",),
+        executable=Path("/usr/bin/env"),
+        env={},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+    )
+    populated = bound_command.run_bounded_process(
+        cwd=tmp_path,
+        argv=("env",),
+        executable=Path("/usr/bin/env"),
+        env={"LANG": "C", "CONCORDIA_VALUE": "one two\nthree"},
+        stdout_limit=1024,
+        stderr_limit=1024,
+        timeout_s=5,
+    )
+
+    assert empty.returncode == 0
+    empty_rows = empty.stdout.decode("utf-8").splitlines()
+    assert len(empty_rows) == 1
+    assert empty_rows[0].startswith(
+        f"{bound_command._BOUND_PROCESS_NONCE_ENV}="
+    )
+    assert len(empty_rows[0].partition("=")[2]) == 64
+    assert populated.returncode == 0
+    populated_rows = populated.stdout.decode("utf-8").splitlines()
+    assert "LANG=C" in populated_rows
+    assert "CONCORDIA_VALUE=one two" in populated_rows
+    assert "three" in populated_rows
+    nonce_rows = [
+        row
+        for row in populated_rows
+        if row.startswith(f"{bound_command._BOUND_PROCESS_NONCE_ENV}=")
+    ]
+    assert len(nonce_rows) == 1
+    assert len(nonce_rows[0].partition("=")[2]) == 64
+    assert len(populated_rows) == 4
+
+
+def test_bounded_process_launcher_environment_is_fixed_and_target_is_exact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_launcher_environments: list[dict[str, str]] = []
+    real_popen = bound_command.subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> object:
+        observed_launcher_environments.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(bound_command.subprocess, "Popen", recording_popen)
+    target_environment = {
+        "LANG": "tr_TR.UTF-8",
+        "LC_ALL": "de_DE.UTF-8",
+        "PYTHONPATH": "/caller-controlled/python",
+        "CONCORDIA_VALUE": "target-only",
+    }
+
+    result = bound_command.run_bounded_process(
+        cwd=tmp_path,
+        argv=("env",),
+        executable=Path("/usr/bin/env"),
+        env=target_environment,
+        stdout_limit=4096,
+        stderr_limit=1024,
+        timeout_s=5,
+    )
+
+    assert result.returncode == 0
+    assert observed_launcher_environments == [
+        dict(bound_command._BOUND_LAUNCHER_STARTUP_ENV)
+    ]
+    target_rows = result.stdout.decode("utf-8").splitlines()
+    for key, value in target_environment.items():
+        assert f"{key}={value}" in target_rows
+    nonce_rows = [
+        row
+        for row in target_rows
+        if row.startswith(f"{bound_command._BOUND_PROCESS_NONCE_ENV}=")
+    ]
+    assert len(nonce_rows) == 1
+    assert len(target_rows) == len(target_environment) + 1
+
+
+def test_bounded_process_exec_failure_is_start_error_not_exit_126(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing-executable"
+
+    with pytest.raises(BoundCommandError, match="could not start"):
+        bound_command.run_bounded_process(
+            cwd=tmp_path,
+            argv=("missing-executable",),
+            executable=missing,
+            env={"LANG": "C"},
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_s=5,
+        )
 
 
 def test_bounded_process_timeout_kills_and_reaps_leader(
@@ -878,6 +1306,43 @@ def test_host_toolchain_receipt_requires_exact_commit_runner_host_and_tool_set(
         source_commit=source_commit,
     )
     assert selected.source_commit == source_commit
+
+    for mutation in (
+        "missing_dependency",
+        "shim_sha256",
+        "runtime_tree_sha256",
+        "invocation",
+    ):
+        tampered_receipt = json.loads(json.dumps(receipt))
+        launcher = tampered_receipt["tools"]["tool"]["dependencies"][
+            "bound_process_launcher"
+        ]
+        if mutation == "missing_dependency":
+            tampered_receipt["tools"]["tool"]["dependencies"].pop(
+                "bound_process_launcher"
+            )
+        elif mutation == "runtime_tree_sha256":
+            launcher["runtime_tree"]["tree_sha256"] = "d" * 64
+        elif mutation == "invocation":
+            launcher["invocation"] = ["-I"]
+        else:
+            launcher["shim_sha256"] = "d" * 64
+        tampered_authority = bound_command.accepted_tool_authority_from_receipt(
+            tampered_receipt,
+            repository_root=tmp_path,
+            source_commit=source_commit,
+        )
+        with pytest.raises(BoundCommandError, match="tool identity"):
+            bound_command.run_bound_command(
+                cwd=tmp_path,
+                tool_id="tool",
+                argv=("tool",),
+                env={"LANG": "C"},
+                stdout_limit=1024,
+                stderr_limit=1024,
+                timeout_s=5,
+                accepted_authority=tampered_authority,
+            )
 
     forged = dict(receipt)
     forged["runner_sha256"] = "d" * 64

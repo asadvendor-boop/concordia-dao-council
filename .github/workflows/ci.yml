@@ -58,5 +58,5 @@ jobs:
 
       - name: Run tests
         run: >-
-          uv run --frozen --isolated --python python3.12
+          uv run --frozen --isolated --python 3.12.11
           python -m pytest -q

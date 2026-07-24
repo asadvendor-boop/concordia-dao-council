@@ -139,8 +139,9 @@ Changing any historical card breaks the evidence chain. The `/evidence/{proposal
 
 ## Local quick start
 
-The production container uses Python 3.12. For a fresh local install, Python
-3.12 is the recommended runtime for the full backend dependency graph. The
+The production and release-test runtime is pinned to Python 3.12.11. For a
+fresh local install, use the frozen `uv` environment so local, CI, and release
+gates execute the same dependency and interpreter contract. The
 standalone proof verifier is dependency-free and can be run with plain
 `python3 scripts/verify_concordia_receipt.py ...` from the source archive.
 When network access is available, add `--live-chain` to query Casper
@@ -149,7 +150,7 @@ typed runtime arguments against the proof pack.
 
 ```bash
 cp .env.example .env
-uv sync
+uv sync --frozen --python 3.12.11
 make gateway
 ```
 
@@ -162,13 +163,13 @@ make simulator
 Start the agents in separate terminals:
 
 ```bash
-uv run python -m agents.rowan
-uv run python -m agents.mercer
-uv run python -m agents.verity
-uv run python -m agents.alden
-uv run python -m agents.locke
-uv run python -m agents.recorder.heartbeat
-uv run python -m agents.wells  # optional governance summary
+uv run --frozen --isolated --python 3.12.11 python -m agents.rowan
+uv run --frozen --isolated --python 3.12.11 python -m agents.mercer
+uv run --frozen --isolated --python 3.12.11 python -m agents.verity
+uv run --frozen --isolated --python 3.12.11 python -m agents.alden
+uv run --frozen --isolated --python 3.12.11 python -m agents.locke
+uv run --frozen --isolated --python 3.12.11 python -m agents.recorder.heartbeat
+uv run --frozen --isolated --python 3.12.11 python -m agents.wells
 ```
 
 The Concordia-native module names (`agents.rowan`, `agents.mercer`,

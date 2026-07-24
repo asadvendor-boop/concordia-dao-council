@@ -128,6 +128,27 @@ def _canonical(value: object) -> bytes:
     )
 
 
+def _test_bound_process_launcher_identity() -> dict[str, object]:
+    return {
+        "schema_version": "concordia.bound_process_launcher.v1",
+        "runtime_tree": {
+            "schema_version": "concordia.bound_tool_tree.v1",
+            "tree_sha256": "11" * 32,
+            "entry_count": 12,
+            "file_count": 8,
+            "total_file_bytes": 4096,
+            "immutable_system": False,
+        },
+        "active_closure_sha256": "22" * 32,
+        "executable_relative_sha256": "33" * 32,
+        "shim_sha256": "44" * 32,
+        "invocation": ["-I", "-S"],
+        "startup_environment": {"LANG": "C", "LC_ALL": "C"},
+        "environment_transport": "exact_parent_frame",
+        "exec_status": "ready_then_cloexec_eof_or_fixed_failure",
+    }
+
+
 def _git(repository: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     completed = subprocess.run(
         ["git", *args],
@@ -264,6 +285,7 @@ def _write_command_gate_receipts(
                 release_manifest.COMMAND_GATE_EXECUTABLE_CHAIN_SCHEMA_VERSION
             ),
             "runner": runner_rows,
+            "bound_process_launcher": _test_bound_process_launcher_identity(),
             "runtime_versions": {
                 name: release_manifest.COMMAND_GATE_EXPECTED_RUNTIME_VERSIONS[name]
                 for name in release_manifest.COMMAND_GATE_REQUIRED_RUNTIMES[gate_id]
@@ -3397,6 +3419,100 @@ def test_g1_authority_recomputes_every_tagged_file_digest(
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_outer",
+        "extra_outer",
+        "launcher_schema",
+        "runtime_not_mapping",
+        "runtime_extra",
+        "runtime_schema",
+        "tree_hash",
+        "entry_count_zero",
+        "entry_count_boolean",
+        "file_count_over_entry_count",
+        "total_file_bytes_negative",
+        "immutable_system_not_boolean",
+        "outer_hash",
+        "invocation",
+        "startup_environment",
+        "environment_transport",
+        "exec_status",
+    ],
+)
+def test_bound_process_launcher_identity_is_exact_and_fail_closed(
+    mutation: str,
+) -> None:
+    identity = json.loads(json.dumps(_test_bound_process_launcher_identity()))
+    if mutation == "missing_outer":
+        identity.pop("shim_sha256")
+    elif mutation == "extra_outer":
+        identity["unexpected"] = True
+    elif mutation == "launcher_schema":
+        identity["schema_version"] = "concordia.bound_process_launcher.v0"
+    elif mutation == "runtime_not_mapping":
+        identity["runtime_tree"] = []
+    elif mutation == "runtime_extra":
+        identity["runtime_tree"]["unexpected"] = True
+    elif mutation == "runtime_schema":
+        identity["runtime_tree"]["schema_version"] = "forged"
+    elif mutation == "tree_hash":
+        identity["runtime_tree"]["tree_sha256"] = "not-a-hash"
+    elif mutation == "entry_count_zero":
+        identity["runtime_tree"]["entry_count"] = 0
+    elif mutation == "entry_count_boolean":
+        identity["runtime_tree"]["entry_count"] = True
+    elif mutation == "file_count_over_entry_count":
+        identity["runtime_tree"]["file_count"] = (
+            identity["runtime_tree"]["entry_count"] + 1
+        )
+    elif mutation == "total_file_bytes_negative":
+        identity["runtime_tree"]["total_file_bytes"] = -1
+    elif mutation == "immutable_system_not_boolean":
+        identity["runtime_tree"]["immutable_system"] = 0
+    elif mutation == "outer_hash":
+        identity["active_closure_sha256"] = "00"
+    elif mutation == "invocation":
+        identity["invocation"] = ["-I"]
+    elif mutation == "startup_environment":
+        identity["startup_environment"]["LANG"] = "caller-controlled"
+    elif mutation == "environment_transport":
+        identity["environment_transport"] = "ambient"
+    else:
+        identity["exec_status"] = "unobserved"
+
+    with pytest.raises(ReleaseManifestError, match="launcher"):
+        release_manifest._validate_bound_process_launcher_identity(
+            identity,
+            label="test launcher",
+        )
+
+
+def test_command_gate_replay_contract_binds_launcher_runtime_identity() -> None:
+    document = {
+        "gate_id": "G2",
+        "integration_commit": "11" * 20,
+        "commands": [
+            {
+                "command_id": "example",
+                "working_directory": ".",
+                "argv": ["example"],
+                "exit_code": 0,
+            }
+        ],
+        "produced_artifacts": [{"path": "artifact", "sha256": "22" * 32}],
+        "input_artifacts": [],
+        "fresh_outputs": [],
+        "bound_process_launcher": _test_bound_process_launcher_identity(),
+    }
+    original = release_manifest._command_gate_replay_projection(document)
+    changed = json.loads(json.dumps(document))
+    changed["bound_process_launcher"]["shim_sha256"] = "55" * 32
+
+    assert release_manifest._command_gate_replay_projection(changed) != original
+
+
+@pytest.mark.parametrize(
     ("mutation", "message"),
     [
         ("argv", "immutable first-add"),
@@ -3446,6 +3562,8 @@ def test_command_gate_receipts_reject_forged_execution_claims(
         ("G2", "input", "immutable first-add"),
         ("G9", "fresh", "immutable first-add"),
         ("G2", "normalization", "immutable first-add"),
+        ("G2", "launcher_missing", "immutable first-add"),
+        ("G2", "launcher_invalid", "immutable first-add"),
     ],
 )
 def test_command_gate_receipts_require_the_complete_frozen_schema(
@@ -3473,6 +3591,10 @@ def test_command_gate_receipts_require_the_complete_frozen_schema(
         receipt["input_artifacts"] = [{"path": "source.json", "sha256": "00" * 32}]
     elif mutation == "fresh":
         receipt["fresh_outputs"][0]["state_before"] = "present"
+    elif mutation == "launcher_missing":
+        receipt.pop("bound_process_launcher")
+    elif mutation == "launcher_invalid":
+        receipt["bound_process_launcher"]["shim_sha256"] = "00"
     else:
         receipt["normalization"].pop("encoding_errors")
 

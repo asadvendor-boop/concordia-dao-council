@@ -10,9 +10,9 @@ The project uses [uv](https://docs.astral.sh/uv/) for Python dependency
 management.
 
 ```bash
-uv sync
-uv run pytest -q          # run the test suite
-make smoke                # fast import/health smoke check
+uv sync --frozen --python 3.12.11
+uv run --frozen --isolated --python 3.12.11 python -m pytest -q
+make smoke
 ```
 
 The gateway, dashboard, agents, and Casper contract each have their own `make`
@@ -23,7 +23,8 @@ targets — see the [Makefile](../Makefile) and [README.md](../README.md).
 1. Open an issue describing the bug or proposed change before large work.
 2. Keep pull requests focused; one logical change per PR.
 3. Add or update tests for any behavior change — the suite must stay green.
-4. Run `uv run pytest -q` locally before pushing; CI runs the same suite.
+4. Run `uv run --frozen --isolated --python 3.12.11 python -m pytest -q`
+   locally before pushing; CI runs the same pinned suite.
 5. Do not commit generated artifacts, `.zip` archives, `__pycache__`, or local
    databases — these are covered by [.gitignore](../.gitignore).
 

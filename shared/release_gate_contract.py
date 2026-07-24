@@ -7,7 +7,7 @@ import json
 from types import MappingProxyType
 from typing import Final
 
-COMMAND_GATE_RECEIPT_SCHEMA_VERSION: Final = "concordia.command_gate_receipt.v1"
+COMMAND_GATE_RECEIPT_SCHEMA_VERSION: Final = "concordia.command_gate_receipt.v2"
 COMMAND_LOG_NORMALIZATION_SCHEMA_VERSION: Final = (
     "concordia.command_log_normalization.v1"
 )
@@ -170,6 +170,17 @@ BOUND_TOOL_POLICY = MappingProxyType(
         "stdout_stderr_capture": "separate_live_capped_files",
         "process_group_kill_on_limit_or_timeout": True,
         "process_group_kill_after_leader_exit": True,
+        "process_launch_barrier": (
+            "trusted_runtime_parent_release_pipe_before_target_exec"
+        ),
+        "process_launch_isolation": "isolated_no_site",
+        "process_exec_status": "ready_then_cloexec_eof_or_fixed_failure",
+        "process_signal_restoration": ("SIGPIPE", "SIGXFZ", "SIGXFSZ"),
+        "process_launcher_environment": {
+            "LANG": "C",
+            "LC_ALL": "C",
+        },
+        "target_environment": "exact_parent_frame_not_launcher_environment",
         "process_exit_observation": ("nonreaping_darwin_kqueue_linux_waitid_or_pidfd"),
         "leader_reap_order": "after_group_and_detached_descendant_containment",
         "detached_descendant_containment": (
@@ -619,7 +630,7 @@ COMMAND_GATE_TIMEOUT_SECONDS = MappingProxyType(
 COMMAND_GATE_RUNTIME_TIMEOUT_SECONDS: Final = 60
 
 _FROZEN_COLLECTOR_CONTRACT_SHA256: Final = (
-    "766806f82ecfb96f17c48025eb375ec55b8287ea57b39605e3bf94fe389c519b"
+    "e10cc73e9f4adf35ec674d0b76689bb7200abcab090d40b0e359bc63d7a30830"
 )
 
 

@@ -35,7 +35,7 @@ On the shared ECS host, after the key is funded:
 
 ```bash
 cd /opt/apps/concordia/src
-uv run python scripts/finalize_casper_shared_host.py
+uv run --frozen --isolated --python 3.12.11 python scripts/finalize_casper_shared_host.py
 ```
 
 The setup script uses Python-native Casper deploy assembly:

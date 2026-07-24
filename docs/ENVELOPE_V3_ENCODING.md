@@ -206,7 +206,7 @@ used as evidence.
 ## Gates
 
 ```bash
-uv run pytest tests/test_envelope_v3_encoder.py \
+uv run --frozen --isolated --python 3.12.11 python -m pytest tests/test_envelope_v3_encoder.py \
   tests/test_actions_v3_encoder.py tests/test_clvalue_roundtrip.py
 cd contracts/odra-governance-receipt-v3
 cargo fmt --all -- --check

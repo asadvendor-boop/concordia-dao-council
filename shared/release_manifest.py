@@ -2455,6 +2455,75 @@ def _validate_executable_chain_projection(
     _assert_safe_projection(rows, canaries, label)
 
 
+def _validate_bound_process_launcher_identity(
+    value: object,
+    *,
+    label: str,
+) -> None:
+    launcher = _mapping(value, label)
+    exact_keys = {
+        "schema_version",
+        "runtime_tree",
+        "active_closure_sha256",
+        "executable_relative_sha256",
+        "shim_sha256",
+        "invocation",
+        "startup_environment",
+        "environment_transport",
+        "exec_status",
+    }
+    if set(launcher) != exact_keys:
+        raise ReleaseManifestError(f"{label} schema is not exact")
+    if launcher.get("schema_version") != "concordia.bound_process_launcher.v1":
+        raise ReleaseManifestError(f"{label} schema version differs")
+
+    runtime_tree = _mapping(launcher.get("runtime_tree"), f"{label} runtime tree")
+    runtime_tree_keys = {
+        "schema_version",
+        "tree_sha256",
+        "entry_count",
+        "file_count",
+        "total_file_bytes",
+        "immutable_system",
+    }
+    if set(runtime_tree) != runtime_tree_keys:
+        raise ReleaseManifestError(f"{label} runtime-tree schema is not exact")
+    if runtime_tree.get("schema_version") != "concordia.bound_tool_tree.v1":
+        raise ReleaseManifestError(f"{label} runtime-tree schema version differs")
+    _hash32(runtime_tree.get("tree_sha256"), f"{label} runtime-tree SHA-256")
+    for key in ("entry_count", "file_count", "total_file_bytes"):
+        number = runtime_tree.get(key)
+        if type(number) is not int or number <= 0:
+            raise ReleaseManifestError(f"{label} runtime-tree count is invalid")
+    if runtime_tree["file_count"] > runtime_tree["entry_count"]:
+        raise ReleaseManifestError(f"{label} runtime-tree counts are inconsistent")
+    if type(runtime_tree.get("immutable_system")) is not bool:
+        raise ReleaseManifestError(
+            f"{label} runtime-tree immutability flag is invalid"
+        )
+
+    for key in (
+        "active_closure_sha256",
+        "executable_relative_sha256",
+        "shim_sha256",
+    ):
+        _hash32(launcher.get(key), f"{label} {key}")
+    if launcher.get("invocation") != ["-I", "-S"]:
+        raise ReleaseManifestError(f"{label} invocation differs")
+    if launcher.get("startup_environment") != {
+        "LANG": "C",
+        "LC_ALL": "C",
+    }:
+        raise ReleaseManifestError(f"{label} startup environment differs")
+    if launcher.get("environment_transport") != "exact_parent_frame":
+        raise ReleaseManifestError(f"{label} environment transport differs")
+    if (
+        launcher.get("exec_status")
+        != "ready_then_cloexec_eof_or_fixed_failure"
+    ):
+        raise ReleaseManifestError(f"{label} exec-status contract differs")
+
+
 def _validate_gate_artifact_rows(
     root: Path,
     value: object,
@@ -2637,6 +2706,7 @@ def _command_gate_replay_projection(
             )
         ),
         "input_artifacts": document.get("input_artifacts"),
+        "bound_process_launcher": document.get("bound_process_launcher"),
         "fresh_output_contract": [
             {
                 "path": row.get("path"),
@@ -2759,6 +2829,7 @@ def _load_command_gate_receipts(
         "normalization",
         "executable_chain_schema_version",
         "runner",
+        "bound_process_launcher",
         "runtime_versions",
         "runtime_executable_chains",
         "started_at",
@@ -2833,6 +2904,11 @@ def _load_command_gate_receipts(
                 )
             runner_commits.append(runner_commit)
             all_bounds.append(runner_bound)
+
+        _validate_bound_process_launcher_identity(
+            document.get("bound_process_launcher"),
+            label=f"{gate_id} bound process launcher",
+        )
 
         runtimes = _mapping(document.get("runtime_versions"), f"{gate_id} runtimes")
         expected_runtime_names = COMMAND_GATE_REQUIRED_RUNTIMES[gate_id]

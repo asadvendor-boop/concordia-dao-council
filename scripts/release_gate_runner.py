@@ -23,7 +23,11 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from shared.bound_command import BoundCommandError, run_bounded_process
+from shared.bound_command import (
+    BoundCommandError,
+    bound_process_launcher_identity,
+    run_bounded_process,
+)
 from shared.release_gate_contract import (
     BOUND_GIT_CONFIG_OVERRIDES,
     COMMAND_GATE_COMMANDS,
@@ -1736,9 +1740,12 @@ def _assert_final_repository_identity(
         str,
         Sequence[Mapping[str, object]],
     ],
+    bound_launcher_identity: Mapping[str, object],
     environment: Mapping[str, str],
     allowed_untracked: frozenset[str],
 ) -> None:
+    if dict(bound_process_launcher_identity()) != dict(bound_launcher_identity):
+        raise GateRunError("bound process launcher identity changed during execution")
     if _git_text(repository_root, "rev-parse", "HEAD^{commit}") != integration_commit:
         raise GateRunError("command gate changed the integration commit")
     if (
@@ -1866,6 +1873,7 @@ def _run_gate_locked(
         _preflight_repository(root, gate_id)
     )
     root = root.resolve()
+    bound_launcher_identity = dict(bound_process_launcher_identity())
     for _command_id, working_directory, _argv in COMMAND_GATE_COMMANDS[gate_id]:
         _contract_working_directory(root, working_directory)
     for _runtime, working_directory, _argv in COMMAND_GATE_RUNTIME_PROBES[gate_id]:
@@ -1909,6 +1917,8 @@ def _run_gate_locked(
         raise GateRunError(
             "command-gate implementation identity changed during execution"
         )
+    if dict(bound_process_launcher_identity()) != bound_launcher_identity:
+        raise GateRunError("bound process launcher identity changed during execution")
 
     logs: dict[str, bytes] = {}
     command_rows: list[dict[str, object]] = []
@@ -1956,6 +1966,7 @@ def _run_gate_locked(
             COMMAND_GATE_EXECUTABLE_CHAIN_SCHEMA_VERSION
         ),
         "runner": identity_rows,
+        "bound_process_launcher": bound_launcher_identity,
         "runtime_versions": runtime_versions,
         "runtime_executable_chains": runtime_executable_chains,
         "started_at": started_at,
@@ -1984,6 +1995,7 @@ def _run_gate_locked(
             input_artifacts=input_artifacts,
             captured_commands=captured,
             runtime_executable_chains=runtime_executable_chains,
+            bound_launcher_identity=bound_launcher_identity,
             environment=environment,
             allowed_untracked=allowed_untracked,
         ),

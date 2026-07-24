@@ -29,7 +29,7 @@ from shared.release_gate_contract import (
 
 
 FROZEN_COLLECTOR_CONTRACT_SHA256 = (
-    "766806f82ecfb96f17c48025eb375ec55b8287ea57b39605e3bf94fe389c519b"
+    "e10cc73e9f4adf35ec674d0b76689bb7200abcab090d40b0e359bc63d7a30830"
 )
 NOW = "2026-07-23T00:00:00Z"
 OTHER = "2026-07-23T00:00:01Z"
@@ -481,7 +481,7 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
     receipt_raw = receipt_path.read_bytes()
     receipt = json.loads(receipt_raw)
     assert receipt_raw == _canonical(receipt)
-    assert receipt["schema_version"] == "concordia.command_gate_receipt.v1"
+    assert receipt["schema_version"] == "concordia.command_gate_receipt.v2"
     assert receipt["gate_id"] == "G2"
     assert receipt["frozen_commit"] == frozen_commit
     assert receipt["integration_commit"] == integration_commit
@@ -495,6 +495,25 @@ def test_successful_gate_binds_identity_normalizes_logs_and_writes_exact_batch(
     assert [row["path"] for row in receipt["runner"]] == list(
         release_gate_contract.COMMAND_GATE_IDENTITY_PATHS["G2"]
     )
+    launcher = receipt["bound_process_launcher"]
+    assert launcher["schema_version"] == "concordia.bound_process_launcher.v1"
+    assert launcher["invocation"] == ["-I", "-S"]
+    assert launcher["startup_environment"] == {"LANG": "C", "LC_ALL": "C"}
+    assert launcher["environment_transport"] == "exact_parent_frame"
+    assert launcher["exec_status"] == "ready_then_cloexec_eof_or_fixed_failure"
+    assert launcher["runtime_tree"]["schema_version"] == (
+        "concordia.bound_tool_tree.v1"
+    )
+    assert launcher["runtime_tree"]["entry_count"] > 0
+    assert launcher["runtime_tree"]["file_count"] > 0
+    assert launcher["runtime_tree"]["total_file_bytes"] > 0
+    for key in (
+        "active_closure_sha256",
+        "executable_relative_sha256",
+        "shim_sha256",
+    ):
+        assert len(launcher[key]) == 64
+        assert bytes.fromhex(launcher[key])
     assert set(receipt["runtime_versions"]) == set(COMMAND_GATE_REQUIRED_RUNTIMES["G2"])
     assert [row["command_id"] for row in receipt["commands"]] == [
         row[0] for row in COMMAND_GATE_COMMANDS["G2"]
@@ -1413,6 +1432,43 @@ def test_final_identity_recheck_rejects_artifact_swap_after_log_fsync(
             repository_root=repository,
             executor=_SuccessfulExecutor(repository),
         )
+    assert not (repository / COMMAND_GATE_RECEIPT_PATHS["G2"]).exists()
+    assert not (repository / "release/receipts/logs/G2").exists()
+
+
+def test_gate_rejects_launcher_identity_change_before_receipt_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _, _ = _gate_repository(tmp_path, "G2")
+    original = json.loads(
+        json.dumps(
+            dict(release_gate_runner.bound_process_launcher_identity())
+        )
+    )
+    changed = json.loads(json.dumps(original))
+    changed["shim_sha256"] = "d" * 64
+    calls = 0
+
+    def changing_identity() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return original if calls == 1 else changed
+
+    monkeypatch.setattr(
+        release_gate_runner,
+        "bound_process_launcher_identity",
+        changing_identity,
+    )
+
+    with pytest.raises(GateRunError, match="launcher identity changed"):
+        run_gate(
+            "G2",
+            repository_root=repository,
+            executor=_SuccessfulExecutor(repository),
+        )
+
+    assert calls >= 2
     assert not (repository / COMMAND_GATE_RECEIPT_PATHS["G2"]).exists()
     assert not (repository / "release/receipts/logs/G2").exists()
 

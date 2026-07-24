@@ -8,7 +8,7 @@
 
 ## Testing
 
-- [ ] `uv run pytest -q` passes locally
+- [ ] `uv run --frozen --isolated --python 3.12.11 python -m pytest -q` passes locally
 - [ ] `make smoke` passes (if applicable)
 - [ ] New/changed behavior has test coverage
 
