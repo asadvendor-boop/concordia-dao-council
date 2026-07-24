@@ -138,7 +138,7 @@ services:
       X402_GATEWAY_TOKEN_FILE: /run/secrets/x402_official_gateway_token
       CASPER_SECRET_KEY_PATH: /run/secrets/casper_secret_key
       CSPR_CLOUD_SERVICE_SCOPE: mercer
-      X402_PROVIDER_URL: ${X402_PROVIDER_URL:-}
+      X402_PROVIDER_URL: https://safepay.concordiadao.xyz/x402/risk-report
       CONCORDIA_RELEASE_ARTIFACTS_DIR: /app/artifacts
       CONCORDIA_PROOF_REGISTRY_DIR: /run/config/proof-registry
       CONCORDIA_CARD_CHAIN_ROOTS_FILE: /app/artifacts/live/card-chain-roots-v1.json

@@ -278,6 +278,8 @@ docker network create concordia-edge
 
 2. Copy `Caddyfile.snippet` into the shared proxy Caddyfile.
 3. Add `CONCORDIA_HOSTNAME=concordiadao.xyz`, `CONCORDIA_WWW_HOSTNAME=www.concordiadao.xyz`, `X402_PROVIDER_HOSTNAME=safepay.concordiadao.xyz`, and `CONCORDIA_X402_HOSTNAME=x402.concordiadao.xyz` to the shared proxy environment.
+   Gateway's legacy paid-report provider endpoint is pinned in Compose to
+   `https://safepay.concordiadao.xyz/x402/risk-report`; do not override it.
 4. Attach the proxy container to `concordia-edge`.
 5. Mount the same SafePay proxy-attestation file read-only at
    `/run/secrets/safepay_proxy_secret` inside the independently managed shared

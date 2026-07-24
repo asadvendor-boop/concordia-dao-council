@@ -47,6 +47,14 @@ SOURCE_TIME = "2026-07-23T00:00:00Z"
 CAPTURED_AT = "2026-07-23T00:10:00Z"
 _TEST_COHOST_HOST = "peer-service.shared.invalid"
 _TEST_COHOST_UPSTREAM = "peer-service-gateway:8000"
+_LE_PRODUCTION_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
+_OWNED_CADDY_SUBJECTS = (
+    "concordiadao.xyz",
+    "www.concordiadao.xyz",
+    "safepay.concordiadao.xyz",
+    "x402.concordiadao.xyz",
+)
+_SAFEPAY_PROVIDER_URL = "https://safepay.concordiadao.xyz/x402/risk-report"
 RECHECKED_AT = "2026-07-23T00:10:25Z"
 BUILD_SCRIPT = Path(__file__).parents[1] / "scripts/build_release_manifest.py"
 _TEST_IPFS_BODY = b'{"proposal_id":"DAO-PROP-6CB25C","archive":"test"}'
@@ -1457,6 +1465,10 @@ def _compose_raw() -> dict[str, object]:
     services: dict[str, object] = {}
     for name in names:
         environment: dict[str, str] = {"CASPER_CHAIN_NAME": "casper-test"}
+        if name == "gateway":
+            environment["X402_PROVIDER_URL"] = _SAFEPAY_PROVIDER_URL
+        elif name == "x402-provider":
+            environment["X402_PROVIDER_URL"] = ""
         granted_secrets: list[dict[str, str]] = []
         for key, (
             target,
@@ -1630,6 +1642,25 @@ def _caddy_raw() -> dict[str, object]:
             }
         }
     }
+    active_config["apps"]["tls"] = {
+        "automation": {
+            "policies": [
+                {
+                    "subjects": [subject],
+                    "issuers": [
+                        {"module": "acme", "ca": _LE_PRODUCTION_DIRECTORY}
+                    ],
+                }
+                for subject in _OWNED_CADDY_SUBJECTS
+            ]
+            + [
+                {
+                    "subjects": [_TEST_COHOST_HOST],
+                    "issuers": [{"module": "internal"}],
+                }
+            ]
+        }
+    }
     hosts = ["concordiadao.xyz"]
     return {
         "active_config": active_config,
@@ -1665,6 +1696,32 @@ def _caddy_raw() -> dict[str, object]:
             for host in hosts
         ],
     }
+
+
+def _allow_test_cohost_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    route = {
+        "hosts": [_TEST_COHOST_HOST],
+        "paths": ["/mcp"],
+        "matchers": [
+            {
+                "hosts": [_TEST_COHOST_HOST],
+                "paths": ["/mcp"],
+                "methods": [],
+                "unknown_keys": [],
+            }
+        ],
+        "handlers": [
+            {
+                "handler": "reverse_proxy",
+                "upstreams": [_TEST_COHOST_UPSTREAM],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        release_manifest,
+        "_SHARED_COHOST_MCP_ROUTE_SHA256",
+        hashlib.sha256(release_manifest._canonical_json(route)).hexdigest(),
+    )
 
 
 def _http_raw(
@@ -4415,7 +4472,7 @@ def test_capture_rejects_missing_approval_auth_or_broken_provider_tls(
     bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
     probes = [dict(item) for item in bad.public_probes]
     provider = next(
-        item for item in probes if item["probe_id"] == "sslip_provider_root"
+        item for item in probes if item["probe_id"] == "safepay_provider_root"
     )
     provider["tls"] = None
     bad = replace(bad, public_probes=probes)
@@ -4496,6 +4553,38 @@ def test_compose_rejects_unexpected_or_legacy_payment_secret_targets(
     )
     with pytest.raises(ReleaseManifestError, match="secret target|legacy"):
         capture_release_observations_once(repository)
+
+
+def test_compose_projects_the_pinned_owned_safepay_provider_url(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    projection = release_manifest._compose_projection(repository, snapshot.compose, ())
+    gateway = next(
+        service for service in projection["services"] if service["service_id"] == "gateway"
+    )
+
+    assert gateway["public_environment"]["X402_PROVIDER_URL"] == _SAFEPAY_PROVIDER_URL
+
+
+@pytest.mark.parametrize(
+    "provider_url",
+    (
+        "https://concordia.47.84.232.193.sslip.io/x402/risk-report",
+        "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report",
+    ),
+)
+def test_compose_rejects_retired_x402_provider_url(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+    provider_url: str,
+) -> None:
+    repository, commits, _, _ = release_repository
+    compose = _snapshot(CAPTURED_AT, commits["integration"], repository).compose
+    compose["services"]["gateway"]["environment"]["X402_PROVIDER_URL"] = provider_url
+
+    with pytest.raises(ReleaseManifestError, match="retired X402 provider hostname"):
+        release_manifest._compose_projection(repository, compose, ())
 
 
 @pytest.mark.parametrize(
@@ -5551,8 +5640,112 @@ def test_caddy_rejects_the_retired_sslip_approval_host(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
     )
 
-    with pytest.raises(ReleaseManifestError, match="unexpected host|coverage"):
+    with pytest.raises(ReleaseManifestError, match="retired Caddy hostname"):
         capture_release_observations_once(repository)
+
+
+@pytest.mark.parametrize(
+    "retired_host",
+    (
+        "concordia.47.84.232.193.sslip.io",
+        "x402-provider.47.84.232.193.sslip.io",
+    ),
+)
+def test_caddy_rejects_retired_host_on_any_projected_route(
+    retired_host: str,
+) -> None:
+    caddy = _caddy_raw()
+    routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"][
+        "routes"
+    ]
+    routes.append(
+        {
+            "match": [{"host": [retired_host], "path": ["/health"]}],
+            "handle": [
+                {
+                    "handler": "reverse_proxy",
+                    "upstreams": [{"dial": "gateway:8000"}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ReleaseManifestError, match="retired Caddy hostname"):
+        release_manifest._caddy_projection(caddy, ())
+
+
+@pytest.mark.parametrize("subject", _OWNED_CADDY_SUBJECTS)
+@pytest.mark.parametrize("mutation", ("missing", "non_le", "extra_issuer"))
+def test_caddy_requires_one_letsencrypt_production_issuer_per_owned_subject(
+    subject: str,
+    mutation: str,
+) -> None:
+    caddy = _caddy_raw()
+    policies = caddy["active_config"]["apps"]["tls"]["automation"][
+        "policies"
+    ]
+    index = next(
+        index for index, policy in enumerate(policies) if policy["subjects"] == [subject]
+    )
+    if mutation == "missing":
+        policies.pop(index)
+    elif mutation == "non_le":
+        policies[index]["issuers"][0]["ca"] = "https://acme-staging-v02.api.letsencrypt.org/directory"
+    else:
+        policies[index]["issuers"].append(
+            {"module": "acme", "ca": "https://acme.example.invalid/directory"}
+        )
+
+    with pytest.raises(ReleaseManifestError, match="owned Caddy TLS issuer"):
+        release_manifest._caddy_projection(caddy, ())
+
+
+@pytest.mark.parametrize("mutation", ("mixed_subjects", "global_policy"))
+def test_caddy_rejects_policies_that_can_capture_owned_subjects(
+    mutation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caddy = _caddy_raw()
+    _allow_test_cohost_route(monkeypatch)
+    policies = caddy["active_config"]["apps"]["tls"]["automation"][
+        "policies"
+    ]
+    if mutation == "mixed_subjects":
+        policies[0]["subjects"].append(_TEST_COHOST_HOST)
+    else:
+        policies.append(
+            {
+                "issuers": [
+                    {"module": "acme", "ca": _LE_PRODUCTION_DIRECTORY}
+                ]
+            }
+        )
+
+    with pytest.raises(ReleaseManifestError, match="owned Caddy TLS.*policy"):
+        release_manifest._caddy_projection(caddy, ())
+
+
+def test_caddy_ignores_unrelated_cohost_tls_issuer_policy(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, commits, _, verifier = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    monkeypatch.setattr(
+        release_manifest,
+        "_collector_factory",
+        lambda root: FakeCollector([snapshot]),
+    )
+    monkeypatch.setattr(
+        release_manifest, "_proof_verifier_factory", lambda root: verifier
+    )
+
+    capture_release_observations_once(repository)
+    receipt = json.loads((repository / RECEIPT_PATHS["caddy"]).read_bytes())
+    assert receipt["projection"]["owned_tls_issuers"] == {
+        subject: {"module": "acme", "ca": _LE_PRODUCTION_DIRECTORY}
+        for subject in _OWNED_CADDY_SUBJECTS
+    }
 
 
 def test_caddy_does_not_flatten_unsafe_match_alternatives(
@@ -5577,7 +5770,7 @@ def test_caddy_does_not_flatten_unsafe_match_alternatives(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
     )
 
-    with pytest.raises(ReleaseManifestError, match="matcher"):
+    with pytest.raises(ReleaseManifestError, match="unexpected host|matcher"):
         capture_release_observations_once(repository)
 
 

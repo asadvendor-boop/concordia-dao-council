@@ -706,6 +706,20 @@ _LEGACY_PAYMENT_SECRET_KEYS = frozenset(
     }
 )
 _FIXED_VM_IP = "47.84.232.193"
+_RETIRED_CADDY_HOSTNAMES = frozenset(
+    {
+        "concordia.47.84.232.193.sslip.io",
+        "x402-provider.47.84.232.193.sslip.io",
+    }
+)
+_OWNED_CADDY_TLS_SUBJECTS = (
+    "concordiadao.xyz",
+    "www.concordiadao.xyz",
+    "safepay.concordiadao.xyz",
+    "x402.concordiadao.xyz",
+)
+_LE_PRODUCTION_ACME_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
+_SAFEPAY_PROVIDER_URL = "https://safepay.concordiadao.xyz/x402/risk-report"
 _FIXED_DNS_EXPECTATIONS: dict[str, dict[str, tuple[str, ...] | None]] = {
     "concordiadao.xyz": {"addresses": (_FIXED_VM_IP,), "cnames": ()},
     "www.concordiadao.xyz": {
@@ -728,6 +742,7 @@ _PUBLIC_ENV_KEYS = frozenset(
         "CASPER_NETWORK",
         "NODE_ENV",
         "X402_NETWORK",
+        "X402_PROVIDER_URL",
     }
 )
 _SECRET_CANARY_PATHS = tuple(
@@ -4568,6 +4583,21 @@ def _compose_projection(
         environment_raw = service.get("environment") or {}
         environment = _mapping(environment_raw, f"{service_id} environment")
         environment_keys = sorted(str(key) for key in environment)
+        provider_url = environment.get("X402_PROVIDER_URL")
+        if type(provider_url) is str:
+            try:
+                provider_hostname = (urlsplit(provider_url).hostname or "").lower()
+            except ValueError as exc:
+                raise ReleaseManifestError("Compose X402 provider URL is malformed") from exc
+            if provider_hostname in _RETIRED_CADDY_HOSTNAMES:
+                raise ReleaseManifestError("Compose uses a retired X402 provider hostname")
+        if service_id == "gateway":
+            if provider_url != _SAFEPAY_PROVIDER_URL:
+                raise ReleaseManifestError("Compose X402 provider URL is not pinned")
+        elif provider_url is not None and provider_url != "":
+            raise ReleaseManifestError(
+                "Compose X402 provider URL is assigned outside Gateway"
+            )
         granted_targets: set[str] = set()
         for raw_secret in service.get("secrets") or []:
             if type(raw_secret) is str:
@@ -5351,6 +5381,46 @@ def _caddy_projection(
     ):
         raise ReleaseManifestError("Caddy approval bcrypt material is malformed")
     apps = _mapping(active.get("apps"), "Caddy apps")
+    tls = _mapping(apps.get("tls"), "Caddy TLS app")
+    automation = _mapping(tls.get("automation"), "Caddy TLS automation")
+    observed_tls_subjects: dict[str, dict[str, str]] = {}
+    for raw_policy in _sequence(
+        automation.get("policies"), "Caddy TLS automation policies"
+    ):
+        policy = _mapping(raw_policy, "Caddy TLS automation policy")
+        if "subjects" not in policy:
+            raise ReleaseManifestError("owned Caddy TLS global policy is forbidden")
+        subjects = {
+            _text(subject, "Caddy TLS policy subject").lower()
+            for subject in _sequence(policy.get("subjects"), "Caddy TLS policy subjects")
+        }
+        owned_subjects = subjects & set(_OWNED_CADDY_TLS_SUBJECTS)
+        if not owned_subjects:
+            continue
+        if subjects != owned_subjects:
+            raise ReleaseManifestError(
+                "owned Caddy TLS issuer policy includes an unrelated subject"
+            )
+        issuers = _sequence(policy.get("issuers"), "Caddy TLS policy issuers")
+        if len(issuers) != 1:
+            raise ReleaseManifestError("owned Caddy TLS issuer is not sole")
+        issuer = _mapping(issuers[0], "Caddy TLS issuer")
+        if (
+            issuer.get("module") != "acme"
+            or issuer.get("ca") != _LE_PRODUCTION_ACME_DIRECTORY
+        ):
+            raise ReleaseManifestError(
+                "owned Caddy TLS issuer is not Let's Encrypt production"
+            )
+        for subject in owned_subjects:
+            if subject in observed_tls_subjects:
+                raise ReleaseManifestError("owned Caddy TLS issuer is ambiguous")
+            observed_tls_subjects[subject] = {
+                "module": "acme",
+                "ca": _LE_PRODUCTION_ACME_DIRECTORY,
+            }
+    if set(observed_tls_subjects) != set(_OWNED_CADDY_TLS_SUBJECTS):
+        raise ReleaseManifestError("owned Caddy TLS issuer coverage is missing")
     http = _mapping(apps.get("http"), "Caddy HTTP app")
     servers = _mapping(http.get("servers"), "Caddy servers")
     routes: list[dict[str, object]] = []
@@ -5397,6 +5467,9 @@ def _caddy_projection(
                 hosts = local_hosts
             if local_paths:
                 paths = local_paths
+            retired_hosts = hosts & _RETIRED_CADDY_HOSTNAMES
+            if retired_hosts:
+                raise ReleaseManifestError("retired Caddy hostname is still active")
             effective_matchers = local_matchers or [
                 dict(item) for item in inherited_matchers
             ]
@@ -5635,11 +5708,22 @@ def _caddy_projection(
     }
     projection: dict[str, object] = {
         "routes": routes,
+        "owned_tls_issuers": {
+            subject: observed_tls_subjects[subject]
+            for subject in _OWNED_CADDY_TLS_SUBJECTS
+        },
         "approval_material": projection_material,
         "unauthenticated_probes": unauthenticated,
         "authenticated_probes": authenticated,
     }
-    projection["semantic_sha256"] = hashlib.sha256(_canonical_json(routes)).hexdigest()
+    projection["semantic_sha256"] = hashlib.sha256(
+        _canonical_json(
+            {
+                "routes": routes,
+                "owned_tls_issuers": projection["owned_tls_issuers"],
+            }
+        )
+    ).hexdigest()
     _assert_safe_projection(projection, canaries, "Caddy projection")
     return projection
 
