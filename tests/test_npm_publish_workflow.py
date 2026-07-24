@@ -37,3 +37,19 @@ def test_verifier_publish_workflow_pins_actions_and_disables_release_cache() -> 
     assert action_uses
     assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", item) for item in action_uses)
     assert "package-manager-cache: false" in source
+
+
+def test_verifier_publish_workflow_preflights_the_exact_public_contract() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    build = source.index("- name: Build the exact publication tarball")
+    preflight = source.index(
+        "- name: Verify exact tarball in a clean consumer before publication"
+    )
+    publish = source.index("- name: Publish exact tarball with registry provenance")
+
+    assert build < preflight < publish
+    assert source.count("typeof m.verifyProofRegistry!=='function'") == 2
+    assert "typeof m.verifyRegistry" not in source
+    assert source.count("./node_modules/.bin/concordia-verify --help") == 2
+    assert 'npm install --ignore-scripts "$tarball"' in source

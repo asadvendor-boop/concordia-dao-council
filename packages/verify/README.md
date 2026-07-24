@@ -48,6 +48,9 @@ can publish by itself.
 ## CLI
 
 ```bash
+# Print the canonical command synopsis. This exits successfully.
+concordia-verify --help
+
 # Verify a local proof-registry document and repository-relative artifacts.
 concordia-verify local ./registry.json
 
@@ -67,7 +70,8 @@ concordia-verify live DAO-PROP-EXAMPLE \
   --rpc-endpoint https://node-b.example/rpc
 ```
 
-All CLI results are stable, pretty-printed JSON on stdout. URL and proposal
+`--help` prints the human-readable command synopsis. All verification results
+are stable, pretty-printed JSON on stdout. URL and proposal
 registry/artifact modes use bounded `GET` requests. Live mode sends `POST`
 requests only for an explicit allowlist of read-only Casper JSON-RPC methods.
 All modes reject embedded URL credentials, network redirects are not followed,

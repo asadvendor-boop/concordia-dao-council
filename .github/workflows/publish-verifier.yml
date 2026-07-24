@@ -93,6 +93,22 @@ jobs:
           sha256sum "$tarball" > npm-tarball-sha256.txt
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
+      - name: Verify exact tarball in a clean consumer before publication
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          tarball="$(realpath "packages/verify/$TARBALL")"
+          test -f "$tarball"
+          consumer="$(mktemp -d)"
+          trap 'rm -rf "$consumer"' EXIT
+          cd "$consumer"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts "$tarball"
+          node --input-type=module -e "const m=await import('@concordia-dao/verify'); if(typeof m.verifyProofRegistry!=='function'||Object.hasOwn(m,'verifyRegistry')) process.exit(1)"
+          ./node_modules/.bin/concordia-verify --help >/dev/null
+
       - name: Publish exact tarball with registry provenance
         working-directory: packages/verify
         shell: bash
@@ -130,6 +146,6 @@ jobs:
           cd "$consumer"
           npm init --yes >/dev/null
           npm install --ignore-scripts "$package"
-          node --input-type=module -e "const m=await import('@concordia-dao/verify'); if(typeof m.verifyRegistry!=='function') process.exit(1)"
+          node --input-type=module -e "const m=await import('@concordia-dao/verify'); if(typeof m.verifyProofRegistry!=='function'||Object.hasOwn(m,'verifyRegistry')) process.exit(1)"
           ./node_modules/.bin/concordia-verify --help >/dev/null
           npm audit signatures

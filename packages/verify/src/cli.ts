@@ -7,6 +7,9 @@ import { verifyProposal } from "./modes/proposal.js";
 import { verifyUrl } from "./modes/url.js";
 import { modeFailure, type ModeResult } from "./modes/common.js";
 
+const COMMAND_SYNOPSIS =
+  "concordia-verify local <file> | url <https-url> | proposal <id> --base-url <https-url> | live <id> --base-url <https-url> --rpc-endpoint <https-rpc> --rpc-endpoint <https-rpc>";
+
 async function main(arguments_: string[]): Promise<ModeResult> {
   const [mode, subject, ...rest] = arguments_;
   const now = option(rest, "--now");
@@ -64,11 +67,16 @@ function usage(mode: string): ModeResult {
     mode === "url" || mode === "proposal" || mode === "live" ? mode : "local",
     "invalid",
     "usage_error",
-    "usage: concordia-verify local <file> | url <https-url> | proposal <id> --base-url <https-url> | live <id> --base-url <https-url> --rpc-endpoint <https-rpc> --rpc-endpoint <https-rpc>",
+    `usage: ${COMMAND_SYNOPSIS}`,
   );
   return { ...failure, exitCode: EXIT_CODES.USAGE };
 }
 
-const result = await main(process.argv.slice(2));
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-process.exitCode = result.exitCode;
+const commandLineArguments = process.argv.slice(2);
+if (commandLineArguments.length === 1 && commandLineArguments[0] === "--help") {
+  process.stdout.write(`Usage: ${COMMAND_SYNOPSIS}\n`);
+} else {
+  const result = await main(commandLineArguments);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exitCode = result.exitCode;
+}

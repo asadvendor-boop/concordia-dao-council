@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -185,6 +185,75 @@ test("CLI usage errors have a stable non-verification exit code", () => {
   const body = JSON.parse(result.stdout);
   assert.equal(body.status, "invalid");
   assert.equal(body.error.code, "usage_error");
+});
+
+test("CLI help prints the canonical usage and exits successfully", () => {
+  const result = run("--help");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /^Usage: concordia-verify /);
+  assert.match(result.stdout, /live <id> --base-url <https-url>/);
+});
+
+test("exact tarball clean consumer exposes the documented API and successful help", async () => {
+  const cleanRoot = await mkdtemp(path.join(os.tmpdir(), "concordia-verify-tarball-"));
+  const consumerRoot = path.join(cleanRoot, "consumer");
+  await mkdir(consumerRoot);
+  await writeFile(
+    path.join(consumerRoot, "package.json"),
+    `${JSON.stringify({
+      name: "concordia-verifier-clean-consumer",
+      private: true,
+      type: "module",
+      version: "0.0.0",
+    })}\n`,
+  );
+  try {
+    const packed = spawnSync(
+      "npm",
+      ["pack", "--ignore-scripts", "--json", "--pack-destination", cleanRoot],
+      { cwd: PACKAGE_ROOT, encoding: "utf8", shell: false },
+    );
+    assert.equal(packed.status, 0, packed.stderr);
+    const packResult = JSON.parse(packed.stdout);
+    assert.equal(packResult.length, 1);
+    const tarball = path.join(cleanRoot, packResult[0].filename);
+    const installed = spawnSync(
+      "npm",
+      [
+        "install",
+        "--ignore-scripts",
+        "--offline",
+        "--no-audit",
+        "--no-fund",
+        tarball,
+      ],
+      { cwd: consumerRoot, encoding: "utf8", shell: false },
+    );
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const imported = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        "const m=await import('@concordia-dao/verify'); if(typeof m.verifyProofRegistry!=='function'||Object.hasOwn(m,'verifyRegistry')) process.exit(1)",
+      ],
+      { cwd: consumerRoot, encoding: "utf8", shell: false },
+    );
+    assert.equal(imported.status, 0, imported.stderr);
+
+    const help = spawnSync(
+      path.join(consumerRoot, "node_modules", ".bin", "concordia-verify"),
+      ["--help"],
+      { cwd: consumerRoot, encoding: "utf8", shell: false },
+    );
+    assert.equal(help.status, 0, help.stderr);
+    assert.equal(help.stderr, "");
+    assert.match(help.stdout, /^Usage: concordia-verify /);
+  } finally {
+    await rm(cleanRoot, { recursive: true, force: true });
+  }
 });
 
 test("stock CLI live mode requires two explicit trusted RPC endpoints", () => {
