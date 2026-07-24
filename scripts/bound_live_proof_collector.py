@@ -70,7 +70,7 @@ _FIXED_PLAN_PATHS = {
     ),
 }
 _HEALTH_URLS = {
-    "safepay_v2": "https://x402-provider.47.84.232.193.sslip.io/health",
+    "safepay_v2": "https://safepay.concordiadao.xyz/health",
     "official_x402_settlement_v1": "https://x402.concordiadao.xyz/health",
 }
 _FIXED_URLS = {
@@ -78,7 +78,7 @@ _FIXED_URLS = {
         "casper_rpc_a": "https://node.testnet.casper.network/rpc",
         "casper_rpc_b": "https://node.testnet.cspr.cloud/rpc",
         "redemption": (
-            "https://x402-provider.47.84.232.193.sslip.io/x402/v2/redemptions"
+            "https://safepay.concordiadao.xyz/x402/v2/redemptions"
         ),
     },
     "official_x402_settlement_v1": {

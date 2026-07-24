@@ -1576,10 +1576,7 @@ def _caddy_raw() -> dict[str, object]:
                             {
                                 "match": [
                                     {
-                                        "host": [
-                                            "concordia.47.84.232.193.sslip.io",
-                                            "concordiadao.xyz",
-                                        ],
+                                        "host": ["concordiadao.xyz"],
                                         "path": ["/approve*"],
                                     }
                                 ],
@@ -1633,7 +1630,7 @@ def _caddy_raw() -> dict[str, object]:
             }
         }
     }
-    hosts = ["concordia.47.84.232.193.sslip.io", "concordiadao.xyz"]
+    hosts = ["concordiadao.xyz"]
     return {
         "active_config": active_config,
         "approval_material": {
@@ -1852,7 +1849,7 @@ def _http_raw(
                         },
                     },
                     "jaeger_available": True,
-                    "traces_url": "https://concordia.47.84.232.193.sslip.io/traces",
+                    "traces_url": "https://concordiadao.xyz/traces",
                     "redaction": {
                         "status": "applied",
                         "policy": "hashes IDs and proof links only",
@@ -5527,10 +5524,7 @@ def test_caddy_nested_subroutes_preserve_host_path_and_enforcement(
         for route in receipt["projection"]["routes"]
         if "/approve*" in route["paths"]
     )
-    assert nested["hosts"] == [
-        "concordia.47.84.232.193.sslip.io",
-        "concordiadao.xyz",
-    ]
+    assert nested["hosts"] == ["concordiadao.xyz"]
     assert {handler["handler"] for handler in nested["handlers"]} == {
         "authentication",
         "headers",
@@ -5538,7 +5532,7 @@ def test_caddy_nested_subroutes_preserve_host_path_and_enforcement(
     }
 
 
-def test_caddy_accepts_two_exact_protected_approval_hosts(
+def test_caddy_rejects_the_retired_sslip_approval_host(
     release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5546,12 +5540,7 @@ def test_caddy_accepts_two_exact_protected_approval_hosts(
     snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
     caddy = _caddy_raw()
     routes = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"]
-    combined = routes[0]
-    sslip = json.loads(json.dumps(combined))
-    sslip["match"][0]["host"] = ["concordia.47.84.232.193.sslip.io"]
-    apex = json.loads(json.dumps(combined))
-    apex["match"][0]["host"] = ["concordiadao.xyz"]
-    routes[0:1] = [sslip, apex]
+    routes[0]["match"][0]["host"] = ["concordia.47.84.232.193.sslip.io"]
     snapshot = replace(snapshot, caddy=caddy)
     monkeypatch.setattr(
         release_manifest,
@@ -5562,18 +5551,8 @@ def test_caddy_accepts_two_exact_protected_approval_hosts(
         release_manifest, "_proof_verifier_factory", lambda root: verifier
     )
 
-    capture_release_observations_once(repository)
-    receipt = json.loads((repository / RECEIPT_PATHS["caddy"]).read_bytes())
-    approvals = [
-        route
-        for route in receipt["projection"]["routes"]
-        if route["paths"] == ["/approve*"]
-    ]
-    assert len(approvals) == 2
-    assert {tuple(route["hosts"]) for route in approvals} == {
-        ("concordia.47.84.232.193.sslip.io",),
-        ("concordiadao.xyz",),
-    }
+    with pytest.raises(ReleaseManifestError, match="unexpected host|coverage"):
+        capture_release_observations_once(repository)
 
 
 def test_caddy_does_not_flatten_unsafe_match_alternatives(
@@ -5585,7 +5564,7 @@ def test_caddy_does_not_flatten_unsafe_match_alternatives(
     caddy = _caddy_raw()
     approval = caddy["active_config"]["apps"]["http"]["servers"]["shared"]["routes"][0]
     approval["match"] = [
-        {"host": ["concordia.47.84.232.193.sslip.io"]},
+        {"host": ["safepay.concordiadao.xyz"]},
         {"host": ["concordiadao.xyz"], "path": ["/approve*"]},
     ]
     snapshot = replace(snapshot, caddy=caddy)

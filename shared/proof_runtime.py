@@ -22,7 +22,7 @@ from urllib.parse import quote_plus
 from shared.proof_registry import ProofRegistryRepository, proof_item_is_green
 
 
-PUBLIC_BASE_URL = "https://concordia.47.84.232.193.sslip.io"
+PUBLIC_BASE_URL = "https://concordiadao.xyz"
 CANONICAL_PROPOSAL_ID = "DAO-PROP-6CB25C"
 CANONICAL_RECEIPT_HASH = "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
 CANONICAL_CONTRACT_HASH = "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1"

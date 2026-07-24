@@ -115,21 +115,25 @@
 	}
 }
 
-# Preserve every submitted sslip.io route while the purchased apex becomes a
-# first-class alias of the same application.
-{$CONCORDIA_HOSTNAME} {
-	import concordia_app
-}
-
-{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz} {
+# Finals-facing Concordia traffic is served only from the owned apex.
+{$CONCORDIA_HOSTNAME:concordiadao.xyz} {
+	tls {
+		ca https://acme-v02.api.letsencrypt.org/directory
+	}
 	import concordia_app
 }
 
 {$CONCORDIA_WWW_HOSTNAME:www.concordiadao.xyz} {
-	redir https://{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz}{uri} 308
+	tls {
+		ca https://acme-v02.api.letsencrypt.org/directory
+	}
+	redir https://{$CONCORDIA_HOSTNAME:concordiadao.xyz}{uri} 308
 }
 
-{$X402_PROVIDER_HOSTNAME} {
+{$X402_PROVIDER_HOSTNAME:safepay.concordiadao.xyz} {
+	tls {
+		ca https://acme-v02.api.letsencrypt.org/directory
+	}
 	encode zstd gzip
 
 	handle /health {
@@ -154,6 +158,9 @@
 }
 
 {$CONCORDIA_X402_HOSTNAME:x402.concordiadao.xyz} {
+	tls {
+		ca https://acme-v02.api.letsencrypt.org/directory
+	}
 	encode zstd gzip
 
 	handle / {

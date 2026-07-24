@@ -26,7 +26,7 @@ def default_gateway_base() -> str:
         return configured.rstrip("/")
     public_base = os.getenv("CONCORDIA_PUBLIC_BASE_URL", "").strip().rstrip("/")
     if not public_base:
-        hostname = os.getenv("CONCORDIA_HOSTNAME", "concordia.47.84.232.193.sslip.io").strip().rstrip("/")
+        hostname = os.getenv("CONCORDIA_HOSTNAME", "concordiadao.xyz").strip().rstrip("/")
         public_base = hostname if hostname.startswith(("http://", "https://")) else f"https://{hostname}"
     return f"{public_base}/api/ipfs"
 

@@ -5,9 +5,13 @@ export const REQUEST_SCHEMA =
 export const RESULT_SCHEMA =
   "concordia.organizer_rendered_link_audit.v2";
 export const APP_ORIGIN =
-  "https://concordia.47.84.232.193.sslip.io";
+  "https://concordiadao.xyz";
 export const DOCS_ORIGIN = "https://docs.concordiadao.xyz";
 export const PROPOSAL_ID = "DAO-PROP-6CB25C";
+// The committed handoff request is immutable historical input. Its digest is
+// accepted only while normalizing every probe to the owned app origin.
+const HISTORICAL_REQUEST_SHA256 =
+  "a2ea0d2627b2c3ce3cb232426baeec9003fed538b37581e0e0f463686bd5283e";
 
 const CASPER_DEPLOYS = Object.freeze({
   canonical:
@@ -379,7 +383,9 @@ export function validateRequest(value) {
   const expected = expectedRequest();
   if (
     value.schema_version !== REQUEST_SCHEMA ||
-    value.app_origin !== APP_ORIGIN ||
+    (value.app_origin !== APP_ORIGIN &&
+      createHash("sha256").update(canonicalJson(value)).digest("hex") !==
+        HISTORICAL_REQUEST_SHA256) ||
     value.docs_origin !== DOCS_ORIGIN ||
     value.proposal_id !== PROPOSAL_ID
   ) {

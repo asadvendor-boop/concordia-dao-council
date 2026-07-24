@@ -42,25 +42,23 @@ const REQUIRED_ROUTE_IDS = new Set([
   "dorahacks_buidl_46732",
 ]);
 const ALLOWED_TOP_LEVEL_HOSTS = new Set([
-  "concordia.47.84.232.193.sslip.io",
-  "x402-provider.47.84.232.193.sslip.io",
   "concordiadao.xyz",
   "www.concordiadao.xyz",
   "docs.concordiadao.xyz",
+  "safepay.concordiadao.xyz",
   "x402.concordiadao.xyz",
   "www.youtube.com",
   "dorahacks.io",
 ]);
 const PUBLIC_QUERY_VALUE_KEYS = new Set(["proposal", "v"]);
 const FIRST_PARTY_HTML_HOSTS = new Set([
-  "concordia.47.84.232.193.sslip.io",
   "concordiadao.xyz",
   "www.concordiadao.xyz",
   "docs.concordiadao.xyz",
 ]);
-const APP_ORIGIN = "https://concordia.47.84.232.193.sslip.io";
+const APP_ORIGIN = "https://concordiadao.xyz";
 const FIXED_BROWSER_ROUTES = new Map([
-  ["sslip_app_root", `${APP_ORIGIN}/`],
+  ["app_root", `${APP_ORIGIN}/`],
   ["custom_apex_root", "https://concordiadao.xyz/"],
   ["custom_www_root", "https://www.concordiadao.xyz/"],
   ["custom_docs_root", "https://docs.concordiadao.xyz/"],

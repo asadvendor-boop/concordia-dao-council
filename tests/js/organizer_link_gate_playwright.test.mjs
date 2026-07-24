@@ -44,7 +44,7 @@ test("real Chromium derives route/tab identity and captures a client-side downlo
       <title>Concordia test route</title>
       <main>
         <div class="brand-copy"><strong>Concordia DAO Council</strong></div>
-        <a class="nav-item active" href="https://concordia.47.84.232.193.sslip.io/dashboard/proof">Proof Center</a>
+        <a class="nav-item active" href="https://concordiadao.xyz/dashboard/proof">Proof Center</a>
         <h1>Proof Center</h1>
         <button
           id="proof-tab-onchain"
@@ -105,7 +105,7 @@ test("real Chromium WebSocket routing aborts before server connection and record
     page.on("websocket", (socket) => browserSockets.push(socket.url()));
     await installReadOnlyWebSocketGuard(page, blocked);
     await page.route(
-      "https://concordia.47.84.232.193.sslip.io/websocket-test",
+      "https://concordiadao.xyz/websocket-test",
       (route) =>
         route.fulfill({
           contentType: "text/html",
@@ -113,7 +113,7 @@ test("real Chromium WebSocket routing aborts before server connection and record
         }),
     );
     await page.goto(
-      "https://concordia.47.84.232.193.sslip.io/websocket-test",
+      "https://concordiadao.xyz/websocket-test",
     );
     const refusal = await page.evaluate(() => {
       try {

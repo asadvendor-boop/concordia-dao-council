@@ -1035,7 +1035,7 @@ def test_ipfs_default_gateway_uses_concordia_proxy_not_public_ipfs(monkeypatch):
 
     status = ipfs_status()
 
-    assert status["gateway_base"] == "https://concordia.47.84.232.193.sslip.io/api/ipfs"
+    assert status["gateway_base"] == "https://concordiadao.xyz/api/ipfs"
     assert "ipfs.io" not in status["gateway_base"]
 
 

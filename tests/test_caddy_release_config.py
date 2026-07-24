@@ -19,17 +19,31 @@ def _config() -> str:
     return CADDYFILE.read_text(encoding="utf-8")
 
 
-def test_sslip_and_purchased_apex_share_the_same_app_route() -> None:
+def test_owned_apex_and_www_redirect_have_the_final_route_contract() -> None:
     config = _config()
 
     assert "(concordia_app)" in config
-    assert "{$CONCORDIA_HOSTNAME}" in config
-    assert "{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz}" in config
-    assert config.count("import concordia_app") == 2
+    assert "{$CONCORDIA_HOSTNAME:concordiadao.xyz}" in config
+    assert "sslip.io" not in config
+    assert config.count("import concordia_app") == 1
     assert "{$CONCORDIA_WWW_HOSTNAME:www.concordiadao.xyz}" in config
     assert (
-        "redir https://{$CONCORDIA_APEX_HOSTNAME:concordiadao.xyz}{uri} 308" in config
+        "redir https://{$CONCORDIA_HOSTNAME:concordiadao.xyz}{uri} 308" in config
     )
+
+
+def test_owned_domain_sites_pin_letsencrypt_production_per_site() -> None:
+    config = _config()
+    production_ca = "ca https://acme-v02.api.letsencrypt.org/directory"
+
+    for site in (
+        "{$CONCORDIA_HOSTNAME:concordiadao.xyz}",
+        "{$X402_PROVIDER_HOSTNAME:safepay.concordiadao.xyz}",
+        "{$CONCORDIA_X402_HOSTNAME:x402.concordiadao.xyz}",
+    ):
+        start = config.index(site)
+        end = config.find("\n}\n\n", start)
+        assert production_ca in config[start:end]
 
 
 def test_approval_boundary_uses_mounted_files_and_overwrites_spoofed_header() -> None:
@@ -58,7 +72,7 @@ def test_all_judge_facing_gateway_proof_routes_precede_dashboard_catchall() -> N
 
     config = _config()
     app_start = config.index("(concordia_app)")
-    app_end = config.index("{$CONCORDIA_HOSTNAME}", app_start)
+    app_end = config.index("{$CONCORDIA_HOSTNAME:concordiadao.xyz}", app_start)
     app = config[app_start:app_end]
 
     matcher_start = app.index("@public_proof_gateway")
@@ -85,17 +99,17 @@ def test_all_judge_facing_gateway_proof_routes_precede_dashboard_catchall() -> N
     assert matcher_start < handler_start < catchall_start
 
 
-def test_provider_sslip_vhost_remains_available_for_tls_repair() -> None:
+def test_safepay_provider_uses_the_owned_domain_default() -> None:
     config = _config()
 
-    assert "{$X402_PROVIDER_HOSTNAME}" in config
+    assert "{$X402_PROVIDER_HOSTNAME:safepay.concordiadao.xyz}" in config
     assert "reverse_proxy concordia-x402-provider:8000" in config
 
 
 def test_safepay_provider_overwrites_client_identity_and_proxy_attestation() -> None:
     config = _config()
 
-    start = config.index("{$X402_PROVIDER_HOSTNAME}")
+    start = config.index("{$X402_PROVIDER_HOSTNAME:safepay.concordiadao.xyz}")
     end = config.index(
         "{$CONCORDIA_X402_HOSTNAME:x402.concordiadao.xyz}",
         start,
@@ -114,7 +128,7 @@ def test_safepay_gateway_route_overwrites_client_identity_and_attestation() -> N
     config = _config()
 
     start = config.index("(concordia_app)")
-    end = config.index("{$CONCORDIA_HOSTNAME}", start)
+    end = config.index("{$CONCORDIA_HOSTNAME:concordiadao.xyz}", start)
     block = config[start:end]
     route_start = block.index("handle /x402/v2/*")
     route_end = block.index("\n\thandle ", route_start + 1)
@@ -135,7 +149,7 @@ def test_safepay_request_body_is_limited_at_both_public_caddy_edges() -> None:
     gateway_end = config.index("\n\thandle ", gateway_start + 1)
     gateway_route = config[gateway_start:gateway_end]
 
-    provider_host = config.index("{$X402_PROVIDER_HOSTNAME}")
+    provider_host = config.index("{$X402_PROVIDER_HOSTNAME:safepay.concordiadao.xyz}")
     provider_start = config.index("handle /x402/*", provider_host)
     provider_end = config.index("\n\thandle ", provider_start + 1)
     provider_route = config[provider_start:provider_end]

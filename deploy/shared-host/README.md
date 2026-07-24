@@ -7,7 +7,7 @@ This profile runs Concordia DAO Council beside the other public demo services on
 Use:
 
 ```text
-https://concordia.47.84.232.193.sslip.io
+https://concordiadao.xyz
 ```
 
 ## Host layout
@@ -277,7 +277,7 @@ docker network create concordia-edge
 ```
 
 2. Copy `Caddyfile.snippet` into the shared proxy Caddyfile.
-3. Add `CONCORDIA_HOSTNAME=concordia.47.84.232.193.sslip.io` to the shared proxy environment.
+3. Add `CONCORDIA_HOSTNAME=concordiadao.xyz`, `CONCORDIA_WWW_HOSTNAME=www.concordiadao.xyz`, `X402_PROVIDER_HOSTNAME=safepay.concordiadao.xyz`, and `CONCORDIA_X402_HOSTNAME=x402.concordiadao.xyz` to the shared proxy environment.
 4. Attach the proxy container to `concordia-edge`.
 5. Mount the same SafePay proxy-attestation file read-only at
    `/run/secrets/safepay_proxy_secret` inside the independently managed shared
@@ -355,8 +355,8 @@ COMPOSE=(
 ```bash
 docker compose --project-name concordia \
   --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps
-curl -fsS https://concordia.47.84.232.193.sslip.io/health
-curl -fsS https://concordia.47.84.232.193.sslip.io/ready
+curl -fsS https://concordiadao.xyz/health
+curl -fsS https://concordiadao.xyz/ready
 docker compose --project-name concordia \
   --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" \
   exec gateway python /app/scripts/casper_preflight.py --network

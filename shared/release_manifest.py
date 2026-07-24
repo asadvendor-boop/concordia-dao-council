@@ -251,12 +251,11 @@ _G1_FREEZE_MANIFEST_PATH = "handoff/G1_FREEZE_MANIFEST.json"
 _G1_FREEZE_ANNOTATION = "Concordia finals G1 interface freeze v2.0-A\n"
 
 PUBLIC_URLS: dict[str, str] = {
-    "custom_apex": "https://concordiadao.xyz/",
-    "custom_docs": "https://docs.concordiadao.xyz/",
-    "custom_www": "https://www.concordiadao.xyz/",
-    "custom_x402": "https://x402.concordiadao.xyz/",
-    "sslip_app": "https://concordia.47.84.232.193.sslip.io/",
-    "sslip_provider": "https://x402-provider.47.84.232.193.sslip.io/",
+    "app": "https://concordiadao.xyz/",
+    "www": "https://www.concordiadao.xyz/",
+    "docs": "https://docs.concordiadao.xyz/",
+    "safepay_provider": "https://safepay.concordiadao.xyz/",
+    "official_x402": "https://x402.concordiadao.xyz/",
 }
 RPC_PROVIDERS: dict[str, dict[str, str]] = {
     "casper_association": {
@@ -271,8 +270,8 @@ RPC_PROVIDERS: dict[str, dict[str, str]] = {
     },
 }
 
-_APP = "https://concordia.47.84.232.193.sslip.io"
-_PROVIDER = "https://x402-provider.47.84.232.193.sslip.io"
+_APP = "https://concordiadao.xyz"
+_PROVIDER = "https://safepay.concordiadao.xyz"
 _PROPOSAL = "DAO-PROP-6CB25C"
 _OFFICIAL_X402_PROPOSAL = "DAO-PROP-X402-FINALS-2026"
 _APP_TITLE = b"Concordia \xe2\x80\x94 Evidence-Bound DAO Governance Council"
@@ -308,7 +307,7 @@ def _probe(
 # settlement endpoint is present.  The sixteen baseline URLs are preserved and
 # the release-specific health/proof surfaces are additive.
 HTTP_PROBE_SPECS: dict[str, dict[str, object]] = {
-    "sslip_app_root": _probe(
+    "app_root": _probe(
         _APP + "/",
         effective_url=_APP + "/dashboard",
         redirects=(
@@ -317,7 +316,7 @@ HTTP_PROBE_SPECS: dict[str, dict[str, object]] = {
         ),
         marker=_APP_TITLE,
     ),
-    "sslip_provider_root": _probe(
+    "safepay_provider_root": _probe(
         _PROVIDER + "/",
         content_type="text/plain; charset=utf-8",
         body=b"Concordia x402 Risk Oracle Provider",
@@ -718,11 +717,7 @@ _FIXED_DNS_EXPECTATIONS: dict[str, dict[str, tuple[str, ...] | None]] = {
         "cnames": ("asadvendor-boop.github.io.",),
     },
     "x402.concordiadao.xyz": {"addresses": (_FIXED_VM_IP,), "cnames": ()},
-    "concordia.47.84.232.193.sslip.io": {
-        "addresses": (_FIXED_VM_IP,),
-        "cnames": (),
-    },
-    "x402-provider.47.84.232.193.sslip.io": {
+    "safepay.concordiadao.xyz": {
         "addresses": (_FIXED_VM_IP,),
         "cnames": (),
     },
@@ -5483,10 +5478,7 @@ def _caddy_projection(
         for route in routes
         if any(path.startswith("/approve") for path in route["paths"])
     ]
-    expected_approval_hosts = {
-        "concordia.47.84.232.193.sslip.io",
-        "concordiadao.xyz",
-    }
+    expected_approval_hosts = {"concordiadao.xyz"}
     host_counts = {host: 0 for host in expected_approval_hosts}
     if not approvals:
         raise ReleaseManifestError("approval Caddy route is missing")
@@ -12600,10 +12592,7 @@ def _collect_approval_caddy_probes(
     except UnicodeError as exc:  # pragma: no cover - base64 is ASCII by construction
         raise ReleaseManifestError("approval probe credential encoding failed") from exc
 
-    hosts = (
-        "concordia.47.84.232.193.sslip.io",
-        "concordiadao.xyz",
-    )
+    hosts = ("concordiadao.xyz",)
     unauthenticated: list[dict[str, object]] = []
     authenticated: list[dict[str, object]] = []
     for host in sorted(hosts):
