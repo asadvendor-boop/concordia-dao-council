@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from pycspr import crypto, serializer
-from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
+from pycspr.factory.digests import create_digest_of_deploy
 from pycspr.types.cl import CLV_ByteArray, CLV_String, CLV_U32
 from pycspr.types.node.rpc import (
     Deploy,
@@ -31,6 +31,7 @@ from pycspr.types.node.rpc import (
 
 from shared.exact_casper_deploy_json import (
     canonical_deploy_rpc_json,
+    exact_deploy_body_hash,
     normalize_deploy_rpc_json,
 )
 
@@ -756,7 +757,7 @@ def _verify_deploy(
         argument_order=session["argument_order"],
         argument_types=argument_types,
     )
-    body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
+    body_hash = exact_deploy_body_hash(deploy)
     if deploy.header.body_hash != body_hash:
         raise HistoricalOdraArtifactError("receipt deploy body hash mismatch")
     deploy_hash = create_digest_of_deploy(deploy.header)

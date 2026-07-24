@@ -24,7 +24,7 @@ from pycspr.factory.deploys import (
     create_deploy_parameters,
     create_standard_payment,
 )
-from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
+from pycspr.factory.digests import create_digest_of_deploy
 from pycspr.types.cl import CLV_Bool, CLV_ByteArray, CLV_String, CLV_U512, CLV_U8
 from pycspr.types.node.rpc import Deploy, DeployOfModuleBytes
 
@@ -40,6 +40,7 @@ from shared.casper_rpc_transport import (
 from shared.casper_signer_file import load_secure_casper_signer
 from shared.exact_casper_deploy_json import (
     canonical_deploy_rpc_json,
+    exact_deploy_body_hash,
     exact_deploy_rpc_json,
     normalize_deploy_rpc_json,
 )
@@ -180,9 +181,7 @@ class DurableDeployJournal:
             parsed_deploy = serializer.from_json(dict(value["signed_deploy"]), Deploy)
             canonical_deploy = canonical_deploy_rpc_json(parsed_deploy)
             casper_bytes = serializer.to_bytes(parsed_deploy)
-            body_hash = create_digest_of_deploy_body(
-                parsed_deploy.payment, parsed_deploy.session
-            )
+            body_hash = exact_deploy_body_hash(parsed_deploy)
             recomputed_hash = create_digest_of_deploy(parsed_deploy.header)
         except Exception as exc:
             raise InstallValidationError(
@@ -1236,7 +1235,7 @@ def validate_finalized_install_deploy(
     try:
         deploy = serializer.from_json(dict(value), Deploy)
         canonical_json = canonical_deploy_rpc_json(deploy)
-        body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
+        body_hash = exact_deploy_body_hash(deploy)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:
         raise InstallValidationError(

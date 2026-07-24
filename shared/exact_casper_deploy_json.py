@@ -16,12 +16,22 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
-from pycspr import serializer
+from pycspr import crypto, serializer
 from pycspr.factory.digests import (
     create_digest_of_deploy,
     create_digest_of_deploy_body,
 )
-from pycspr.types.node.rpc import Deploy
+from pycspr.types.cl import (
+    CLT_Type_U32,
+    CLV_ByteArray,
+    CLV_Option,
+    CLV_String,
+    CLV_U32,
+)
+from pycspr.types.node.rpc import (
+    Deploy,
+    DeployOfStoredContractByHashVersioned,
+)
 
 
 class ExactDeployJsonError(ValueError):
@@ -29,6 +39,57 @@ class ExactDeployJsonError(ValueError):
 
 
 _HEX_RE = re.compile(r"[0-9a-fA-F]+")
+
+
+def _bytesrepr_vector(items: Sequence[bytes]) -> bytes:
+    """Encode a Casper bytesrepr vector of already-encoded values."""
+
+    return len(items).to_bytes(4, "little") + b"".join(items)
+
+
+def _versioned_package_session_bytes(
+    session: DeployOfStoredContractByHashVersioned,
+) -> bytes:
+    """Return node-compatible bytesrepr for a versioned package call.
+
+    ``pycspr==1.2.0`` uses the legacy stored-contract discriminant and a raw
+    U32 version when hashing this session variant. Casper nodes expect the
+    current ``StoredVersionedContractByHash`` discriminant and an
+    ``Option<U32>``. Keep the correction here so builders and verifiers share
+    one exact implementation.
+    """
+
+    version_value = (
+        None if session.version is None else CLV_U32(int(session.version))
+    )
+    return (
+        bytes([3])
+        + serializer.to_bytes(CLV_ByteArray(session.hash))
+        + serializer.to_bytes(CLV_Option(version_value, CLT_Type_U32()))
+        + serializer.to_bytes(CLV_String(session.entry_point))
+        + _bytesrepr_vector(
+            [serializer.to_bytes(argument) for argument in session.arguments]
+        )
+    )
+
+
+def exact_deploy_body_hash(deploy: Deploy) -> bytes:
+    """Compute the body hash using the exact bytes accepted by Casper nodes."""
+
+    if not isinstance(deploy, Deploy):
+        raise ExactDeployJsonError("deploy must be a pycspr Deploy")
+    if isinstance(
+        deploy.session,
+        DeployOfStoredContractByHashVersioned,
+    ):
+        return crypto.get_hash(
+            serializer.to_bytes(deploy.payment)
+            + _versioned_package_session_bytes(deploy.session)
+        )
+    return create_digest_of_deploy_body(
+        deploy.payment,
+        deploy.session,
+    )
 
 
 def _exact_timestamp(value: object) -> str:
@@ -82,10 +143,7 @@ def canonical_deploy_rpc_json(deploy: Deploy) -> dict[str, Any]:
 def exact_deploy_rpc_json(deploy: Deploy) -> dict[str, Any]:
     """Return outbound RPC JSON only after an exact bytes-and-hashes round-trip."""
 
-    expected_body_hash = create_digest_of_deploy_body(
-        deploy.payment,
-        deploy.session,
-    )
+    expected_body_hash = exact_deploy_body_hash(deploy)
     expected_deploy_hash = create_digest_of_deploy(deploy.header)
     if deploy.header.body_hash != expected_body_hash:
         raise ExactDeployJsonError("deploy body hash differs from exact bytes")
@@ -106,10 +164,7 @@ def exact_deploy_rpc_json(deploy: Deploy) -> dict[str, Any]:
         raise ExactDeployJsonError(
             "deploy JSON round-trip differs from exact deploy bytes"
         )
-    if decoded.header.body_hash != create_digest_of_deploy_body(
-        decoded.payment,
-        decoded.session,
-    ):
+    if decoded.header.body_hash != exact_deploy_body_hash(decoded):
         raise ExactDeployJsonError(
             "decoded deploy body hash differs from exact bytes"
         )

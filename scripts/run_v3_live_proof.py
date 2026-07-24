@@ -33,7 +33,6 @@ from pycspr.factory.deploys import (
     create_deploy,
     create_deploy_parameters,
     create_digest_of_deploy,
-    create_digest_of_deploy_body,
     create_standard_payment,
 )
 from pycspr.types.cl import (
@@ -69,6 +68,7 @@ from shared.casper_rpc_transport import (
 from shared.casper_signer_file import load_secure_casper_signer
 from shared.exact_casper_deploy_json import (
     canonical_deploy_rpc_json,
+    exact_deploy_body_hash,
     exact_deploy_rpc_json,
     normalize_deploy_rpc_json,
 )
@@ -330,10 +330,7 @@ def _validate_checkpoint(value: object) -> dict[str, Any]:
     try:
         parsed_deploy = serializer.from_json(dict(deploy_json), Deploy)
         canonical_deploy = canonical_deploy_rpc_json(parsed_deploy)
-        body_hash = create_digest_of_deploy_body(
-            parsed_deploy.payment,
-            parsed_deploy.session,
-        )
+        body_hash = exact_deploy_body_hash(parsed_deploy)
         deploy_hash = create_digest_of_deploy(parsed_deploy.header)
     except Exception as exc:
         raise LiveProofError(
@@ -519,7 +516,7 @@ def validate_and_stage_browser_import(
         unsigned = serializer.from_json(dict(unsigned_json), Deploy)
         signed = serializer.from_json(dict(signed_json), Deploy)
         canonical_signed = canonical_deploy_rpc_json(signed)
-        body_hash = create_digest_of_deploy_body(signed.payment, signed.session)
+        body_hash = exact_deploy_body_hash(signed)
         deploy_hash = create_digest_of_deploy(signed.header)
     except Exception as exc:
         raise LiveProofError(
@@ -968,7 +965,7 @@ def _validate_journal_step(
     try:
         deploy = serializer.from_json(dict(deploy_json), Deploy)
         canonical = canonical_deploy_rpc_json(deploy)
-        body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
+        body_hash = exact_deploy_body_hash(deploy)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:
         raise LiveProofError(

@@ -13,7 +13,7 @@ from typing import Any
 
 from pycspr import crypto, serializer
 from pycspr.factory.deploys import create_deploy, create_deploy_parameters
-from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
+from pycspr.factory.digests import create_digest_of_deploy
 from pycspr.types.cl import (
     CLT_Type_U64,
     CLV_Key,
@@ -23,6 +23,8 @@ from pycspr.types.cl import (
     CLV_U512,
 )
 from pycspr.types.node.rpc import Deploy, DeployArgument, DeployOfModuleBytes, DeployOfTransfer
+
+from shared.exact_casper_deploy_json import exact_deploy_body_hash
 
 
 CASPER_TEST_CHAIN_NAME = "casper-test"
@@ -186,7 +188,7 @@ def validate_signed_native_transfer_deploy(
             raise NativeTransferDeployError("signed deploy contains trailing bytes")
         raise NativeTransferDeployError("signed deploy uses non-canonical binary encoding")
 
-    computed_body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
+    computed_body_hash = exact_deploy_body_hash(deploy)
     if deploy.header.body_hash != computed_body_hash:
         raise NativeTransferDeployError("body hash mismatch")
     computed_deploy_hash = create_digest_of_deploy(deploy.header)

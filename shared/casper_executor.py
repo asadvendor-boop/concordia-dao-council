@@ -23,7 +23,10 @@ from typing import Any
 
 import httpx
 
-from shared.exact_casper_deploy_json import exact_deploy_rpc_json
+from shared.exact_casper_deploy_json import (
+    exact_deploy_body_hash,
+    exact_deploy_rpc_json,
+)
 
 try:  # Optional: production deployments can install opentelemetry-sdk.
     from opentelemetry import trace
@@ -196,34 +199,6 @@ def _generic_deploy_arguments(argument_specs: dict[str, Any]) -> list[Any]:
     return [DeployArgument(name, args[name]) for name in argument_specs]
 
 
-def _bytesrepr_vector(items: list[bytes]) -> bytes:
-    """Encode a Casper bytesrepr vector of already-encoded items."""
-    return len(items).to_bytes(4, "little") + b"".join(items)
-
-
-def _versioned_package_session_bytes(session: Any) -> bytes:
-    """Return Casper node-compatible bytesrepr for a versioned package call.
-
-    pycspr 1.2 calculates the body hash for versioned package calls with the
-    legacy stored-contract discriminant and raw U32 version encoding. Casper
-    Testnet validates the JSON `StoredVersionedContractByHash` path as the
-    current package-call discriminant plus an optional U32 version. Concordia
-    corrects the body hash before signing, while keeping pycspr's normal JSON
-    shape for broadcast.
-    """
-    from pycspr import serializer
-    from pycspr.types.cl import CLT_Type_U32, CLV_ByteArray, CLV_Option, CLV_String, CLV_U32
-
-    version_value = None if session.version is None else CLV_U32(int(session.version))
-    return (
-        bytes([3])
-        + serializer.to_bytes(CLV_ByteArray(session.hash))
-        + serializer.to_bytes(CLV_Option(version_value, CLT_Type_U32()))
-        + serializer.to_bytes(CLV_String(session.entry_point))
-        + _bytesrepr_vector([serializer.to_bytes(argument) for argument in session.arguments])
-    )
-
-
 def _normalize_versioned_package_deploy_hash(deploy: Any) -> Any:
     """Patch pycspr's body/deploy hash for `StoredVersionedContractByHash`.
 
@@ -231,15 +206,12 @@ def _normalize_versioned_package_deploy_hash(deploy: Any) -> Any:
     `deploy.hash`, so this keeps signatures, header body_hash, and Casper's
     network-side validation aligned.
     """
-    from pycspr import crypto, serializer
     from pycspr.factory.digests import create_digest_of_deploy
     from pycspr.types.node.rpc import DeployOfStoredContractByHashVersioned
 
     if not isinstance(deploy.session, DeployOfStoredContractByHashVersioned):
         return deploy
-    deploy.header.body_hash = crypto.get_hash(
-        serializer.to_bytes(deploy.payment) + _versioned_package_session_bytes(deploy.session)
-    )
+    deploy.header.body_hash = exact_deploy_body_hash(deploy)
     deploy.hash = create_digest_of_deploy(deploy.header)
     return deploy
 

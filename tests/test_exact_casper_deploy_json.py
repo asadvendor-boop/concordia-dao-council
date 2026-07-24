@@ -23,7 +23,12 @@ from pycspr.types.node.rpc import Deploy, DeployOfModuleBytes
 
 from scripts.run_v3_live_proof import _build_call
 from scripts.verify_v3_proof import ProofVerificationError, _validated_deploy
-from shared.exact_casper_deploy_json import exact_deploy_rpc_json
+from shared.casper_executor import _assemble_generic_contract_call_deploy
+from shared.exact_casper_deploy_json import (
+    ExactDeployJsonError,
+    exact_deploy_body_hash,
+    exact_deploy_rpc_json,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +98,58 @@ def test_v3_call_builder_survives_pycspr_whole_second_timestamp(
 
     assert value["header"]["timestamp"] == "2026-07-24T04:06:37.000Z"
     assert decoded.hash == create_digest_of_deploy(decoded.header)
+
+
+@pytest.mark.parametrize("signed", (False, True))
+def test_versioned_package_deploy_uses_node_compatible_body_hash_at_whole_second(
+    monkeypatch: pytest.MonkeyPatch,
+    signed: bool,
+) -> None:
+    fixed = datetime(2026, 7, 24, 4, 6, 37, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return fixed if tz is not None else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(deploy_factory.datetime, "datetime", FixedDateTime)
+    private_key = parse_private_key_bytes(
+        bytes([23]) * 32,
+        KeyAlgorithm.ED25519,
+    )
+    deploy = _assemble_generic_contract_call_deploy(
+        account=private_key if signed else private_key.to_public_key(),
+        contract_hash="hash-" + "bc" * 32,
+        entry_point="approve_envelope",
+        argument_specs={
+            "proposal_id": {
+                "cl_type": "String",
+                "value": "DAO-PROP-V3-PACKAGE",
+            }
+        },
+        chain_name="casper-test",
+        payment_amount=5_000_000_000,
+        ttl="30m",
+        call_target="package",
+        contract_version=1,
+    )
+    if signed:
+        deploy.approve(private_key)
+
+    value = exact_deploy_rpc_json(deploy)
+    decoded = serializer.from_json(value, Deploy)
+
+    assert value["header"]["timestamp"] == "2026-07-24T04:06:37.000Z"
+    assert decoded.header.body_hash == exact_deploy_body_hash(decoded)
+    assert decoded.hash == create_digest_of_deploy(decoded.header)
+    assert bool(value["approvals"]) is signed
+
+    decoded.header.body_hash = bytes(32)
+    with pytest.raises(
+        ExactDeployJsonError,
+        match="deploy body hash differs from exact bytes",
+    ):
+        exact_deploy_rpc_json(decoded)
 
 
 @pytest.mark.parametrize(

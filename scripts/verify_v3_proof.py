@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 from pycspr import crypto, serializer
 from pycspr.factory.accounts import create_public_key_from_account_key
-from pycspr.factory.digests import create_digest_of_deploy, create_digest_of_deploy_body
+from pycspr.factory.digests import create_digest_of_deploy
 from pycspr.types.cl import CLV_ByteArray, CLV_String, CLV_U32
 from pycspr.types.node.rpc import Deploy
 
@@ -31,6 +31,7 @@ from scripts.read_v3_state import validate_verified_readback, verify_and_seal_re
 from shared.bound_command import BoundCommandError, BoundCommandResult, _run_bound_git
 from shared.exact_casper_deploy_json import (
     canonical_deploy_rpc_json,
+    exact_deploy_body_hash,
     normalize_deploy_rpc_json,
 )
 
@@ -595,7 +596,7 @@ def _validated_deploy(
         deploy = serializer.from_json(dict(value), Deploy)
         canonical = serializer.to_bytes(deploy)
         canonical_json = canonical_deploy_rpc_json(deploy)
-        body_hash = create_digest_of_deploy_body(deploy.payment, deploy.session)
+        body_hash = exact_deploy_body_hash(deploy)
         deploy_hash = create_digest_of_deploy(deploy.header)
     except Exception as exc:
         raise ProofVerificationError("deploy JSON cannot be decoded canonically") from exc
