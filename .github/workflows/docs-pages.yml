@@ -11,6 +11,7 @@ on:
       - "docs-site/**"
       - "mkdocs.yml"
       - "docs/requirements-docs.txt"
+      - "scripts/write_docs_release_identity.py"
       - ".github/workflows/docs-pages.yml"
 
 # Least privilege: read-only by default; the deploy job alone gets
@@ -40,6 +41,11 @@ jobs:
 
       - name: Build site (strict — warnings are errors)
         run: mkdocs build --strict
+
+      - name: Bind deployed docs to this workflow run
+        run: >-
+          python scripts/write_docs_release_identity.py
+          --output site/release-identity.json
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
