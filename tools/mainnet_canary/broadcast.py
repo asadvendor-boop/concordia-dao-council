@@ -28,7 +28,7 @@ from pathlib import Path
 
 from tools.mainnet_canary import PREP_LANE
 from tools.mainnet_canary.constants import LIVE_AUTHORIZATION_MOUNT_PATH
-from tools.mainnet_canary.cost_model import require_approved_estimate
+from tools.mainnet_canary.economic_manifest import build_economic_manifest
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.journal import CanaryJournal
 from tools.mainnet_canary.plan import plan_document_hash
@@ -118,10 +118,21 @@ def run_broadcast_guard(
     *,
     plan_document: dict[str, object],
     journal_path: Path,
-    ceiling_path: Path | None,
-    measured_costs_path: Path | None,
+    calibration_path: Path | None = None,
+    ceiling_path: Path | None = None,
+    measured_costs_path: Path | None = None,
 ) -> dict[str, object]:
-    """Run every broadcast gate in order.  Never submits in this lane."""
+    """Run every broadcast gate in order.  This surface never submits;
+    submission is the separate journal-gated boundary in
+    :mod:`tools.mainnet_canary.submission`."""
+
+    # Correction round (blocker 6): legacy cost inputs are retired.
+    if ceiling_path is not None or measured_costs_path is not None:
+        raise CanaryRefusal(
+            RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED,
+            "the legacy measured-cost/spend-ceiling documents are retired; "
+            "testnet-calibration.v2 is the sole cost authority",
+        )
 
     # Gate 1 — durable journal state must exist before any broadcast.
     #
@@ -172,18 +183,32 @@ def run_broadcast_guard(
         authorization, plan_hash=plan_hash, rc_tag=rc_tag
     )
 
-    # Gate 4 — fully measured cost model within the human-approved ceiling
-    # AND the authorization ceiling.
-    estimate = require_approved_estimate(
-        repo_root,
-        measured_costs_path=measured_costs_path,
-        ceiling_path=ceiling_path,
+    # Gate 4 — the plan-derived, calibration-grounded economic manifest must
+    # sit within the authorization ceiling.  testnet-calibration.v2 is the
+    # SOLE cost authority (blocker 6): no measured-cost document, no operator
+    # ceiling, no fixed line-item list, no assumed vote count.
+    if calibration_path is None or not calibration_path.is_file():
+        raise CanaryRefusal(
+            RefusalCode.CALIBRATION_RECEIPT_ABSENT,
+            "broadcast requires the finalized Testnet calibration document",
+        )
+    calibration_raw = calibration_path.read_text(encoding="utf-8")
+    refuse_if_secret_material(calibration_raw, context="testnet-calibration")
+    try:
+        calibration = json.loads(calibration_raw)
+    except json.JSONDecodeError as exc:
+        raise CanaryRefusal(
+            RefusalCode.CALIBRATION_RECEIPT_ABSENT,
+            "calibration document is not valid JSON",
+        ) from exc
+    manifest = build_economic_manifest(
+        plan_document, calibration=calibration, operator_ceilings={}
     )
-    total = int(str(estimate["total_motes"]))
+    total = int(str(manifest["max_total_outlay_motes"]))
     if total > int(str(authorization["max_total_motes"])):
         raise CanaryRefusal(
             RefusalCode.COST_CEILING_EXCEEDED,
-            "estimate exceeds the authorization's max-CSPR ceiling",
+            "manifest ceiling exceeds the authorization's max-CSPR ceiling",
         )
 
     # Gate 5 — reconcile-before-anything: an in-flight step blocks all new
@@ -222,8 +247,10 @@ def run_broadcast_guard(
     if PREP_LANE:
         raise CanaryRefusal(
             RefusalCode.SUBMISSION_NOT_IMPLEMENTED_IN_PREP,
-            "broadcast submission is not implemented in the preparation "
-            "lane; no code path in this package can sign or submit",
+            "the broadcast mode is a guard surface only; live submission "
+            "happens exclusively through the journal-gated `submit` boundary "
+            "(imported wallet-signed bytes, exactly once) — this package "
+            "still contains no signing path",
         )
     raise CanaryRefusal(  # pragma: no cover - structurally unreachable
         RefusalCode.SUBMISSION_NOT_IMPLEMENTED_IN_PREP,

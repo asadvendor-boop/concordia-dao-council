@@ -21,36 +21,30 @@ import pytest
 import mc_support
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.finality_v2 import (
-    OBSERVATION_V2_SCHEMA_ID,
+    OBSERVATION_V3_SCHEMA_ID,
     evaluate_dual_provider,
-    validate_observation_v2,
+    validate_observation_v3,
 )
 
 STEP = "G-finalize-exact-envelope"
 
 
-def _provider(provider_id: str, host: str) -> dict[str, object]:
-    return {
-        "provider_id": provider_id,
-        "endpoint_host": host,
-        "method": "info_get_deploy",
-        "request_sha256": "11" * 32,
-        "response_sha256": "22" * 32,
-        "retrieved_at_unix": 1_700_000_000,
-        "api_version": "2.0.0",
-        "chainspec_name": "casper",
-        # Comfortably deeper than FINALITY_CONFIRMATION_DEPTH so these
-        # cases isolate the property they name; depth has its own tests.
-        "chain_tip_height": 200,
-    }
+def _provider(provider_id: str, host: str, document: dict[str, object]) -> dict[str, object]:
+    # The raw exchanges are synthesized to agree with the observation's own
+    # claims (the collector's construction invariant).  The default fixture
+    # tip (128) sits exactly at the required depth over height 120; depth
+    # behaviour has its own dedicated cases.
+    return mc_support.make_v3_provider_for_observation(
+        document, provider_id, host
+    )
 
 
 def _observation(step_id: str = STEP, provider_id: str = "provider-a", host: str = "node-a.example", **overrides: object) -> dict[str, object]:
     document = mc_support.make_observation(step_id, **overrides)
-    document["schema_id"] = OBSERVATION_V2_SCHEMA_ID
-    document["provider"] = _provider(provider_id, host)
+    document["schema_id"] = OBSERVATION_V3_SCHEMA_ID
     if "state_readback" not in overrides:
         document["state_readback"] = None
+    document["provider"] = _provider(provider_id, host, document)
     return document
 
 
@@ -104,7 +98,7 @@ class TestRawEvidence:
     def test_v1_schema_without_provider_evidence_refuses(self) -> None:
         document = mc_support.make_observation(STEP)
         with pytest.raises(CanaryRefusal) as refusal:
-            validate_observation_v2(document)
+            validate_observation_v3(document)
         assert refusal.value.code == RefusalCode.OBSERVATION_MALFORMED
 
     @pytest.mark.parametrize(
@@ -114,14 +108,14 @@ class TestRawEvidence:
         observation = _observation()
         del observation["provider"][field]
         with pytest.raises(CanaryRefusal) as refusal:
-            validate_observation_v2(observation)
+            validate_observation_v3(observation)
         assert refusal.value.code == RefusalCode.OBSERVATION_MALFORMED
 
     def test_wrong_network_provider_refuses(self) -> None:
         observation = _observation()
         observation["provider"]["chainspec_name"] = "casper-test"
         with pytest.raises(CanaryRefusal) as refusal:
-            validate_observation_v2(observation)
+            validate_observation_v3(observation)
         assert refusal.value.code == RefusalCode.NETWORK_MISMATCH
 
 
@@ -130,7 +124,7 @@ class TestDisagreement:
         "overrides",
         [
             {"block": {"block_hash": "aa" * 32}},
-            {"block": {"block_height": 121}},
+            {"block": {"block_height": 119}},
             {"block": {"state_root_hash": "bb" * 32}},
             {"deploy_hash": "cc" * 32},
             {"execution": {"success": False, "error_message": "User error: 8"}},
@@ -272,5 +266,5 @@ class TestConfirmationDepth:
         observation = _observation()
         del observation["provider"]["chain_tip_height"]
         with pytest.raises(CanaryRefusal) as refusal:
-            validate_observation_v2(observation)
+            validate_observation_v3(observation)
         assert refusal.value.code == RefusalCode.OBSERVATION_MALFORMED

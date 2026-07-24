@@ -133,6 +133,26 @@ class RefusalCode:
     LIVE_ARTIFACTS_UNAVAILABLE_IN_PREP = "LIVE_ARTIFACTS_UNAVAILABLE_IN_PREP"
     CANONICAL_NAMESPACE_PROTECTED = "CANONICAL_NAMESPACE_PROTECTED"
 
+    # Correction round: executed attestation binding (live-path blocker 1)
+    ATTESTATION_NOT_EXECUTED = "ATTESTATION_NOT_EXECUTED"
+
+    # Correction round: raw RPC evidence (live-path blocker 2)
+    RAW_EVIDENCE_ABSENT = "RAW_EVIDENCE_ABSENT"
+    RAW_EVIDENCE_MISMATCH = "RAW_EVIDENCE_MISMATCH"
+    RAW_EVIDENCE_OVERSIZED = "RAW_EVIDENCE_OVERSIZED"
+
+    # Correction round: live submission boundary (live-path blocker 3)
+    SIGNED_BYTES_INVALID = "SIGNED_BYTES_INVALID"
+    SIGNED_BYTES_MISMATCH = "SIGNED_BYTES_MISMATCH"
+    SUBMISSION_TRANSPORT_INVALID = "SUBMISSION_TRANSPORT_INVALID"
+    SUBMISSION_RESULT_MISMATCH = "SUBMISSION_RESULT_MISMATCH"
+
+    # Correction round: legacy cost inputs retired (live-path blocker 6)
+    LEGACY_COST_INPUT_UNSUPPORTED = "LEGACY_COST_INPUT_UNSUPPORTED"
+
+    # Correction round: proof-bundle revalidation (live-path blocker 7)
+    PROOF_STEP_SET_MISMATCH = "PROOF_STEP_SET_MISMATCH"
+
 
 class CanaryRefusal(Exception):
     """A fail-closed refusal with a stable code and a secret-free detail."""

@@ -43,8 +43,8 @@ def test_live_artifact_namespace_is_unavailable_in_preparation(
             rc_declaration_path=plan_inputs["rc"],
             snapshot_path=plan_inputs["snapshot"],
             status_path=plan_inputs["status"],
-            ceiling_path=plan_inputs["ceiling"],
-            measured_costs_path=plan_inputs["measured"],
+            ceiling_path=None,
+            measured_costs_path=None,
             journal_path=tmp_path / "journal.jsonl",
             output_dir=repo / "artifacts" / "mainnet-canary" / "v3" / "x",
             **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
@@ -234,10 +234,6 @@ def test_cli_plan_and_stage_round_trip(
             str(plan_inputs["snapshot"]),
             "--status",
             str(plan_inputs["status"]),
-            "--ceiling",
-            str(plan_inputs["ceiling"]),
-            "--measured-costs",
-            str(plan_inputs["measured"]),
             "--journal",
             str(tmp_path / "journal.jsonl"),
             "--out-dir",
@@ -291,10 +287,6 @@ def test_cli_stage_refuses_without_the_build_attestation(
             str(plan_inputs["snapshot"]),
             "--status",
             str(plan_inputs["status"]),
-            "--ceiling",
-            str(plan_inputs["ceiling"]),
-            "--measured-costs",
-            str(plan_inputs["measured"]),
             "--journal",
             str(tmp_path / "journal2.jsonl"),
             "--out-dir",
@@ -314,7 +306,7 @@ def test_cli_stage_refuses_without_the_build_attestation(
         ],
     )
     assert exit_code == 2
-    assert output["refusal"]["code"] == RefusalCode.ARTIFACT_HASH_UNBACKED
+    assert output["refusal"]["code"] == RefusalCode.ATTESTATION_NOT_EXECUTED
 
 
 def test_cli_stage_refuses_an_expired_human_authorization(
@@ -338,10 +330,6 @@ def test_cli_stage_refuses_an_expired_human_authorization(
             str(plan_inputs["snapshot"]),
             "--status",
             str(plan_inputs["status"]),
-            "--ceiling",
-            str(plan_inputs["ceiling"]),
-            "--measured-costs",
-            str(plan_inputs["measured"]),
             "--journal",
             str(tmp_path / "journal3.jsonl"),
             "--out-dir",
@@ -420,16 +408,11 @@ def test_cli_verify_refuses_prequorum_success_end_to_end(
         for provider_id, host in (("provider-a", "node-a.example"),
                                   ("provider-b", "node-b.example")):
             doc = json.loads(json.dumps(base))
-            doc["schema_id"] = "concordia.mainnet-canary.step-observation.v2"
-            doc["provider"] = {
-                "provider_id": provider_id, "endpoint_host": host,
-                "method": "info_get_deploy", "request_sha256": "11" * 32,
-                "response_sha256": "22" * 32,
-                "retrieved_at_unix": mc_support.CLOCK_UNIX,
-                "api_version": "2.0.0", "chainspec_name": "casper",
-                "chain_tip_height": 128,
-            }
+            doc["schema_id"] = "concordia.mainnet-canary.step-observation.v3"
             doc.setdefault("state_readback", None)
+            doc["provider"] = mc_support.make_v3_provider_for_observation(
+                doc, provider_id, host
+            )
             bundle.append(doc)
     (tmp_path / "observations.json").write_text(
         json.dumps(bundle), encoding="utf-8"
@@ -635,49 +618,19 @@ def _journal_bound_to(plan: dict[str, object], path: Path) -> Path:
 def test_cli_bundle_emits_lineage_and_required_statement(
     plan_inputs: dict[str, Path], tmp_path: Path, capsys
 ) -> None:
-    """proof_bundle on the path: lineage, verbatim statement, confined write."""
+    """proof_bundle on the path: lineage, verbatim statement, confined write.
 
-    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+    Correction round (blocker 7): the bundle revalidates the attestation,
+    the economic manifest, the signed authorization, the journal head, and
+    the verification report — so the fixture supplies the full valid
+    constellation with every economic step terminally journaled.
+    """
+
     from tools.mainnet_canary.proof_bundle import BUNDLE_LINEAGE, REQUIRED_STATEMENT
 
     plan = build_valid_plan(plan_inputs)
-    plan_path = tmp_path / "plan.json"
-    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
-    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
-    manifest = build_economic_manifest(
-        plan,
-        calibration=mc_support.make_calibration(plan),
-        operator_ceilings={},
-    )
-    manifest_path = mc_support.write_json(tmp_path / "manifest.json", manifest)
-    verification_path = mc_support.write_json(
-        tmp_path / "verification.json",
-        {
-            "mode": "verify",
-            "plan_hash": plan["canary_plan_sha256"],
-            "steps": [{"step_id": "G-finalize-exact-envelope"}],
-        },
-    )
-    journal_for_bundle = _journal_bound_to(plan, tmp_path / "bundle-journal.jsonl")
     exit_code, output = _run_cli(
-        capsys,
-        [
-            "--repo-root",
-            str(plan_inputs["repo"]),
-            "bundle",
-            "--plan",
-            str(plan_path),
-            "--verification",
-            str(verification_path),
-            "--economic-manifest",
-            str(manifest_path),
-            "--attestation",
-            str(gates["attestation_path"]),
-            "--journal",
-            str(journal_for_bundle),
-            "--out-dir",
-            str(tmp_path / "bundle-out"),
-        ],
+        capsys, mc_support.bundle_cli_args(plan, plan_inputs, tmp_path)
     )
     assert exit_code == 0
     assert output["lineage"] == BUNDLE_LINEAGE == "concordia-mainnet-canary-v1"
@@ -690,42 +643,15 @@ def test_cli_bundle_refuses_to_write_into_a_protected_namespace(
 ) -> None:
     """path_policy still fences the bundle writer."""
 
-    from tools.mainnet_canary.economic_manifest import build_economic_manifest
-
     plan = build_valid_plan(plan_inputs)
-    plan_path = tmp_path / "plan.json"
-    plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
-    gates = mc_support.stage_gate_kwargs(plan_inputs, tmp_path)
-    manifest_path = mc_support.write_json(
-        tmp_path / "manifest2.json",
-        build_economic_manifest(
-            plan, calibration=mc_support.make_calibration(plan), operator_ceilings={}
-        ),
-    )
-    verification_path = mc_support.write_json(
-        tmp_path / "verification2.json",
-        {"mode": "verify", "plan_hash": plan["canary_plan_sha256"], "steps": []},
-    )
-    journal_for_bundle = _journal_bound_to(plan, tmp_path / "bundle-journal2.jsonl")
     exit_code, output = _run_cli(
         capsys,
-        [
-            "--repo-root",
-            str(plan_inputs["repo"]),
-            "bundle",
-            "--plan",
-            str(plan_path),
-            "--verification",
-            str(verification_path),
-            "--economic-manifest",
-            str(manifest_path),
-            "--attestation",
-            str(gates["attestation_path"]),
-            "--journal",
-            str(journal_for_bundle),
-            "--out-dir",
-            str(plan_inputs["repo"] / "artifacts" / "live" / "x"),
-        ],
+        mc_support.bundle_cli_args(
+            plan,
+            plan_inputs,
+            tmp_path,
+            out_dir=plan_inputs["repo"] / "artifacts" / "live" / "steal",
+        ),
     )
     assert exit_code == 2
     assert output["refusal"]["code"] in (

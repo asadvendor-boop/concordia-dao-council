@@ -261,6 +261,356 @@ def attest_network_build(
     }
 
 
+ATTESTATION_DOCUMENT_SCHEMA_ID = (
+    "concordia.mainnet-canary.build-attestation-document.v2"
+)
+ATTESTATION_DIGEST_DOMAIN = b"CONCORDIA_MAINNET_CANARY_ATTESTATION_V2\x00"
+
+# Exact field set of one per-profile attestation entry.  A summary carrying
+# fewer, extra, or renamed fields is caller-authored and refuses.
+_ENTRY_FIELDS = frozenset(
+    {
+        "schema_id",
+        "tag",
+        "tag_object_sha",
+        "peeled_commit_sha",
+        "profile",
+        "build_env_delta",
+        "builds",
+        "artifact_relpath",
+        "wasm_sha256",
+        "wasm_size_bytes",
+        "toolchain",
+    }
+)
+
+# Pinned contract-crate paths inside the exported tag tree.
+CONTRACT_CRATE_RELPATH = "contracts/odra-governance-receipt-v3"
+CARGO_LOCK_RELPATH = f"{CONTRACT_CRATE_RELPATH}/Cargo.lock"
+COMMITTED_TESTNET_WASM_RELPATH = (
+    f"{CONTRACT_CRATE_RELPATH}/wasm/GovernanceReceiptV3.wasm"
+)
+
+# Accepted release build command, pinned absolutely (no PATH lookup, no
+# caller-supplied program).  The runner refuses to start without it.
+CARGO_ODRA_BUILD_ARGS = ("odra", "build", "-b", "casper")
+BUILD_TIMEOUT_SECONDS = 1800
+
+
+def production_build_runner(cargo_path: str) -> BuildRunner:
+    """The real pinned cargo-odra pipeline as an injectable build runner.
+
+    ``cargo_path`` must be an absolute path to the cargo binary; the child
+    environment is sanitized to exactly the profile delta plus the minimal
+    PATH/HOME the toolchain needs.  The runner returns the built Wasm path
+    inside the exported tree and never touches the repository worktree.
+    """
+
+    if not isinstance(cargo_path, str) or not cargo_path.startswith("/"):
+        raise CanaryRefusal(
+            RefusalCode.BUILD_COMMAND_INVALID,
+            "cargo path must be absolute; PATH lookups are not part of the "
+            "accepted release command",
+        )
+
+    def _run(tree: Path, env_delta: dict[str, str]) -> Path:
+        crate = tree / CONTRACT_CRATE_RELPATH
+        if not crate.is_dir():
+            raise CanaryRefusal(
+                RefusalCode.BUILD_FAILED,
+                "exported tree carries no contract crate at the pinned path",
+            )
+        home = str(Path.home())
+        env = {
+            "PATH": "/usr/bin:/bin:" + str(Path(cargo_path).parent),
+            "HOME": home,
+            "CARGO_HOME": home + "/.cargo",
+            "RUSTUP_HOME": home + "/.rustup",
+            **env_delta,
+        }
+        result = subprocess.run(
+            [cargo_path, *CARGO_ODRA_BUILD_ARGS],
+            cwd=crate,
+            env=env,
+            capture_output=True,
+            timeout=BUILD_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise CanaryRefusal(
+                RefusalCode.BUILD_FAILED,
+                "pinned cargo-odra release build exited non-zero",
+            )
+        artifact = crate / "wasm" / "GovernanceReceiptV3.wasm"
+        if not artifact.is_file():
+            raise CanaryRefusal(
+                RefusalCode.BUILD_FAILED,
+                "pinned build produced no Wasm at the expected crate path",
+            )
+        return artifact
+
+    return _run
+
+
+def attestation_entry_digest(entry: dict[str, object]) -> str:
+    """Canonical digest of one double-build result, domain-separated."""
+
+    import json as _json
+
+    body = {key: entry[key] for key in sorted(_ENTRY_FIELDS) if key in entry}
+    payload = _json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(
+        ATTESTATION_DIGEST_DOMAIN + payload.encode("utf-8")
+    ).hexdigest()
+
+
+def _git_blob_sha256(repo_root: Path, commit_sha: str, relpath: str) -> str | None:
+    result = _git(repo_root, "show", f"{commit_sha}:{relpath}")
+    if result.returncode != 0:
+        return None
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
+def _commit_tree_has_path(repo_root: Path, commit_sha: str, relpath: str) -> bool:
+    result = _git(repo_root, "cat-file", "-e", f"{commit_sha}:{relpath}")
+    return result.returncode == 0
+
+
+def verify_attestation_entry(
+    repo_root: Path,
+    entry: object,
+    *,
+    profile: str,
+    expected_tag: str,
+    expected_peeled_commit_sha: str,
+) -> dict[str, object]:
+    """Recompute one attestation entry against the repository itself.
+
+    A caller-authored summary containing plausible counters and hashes is
+    NOT acceptable: the tag object, the peeled commit, the pinned Cargo.lock
+    digest, the artifact path inside the exported tree, and (for the Testnet
+    profile) the committed Wasm bytes are all independently recomputed here.
+    Any recompute mismatch refuses with a stable code.
+    """
+
+    if not isinstance(entry, dict) or set(entry) != _ENTRY_FIELDS:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: attestation entry must contain exactly "
+            f"{sorted(_ENTRY_FIELDS)}; a summary with a different shape is "
+            "caller-authored",
+        )
+    if entry["schema_id"] != RC_ATTESTATION_SCHEMA_ID:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: attestation schema mismatch",
+        )
+    if entry["profile"] != profile or profile not in ALLOWED_PROFILES:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"attestation entry does not carry profile {profile!r}",
+        )
+    if entry["build_env_delta"] != {ALLOWED_BUILD_ENV_KEY: profile}:
+        raise CanaryRefusal(
+            RefusalCode.SOURCE_DELTA_NOT_ALLOWLISTED,
+            f"{profile}: build env delta is not exactly the allowlisted "
+            "profile variable",
+        )
+    if entry["builds"] != 2:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: attestation does not record two independent builds",
+        )
+    if entry["tag"] != expected_tag:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: attestation tag does not equal the RC declaration's",
+        )
+
+    # The tag must exist, be annotated, and peel to the pinned commit — and
+    # the recorded tag OBJECT sha must be the repository's actual tag object.
+    resolution = resolve_annotated_tag(
+        repo_root,
+        expected_tag,
+        expected_peeled_commit_sha=expected_peeled_commit_sha,
+    )
+    if (
+        entry["tag_object_sha"] != resolution.tag_object_sha
+        or entry["peeled_commit_sha"] != resolution.peeled_commit_sha
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: recorded tag object/peeled commit do not recompute "
+            "from the repository tag",
+        )
+
+    toolchain = entry["toolchain"]
+    if not isinstance(toolchain, dict) or set(toolchain) != set(
+        _REQUIRED_TOOLCHAIN_FIELDS
+    ):
+        raise CanaryRefusal(
+            RefusalCode.TOOLCHAIN_UNPINNED,
+            f"{profile}: toolchain facts must contain exactly "
+            f"{sorted(_REQUIRED_TOOLCHAIN_FIELDS)}",
+        )
+    for field in _REQUIRED_TOOLCHAIN_FIELDS:
+        if not isinstance(toolchain[field], str) or not toolchain[field]:
+            raise CanaryRefusal(
+                RefusalCode.TOOLCHAIN_UNPINNED,
+                f"{profile}: toolchain field {field} is empty",
+            )
+    lock_sha = _git_blob_sha256(
+        repo_root, resolution.peeled_commit_sha, CARGO_LOCK_RELPATH
+    )
+    if lock_sha is None or toolchain["cargo_lock_sha256"] != lock_sha:
+        raise CanaryRefusal(
+            RefusalCode.TOOLCHAIN_UNPINNED,
+            f"{profile}: recorded Cargo.lock digest does not recompute from "
+            "the peeled commit",
+        )
+
+    relpath = entry["artifact_relpath"]
+    if relpath != f"{CONTRACT_CRATE_RELPATH}/wasm/GovernanceReceiptV3.wasm":
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: artifact path is not the pinned crate Wasm path",
+        )
+    if not _commit_tree_has_path(
+        repo_root, resolution.peeled_commit_sha, CONTRACT_CRATE_RELPATH
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: the peeled commit carries no contract crate",
+        )
+
+    wasm_sha = entry["wasm_sha256"]
+    size = entry["wasm_size_bytes"]
+    if (
+        not isinstance(wasm_sha, str)
+        or len(wasm_sha) != 64
+        or not isinstance(size, int)
+        or size <= 0
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ARTIFACT_HASH_UNBACKED,
+            f"{profile}: artifact hash/size malformed",
+        )
+    if profile == "testnet":
+        committed = _git_blob_sha256(
+            repo_root,
+            resolution.peeled_commit_sha,
+            COMMITTED_TESTNET_WASM_RELPATH,
+        )
+        if committed is None or wasm_sha != committed:
+            raise CanaryRefusal(
+                RefusalCode.ARTIFACT_HASH_UNBACKED,
+                "testnet attestation hash does not equal the committed RC "
+                "Wasm bytes at the peeled commit; the recorded double-build "
+                "did not reproduce the judged artifact",
+            )
+    return entry
+
+
+def verify_attestation_document(
+    repo_root: Path,
+    document: object,
+    *,
+    rc_tag: str,
+    rc_peeled_commit_sha: str,
+    rc_mainnet_wasm_sha256: str,
+) -> dict[str, object]:
+    """Full correction-round attestation verification (blocker 1).
+
+    The document must be the executed double-build result: exact schema,
+    both profiles, per-entry canonical digests that recompute, and every
+    repository-recomputable fact (tag object, peeled commit, Cargo.lock,
+    committed Testnet Wasm) independently re-derived here.
+    """
+
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_id") != ATTESTATION_DOCUMENT_SCHEMA_ID
+        or set(document)
+        != {"schema_id", "network_artifacts", "entry_digests"}
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            "attestation document must be the executed "
+            f"{ATTESTATION_DOCUMENT_SCHEMA_ID} result "
+            "(schema_id, network_artifacts, entry_digests)",
+        )
+    pair = document["network_artifacts"]
+    if not isinstance(pair, dict) or set(pair) != set(ALLOWED_PROFILES):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"attestation must carry exactly the profiles {ALLOWED_PROFILES}",
+        )
+    digests = document["entry_digests"]
+    if not isinstance(digests, dict) or set(digests) != set(ALLOWED_PROFILES):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            "attestation entry digests must cover exactly both profiles",
+        )
+    entries: dict[str, dict[str, object]] = {}
+    for profile in ALLOWED_PROFILES:
+        entry = verify_attestation_entry(
+            repo_root,
+            pair[profile],
+            profile=profile,
+            expected_tag=rc_tag,
+            expected_peeled_commit_sha=rc_peeled_commit_sha,
+        )
+        if digests[profile] != attestation_entry_digest(entry):
+            raise CanaryRefusal(
+                RefusalCode.ATTESTATION_NOT_EXECUTED,
+                f"{profile}: entry digest does not recompute; the document "
+                "was edited after the build executed",
+            )
+        entries[profile] = entry
+    require_disjoint_network_artifacts(
+        entries["testnet"], entries["mainnet-native"]
+    )
+    verify_declared_artifact_hash(
+        entries["mainnet-native"], rc_mainnet_wasm_sha256
+    )
+    return document
+
+
+def build_attestation_document(
+    repo_root: Path,
+    *,
+    tag: str,
+    expected_peeled_commit_sha: str,
+    build_runner: BuildRunner,
+    scratch_dir: Path,
+    toolchain_probe: ToolchainProbe,
+) -> dict[str, object]:
+    """Execute the double builds for BOTH profiles and bind the result."""
+
+    entries: dict[str, dict[str, object]] = {}
+    for profile in ALLOWED_PROFILES:
+        entries[profile] = attest_network_build(
+            repo_root,
+            tag=tag,
+            expected_peeled_commit_sha=expected_peeled_commit_sha,
+            profile=profile,
+            build_runner=build_runner,
+            scratch_dir=scratch_dir / profile,
+            toolchain_probe=toolchain_probe,
+        )
+    require_disjoint_network_artifacts(
+        entries["testnet"], entries["mainnet-native"]
+    )
+    return {
+        "schema_id": ATTESTATION_DOCUMENT_SCHEMA_ID,
+        "network_artifacts": entries,
+        "entry_digests": {
+            profile: attestation_entry_digest(entry)
+            for profile, entry in entries.items()
+        },
+    }
+
+
 def require_disjoint_network_artifacts(
     testnet_attestation: dict[str, object], mainnet_attestation: dict[str, object]
 ) -> None:

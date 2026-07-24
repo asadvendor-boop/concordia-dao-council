@@ -80,10 +80,40 @@ def build_hermetic_repo(tmp_path: Path) -> Path:
         repo / "tests" / "golden" / "envelope_v3",
     )
 
+    # The executed-attestation verifier recomputes the Cargo.lock digest and
+    # the committed Testnet Wasm bytes from the peeled commit, so the
+    # hermetic repo commits both and carries a REAL annotated tag.
+    crate_dir = repo / "contracts" / "odra-governance-receipt-v3"
+    (crate_dir / "Cargo.lock").write_text(
+        "# hermetic test lockfile\nversion = 4\n", encoding="utf-8"
+    )
+
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "hermetic canary test baseline")
+    _git(
+        repo,
+        "tag",
+        "-a",
+        "concordia-testnet-rc-v3.0-test",
+        "-m",
+        "hermetic annotated rc tag",
+    )
     return repo
+
+
+def hermetic_cargo_lock_sha(repo: Path) -> str:
+    return hashlib.sha256(
+        (
+            repo / "contracts" / "odra-governance-receipt-v3" / "Cargo.lock"
+        ).read_bytes()
+    ).hexdigest()
+
+
+def hermetic_tag_object_sha(repo: Path) -> str:
+    return _git(
+        repo, "rev-parse", "refs/tags/concordia-testnet-rc-v3.0-test"
+    ).strip()
 
 
 def repo_head(repo: Path) -> str:
@@ -238,36 +268,160 @@ def make_ceiling(**overrides: object) -> dict[str, object]:
 CLOCK_UNIX = 1_700_000_000
 
 
-def make_attestation(**overrides: object) -> dict[str, object]:
-    """A double-built two-profile attestation backing the RC declaration."""
+def make_attestation(repo: Path, **overrides: object) -> dict[str, object]:
+    """The EXECUTED-shape attestation document, bound to the hermetic repo.
+
+    Every repository-recomputable fact (tag object, peeled commit,
+    Cargo.lock digest, committed Testnet Wasm bytes) is taken from the repo
+    itself, and the per-entry canonical digests are computed with the real
+    production function — exactly what `attest` would have produced.
+    """
+
+    from tools.mainnet_canary.attestation import attestation_entry_digest
 
     def artifact(sha: str, profile: str) -> dict[str, object]:
         return {
             "schema_id": "concordia.mainnet-canary.rc-attestation.v1",
             "tag": "concordia-testnet-rc-v3.0-test",
-            "tag_object_sha": "ab" * 20,
-            "peeled_commit_sha": "cd" * 20,
+            "tag_object_sha": hermetic_tag_object_sha(repo),
+            "peeled_commit_sha": repo_head(repo),
             "profile": profile,
             "build_env_delta": {"CONCORDIA_V3_NETWORK_PROFILE": profile},
             "builds": 2,
-            "artifact_relpath": "wasm/GovernanceReceiptV3.wasm",
+            "artifact_relpath": (
+                "contracts/odra-governance-receipt-v3/wasm/"
+                "GovernanceReceiptV3.wasm"
+            ),
             "wasm_sha256": sha,
             "wasm_size_bytes": 4096,
             "toolchain": {
                 "rustc_version": "rustc 1.94.1 (test)",
                 "cargo_odra_version": "cargo-odra 0.1.7",
-                "cargo_lock_sha256": "ef" * 32,
+                "cargo_lock_sha256": hermetic_cargo_lock_sha(repo),
             },
         }
 
+    entries = {
+        "testnet": artifact(TESTNET_WASM_SHA, "testnet"),
+        "mainnet-native": artifact(MAINNET_WASM_SHA, "mainnet-native"),
+    }
     document: dict[str, object] = {
-        "network_artifacts": {
-            "testnet": artifact(TESTNET_WASM_SHA, "testnet"),
-            "mainnet-native": artifact(MAINNET_WASM_SHA, "mainnet-native"),
-        }
+        "schema_id": "concordia.mainnet-canary.build-attestation-document.v2",
+        "network_artifacts": entries,
+        "entry_digests": {
+            profile: attestation_entry_digest(entry)
+            for profile, entry in entries.items()
+        },
     }
     document.update(overrides)
     return document
+
+
+def make_raw_provider(
+    provider_id: str,
+    host: str,
+    *,
+    deploy_hash: str,
+    block_hash: str,
+    block_height: int,
+    success: bool,
+    error_message: object = None,
+    era_id: int = 42,
+    state_root_hash: str = "7a" * 32,
+    member: bool = True,
+    proofs: bool = True,
+    chainspec_name: str = "casper",
+    api_version: str = "2.0.0",
+    chain_tip_height: int = 200,
+    retrieved_at_unix: int = 1_700_000_000,
+) -> dict[str, object]:
+    """Full provider evidence whose raw exchanges re-derive its own claims."""
+
+    from tools.mainnet_canary.raw_evidence import digest_of_bodies
+
+    def canonical(document: object) -> str:
+        return json.dumps(document, sort_keys=True, separators=(",", ":"))
+
+    execution_result = (
+        {"Version2": {"error_message": None}}
+        if success
+        else {"Version2": {"error_message": error_message}}
+    )
+    responses = {
+        "info_get_deploy": {
+            "jsonrpc": "2.0",
+            "id": "canary-info_get_deploy",
+            "result": {
+                "deploy": {"hash": deploy_hash},
+                "execution_results": [
+                    {"block_hash": block_hash, "result": execution_result}
+                ],
+            },
+        },
+        "chain_get_block": {
+            "jsonrpc": "2.0",
+            "id": "canary-chain_get_block",
+            "result": {
+                "block_with_signatures": {
+                    "block": {
+                        "Version2": {
+                            "hash": block_hash,
+                            "header": {
+                                "height": block_height,
+                                "era_id": era_id,
+                                "state_root_hash": state_root_hash,
+                            },
+                            "body": {
+                                "deploy_hashes": (
+                                    [deploy_hash] if member else []
+                                ),
+                            },
+                        }
+                    },
+                    "proofs": [{"signature": "ok"}] if proofs else [],
+                }
+            },
+        },
+        "info_get_status": {
+            "jsonrpc": "2.0",
+            "id": "canary-info_get_status",
+            "result": {
+                "chainspec_name": chainspec_name,
+                "api_version": api_version,
+                "last_added_block_info": {"height": chain_tip_height},
+            },
+        },
+    }
+    exchanges: dict[str, dict[str, str]] = {}
+    request_bodies: list[str] = []
+    response_bodies: list[str] = []
+    for method in ("info_get_deploy", "chain_get_block", "info_get_status"):
+        request = {
+            "jsonrpc": "2.0",
+            "id": f"canary-{method}",
+            "method": method,
+            "params": {},
+        }
+        request_body = canonical(request)
+        response_body = canonical(responses[method])
+        exchanges[method] = {
+            "request_body": request_body,
+            "response_body": response_body,
+        }
+        request_bodies.append(request_body)
+        response_bodies.append(response_body)
+    return {
+        "provider_id": provider_id,
+        "endpoint_host": host,
+        "method": "info_get_deploy",
+        "request_sha256": digest_of_bodies(request_bodies),
+        "response_sha256": digest_of_bodies(response_bodies),
+        "retrieved_at_unix": retrieved_at_unix,
+        "api_version": api_version,
+        "chainspec_name": chainspec_name,
+        "chain_tip_height": chain_tip_height,
+        "raw_exchanges": exchanges,
+    }
 
 
 def make_calibration(plan: dict[str, object], **overrides: object) -> dict[str, object]:
@@ -339,16 +493,28 @@ def make_calibration(plan: dict[str, object], **overrides: object) -> dict[str, 
                 "execution": execution,
                 "finality": {"chain_tip_height": 100 + index + 8},
                 "observations": [
-                    {
-                        "provider_id": "provider-a",
-                        "endpoint_host": "node-a.example",
-                        "response_sha256": "aa" * 32,
-                    },
-                    {
-                        "provider_id": "provider-b",
-                        "endpoint_host": "node-b.example",
-                        "response_sha256": "bb" * 32,
-                    },
+                    make_raw_provider(
+                        "provider-a",
+                        "node-a.example",
+                        deploy_hash=deploy_hash,
+                        block_hash="2e" * 32,
+                        block_height=100 + index,
+                        success=bool(execution["success"]),
+                        error_message=execution["error_message"],
+                        chainspec_name="casper-test",
+                        chain_tip_height=100 + index + 8,
+                    ),
+                    make_raw_provider(
+                        "provider-b",
+                        "node-b.example",
+                        deploy_hash=deploy_hash,
+                        block_hash="2e" * 32,
+                        block_height=100 + index,
+                        success=bool(execution["success"]),
+                        error_message=execution["error_message"],
+                        chainspec_name="casper-test",
+                        chain_tip_height=100 + index + 8,
+                    ),
                 ],
             },
             "harness_artifact_sha256": "cc" * 32,
@@ -446,7 +612,7 @@ def make_snapshot_corroboration(snapshot: dict[str, object]) -> dict[str, object
 
 
 def build_economic_inputs(
-    plan: dict[str, object], tmp_path: Path
+    plan: dict[str, object], tmp_path: Path, repo: Path
 ) -> dict[str, Path]:
     """Attestation + calibration + authorization written to disk for staging."""
 
@@ -458,7 +624,7 @@ def build_economic_inputs(
     )
     return {
         "attestation": write_json(
-            tmp_path / "inputs" / "attestation.json", make_attestation()
+            tmp_path / "inputs" / "attestation.json", make_attestation(repo)
         ),
         "calibration": write_json(
             tmp_path / "inputs" / "calibration.json", calibration
@@ -481,7 +647,7 @@ def stage_gate_kwargs(
     """
 
     pristine = build_valid_plan(plan_inputs)
-    economic = build_economic_inputs(pristine, tmp_path)
+    economic = build_economic_inputs(pristine, tmp_path, plan_inputs["repo"])
     snapshot = json.loads(plan_inputs["snapshot"].read_text(encoding="utf-8"))
     return {
         "attestation_path": economic["attestation"],
@@ -537,11 +703,38 @@ def build_valid_plan(plan_inputs: dict[str, Path]) -> dict[str, object]:
     )
 
 
-def make_v2_pair(step_id: str, **overrides: object) -> list[dict[str, object]]:
-    """Two agreeing observations from disjoint providers (finality v2).
+def make_v3_provider_for_observation(
+    document: dict[str, object], provider_id: str, host: str
+) -> dict[str, object]:
+    """Provider evidence whose raw exchanges match the observation's claims."""
 
-    ``verify`` now refuses single-source evidence, so every CLI-level
-    observation bundle must supply a disjoint pair per economic step.
+    block = document["block"]
+    execution = document["execution"]
+    return make_raw_provider(
+        provider_id,
+        host,
+        deploy_hash=str(document["deploy_hash"]),
+        block_hash=str(block["block_hash"]),
+        block_height=int(block["block_height"]),
+        success=bool(execution["success"]),
+        error_message=execution["error_message"],
+        era_id=int(block["era_id"]),
+        state_root_hash=str(block["state_root_hash"]),
+        member=bool(block["deploy_is_member"]),
+        proofs=bool(block["block_proofs_present"]),
+        chainspec_name="casper",
+        chain_tip_height=128,
+        retrieved_at_unix=CLOCK_UNIX,
+    )
+
+
+def make_v2_pair(step_id: str, **overrides: object) -> list[dict[str, object]]:
+    """Two agreeing v3 observations from disjoint providers.
+
+    ``verify`` refuses single-source evidence, so every CLI-level
+    observation bundle must supply a disjoint pair per economic step.  Each
+    provider's raw exchanges are synthesized to agree with the observation's
+    own recorded fields (the collector's construction invariant).
     """
 
     pair: list[dict[str, object]] = []
@@ -550,19 +743,11 @@ def make_v2_pair(step_id: str, **overrides: object) -> list[dict[str, object]]:
         ("provider-b", "node-b.example"),
     ):
         document = make_observation(step_id, **overrides)
-        document["schema_id"] = "concordia.mainnet-canary.step-observation.v2"
-        document["provider"] = {
-            "provider_id": provider_id,
-            "endpoint_host": host,
-            "method": "info_get_deploy",
-            "request_sha256": "11" * 32,
-            "response_sha256": "22" * 32,
-            "retrieved_at_unix": CLOCK_UNIX,
-            "api_version": "2.0.0",
-            "chainspec_name": "casper",
-            "chain_tip_height": 128,
-        }
+        document["schema_id"] = "concordia.mainnet-canary.step-observation.v3"
         document.setdefault("state_readback", None)
+        document["provider"] = make_v3_provider_for_observation(
+            document, provider_id, host
+        )
         pair.append(document)
     return pair
 
@@ -605,3 +790,129 @@ def make_observation(step_id: str, **overrides: object) -> dict[str, object]:
         else:
             document[key] = value
     return document
+
+
+def terminal_journal_for(plan: dict[str, object], path: Path) -> Path:
+    """A journal with every economic step driven to a terminal state."""
+
+    from tools.mainnet_canary.calibration import economic_step_ids
+    from tools.mainnet_canary.journal import CanaryJournal
+
+    plan_hash = str(plan["canary_plan_sha256"])
+    journal = CanaryJournal.create(
+        path, plan_hash=plan_hash, rc_tag=str(plan["rc"]["tag"])
+    )
+    try:
+        for index, step_id in enumerate(economic_step_ids(plan)):
+            deploy_hash = hashlib.sha256(
+                f"terminal-{step_id}".encode("ascii")
+            ).hexdigest()
+            signed = hashlib.sha256(
+                f"signed-{step_id}".encode("ascii")
+            ).hexdigest()
+            journal.transition(step_id, "PLANNED", plan_hash=plan_hash)
+            journal.transition(step_id, "STAGED", plan_hash=plan_hash)
+            journal.transition(
+                step_id, "AUTHORIZATION_VALIDATED", plan_hash=plan_hash
+            )
+            journal.transition(
+                step_id,
+                "SIGNED",
+                plan_hash=plan_hash,
+                deploy_hash=deploy_hash,
+                signed_bytes_sha256=signed,
+            )
+            journal.transition(
+                step_id, "SUBMITTED", plan_hash=plan_hash, deploy_hash=deploy_hash
+            )
+            journal.transition(
+                step_id,
+                "CONFIRMED_FINALIZED",
+                plan_hash=plan_hash,
+                deploy_hash=deploy_hash,
+            )
+    finally:
+        journal.close()
+    return path
+
+
+def full_verification_report(plan: dict[str, object]) -> dict[str, object]:
+    """A verification report covering exactly the plan's economic steps."""
+
+    from tools.mainnet_canary.calibration import economic_step_ids
+
+    return {
+        "mode": "verify",
+        "plan_hash": plan["canary_plan_sha256"],
+        "steps": [
+            {
+                "step_id": step_id,
+                "status": "observation_consistent",
+                "providers": ["provider-a", "provider-b"],
+            }
+            for step_id in economic_step_ids(plan)
+        ],
+    }
+
+
+def bundle_cli_args(
+    plan: dict[str, object],
+    plan_inputs: dict[str, Path],
+    tmp_path: Path,
+    *,
+    out_dir: Path | None = None,
+    verification: dict[str, object] | None = None,
+) -> list[str]:
+    """A fully revalidatable `bundle` invocation (correction round)."""
+
+    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+
+    calibration = make_calibration(plan)
+    manifest = build_economic_manifest(
+        plan, calibration=calibration, operator_ceilings={}
+    )
+    plan_path = write_json(tmp_path / "bundle-plan.json", plan)
+    return [
+        "--repo-root",
+        str(plan_inputs["repo"]),
+        "bundle",
+        "--plan",
+        str(plan_path),
+        "--verification",
+        str(
+            write_json(
+                tmp_path / "bundle-verification.json",
+                verification
+                if verification is not None
+                else full_verification_report(plan),
+            )
+        ),
+        "--economic-manifest",
+        str(write_json(tmp_path / "bundle-manifest.json", manifest)),
+        "--attestation",
+        str(
+            write_json(
+                tmp_path / "bundle-attestation.json",
+                make_attestation(plan_inputs["repo"]),
+            )
+        ),
+        "--calibration",
+        str(write_json(tmp_path / "bundle-calibration.json", calibration)),
+        "--authorization",
+        str(
+            write_json(
+                tmp_path / "bundle-authorization.json",
+                make_authorization(plan, manifest),
+            )
+        ),
+        "--clock-unix",
+        str(CLOCK_UNIX),
+        "--authorizer-key",
+        test_authorizer_public_key_hex(),
+        "--journal",
+        str(
+            terminal_journal_for(plan, tmp_path / "bundle-terminal-journal.jsonl")
+        ),
+        "--out-dir",
+        str(out_dir if out_dir is not None else tmp_path / "bundle-out"),
+    ]

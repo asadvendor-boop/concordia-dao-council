@@ -27,12 +27,7 @@ from tools.mainnet_canary.constants import (
     MAINNET_CHAIN_NAME,
     PROTECTED_CANONICAL_PREFIXES,
 )
-from tools.mainnet_canary.attestation import (
-    RC_ATTESTATION_SCHEMA_ID,
-    require_disjoint_network_artifacts,
-    verify_declared_artifact_hash,
-)
-from tools.mainnet_canary.cost_model import require_approved_estimate
+from tools.mainnet_canary.attestation import verify_attestation_document
 from tools.mainnet_canary.economic_manifest import (
     build_economic_manifest,
     require_within_authorization,
@@ -125,43 +120,34 @@ def _load_json(path: Path, *, context: str, code: str) -> dict[str, object]:
 
 
 def require_build_attestation(
-    attestation_path: Path, *, rc_mainnet_wasm_sha256: str
+    attestation_path: Path,
+    *,
+    repo_root: Path,
+    rc_tag: str,
+    rc_peeled_commit_sha: str,
+    rc_mainnet_wasm_sha256: str,
 ) -> dict[str, object]:
-    """The declared Mainnet Wasm must be backed by a double-built artifact.
+    """The attestation must be the EXECUTED double-build result (blocker 1).
 
-    Puts :mod:`tools.mainnet_canary.attestation` on the enforcement path: a
-    hash asserted in the RC declaration is worthless unless some reproducible
-    build actually produced it, and the Mainnet artifact must be disjoint from
-    the Testnet one (a `casper-test`-chained Wasm cannot initialise on
-    Mainnet).
+    A caller-authored summary containing plausible counters and hashes is
+    refused: :func:`verify_attestation_document` recomputes the annotated tag
+    object, the peeled commit, the pinned Cargo.lock digest, the artifact
+    path, the committed Testnet Wasm bytes, and the canonical per-entry
+    digests directly against the repository before anything is trusted.
     """
 
     document = _load_json(
         attestation_path,
         context="build-attestation",
-        code=RefusalCode.ARTIFACT_HASH_UNBACKED,
+        code=RefusalCode.ATTESTATION_NOT_EXECUTED,
     )
-    pair = document.get("network_artifacts")
-    if not isinstance(pair, dict):
-        raise CanaryRefusal(
-            RefusalCode.ARTIFACT_HASH_UNBACKED,
-            "attestation must carry `network_artifacts` for both profiles",
-        )
-    testnet = pair.get("testnet")
-    mainnet = pair.get("mainnet-native")
-    for label, entry in (("testnet", testnet), ("mainnet-native", mainnet)):
-        if (
-            not isinstance(entry, dict)
-            or entry.get("schema_id") != RC_ATTESTATION_SCHEMA_ID
-            or entry.get("builds") != 2
-        ):
-            raise CanaryRefusal(
-                RefusalCode.ARTIFACT_HASH_UNBACKED,
-                f"{label} attestation is absent or was not double-built",
-            )
-    require_disjoint_network_artifacts(testnet, mainnet)
-    verify_declared_artifact_hash(mainnet, rc_mainnet_wasm_sha256)
-    return document
+    return verify_attestation_document(
+        repo_root,
+        document,
+        rc_tag=rc_tag,
+        rc_peeled_commit_sha=rc_peeled_commit_sha,
+        rc_mainnet_wasm_sha256=rc_mainnet_wasm_sha256,
+    )
 
 
 def run_stage(
@@ -191,10 +177,31 @@ def run_stage(
     and the output path policy each gate staging and each fails closed.
     """
 
+    # Correction round (blocker 6): the legacy measured-cost / spend-ceiling /
+    # operator-ceiling inputs are RETIRED.  testnet-calibration.v2 is the sole
+    # cost authority; supplying any legacy document refuses with a stable
+    # code rather than silently participating in the gate.
+    if operator_ceilings_path is not None:
+        raise CanaryRefusal(
+            RefusalCode.OPERATOR_CEILING_NOT_PERMITTED,
+            "operator ceilings are not a permitted cost source; every fee "
+            "maximum must come from a finalized Testnet calibration receipt",
+        )
+    if ceiling_path is not None or measured_costs_path is not None:
+        raise CanaryRefusal(
+            RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED,
+            "the legacy measured-cost/spend-ceiling documents are retired; "
+            "testnet-calibration.v2 is the sole cost authority",
+        )
+
     plan_hash = _require_plan(plan_document)
     rc = validate_rc_gate(repo_root, rc_declaration_path)
     attestation = require_build_attestation(
-        attestation_path, rc_mainnet_wasm_sha256=rc.mainnet_wasm_sha256
+        attestation_path,
+        repo_root=repo_root,
+        rc_tag=rc.rc_tag,
+        rc_peeled_commit_sha=rc.peeled_commit_sha,
+        rc_mainnet_wasm_sha256=rc.mainnet_wasm_sha256,
     )
     if plan_document["rc"]["peeled_commit_sha"] != rc.peeled_commit_sha or (
         plan_document["rc"]["mainnet_wasm_sha256"] != rc.mainnet_wasm_sha256
@@ -230,33 +237,18 @@ def run_stage(
             "observation; re-plan against fresh state",
         )
 
-    # Cost gate: refuses while any line is UNKNOWN or the ceiling is absent
-    # or exceeded.  At the preparation base this always refuses.
-    estimate = require_approved_estimate(
-        repo_root,
-        measured_costs_path=measured_costs_path,
-        ceiling_path=ceiling_path,
-    )
-
     # Economic manifest v2: cost lines derived 1:1 from THIS plan's economic
     # steps, with the transfer principal inside a checked total, every fee
-    # maximum grounded in a finalized calibration receipt or an explicit
-    # operator ceiling, and the whole thing bound to a signed human
-    # authorization that has not expired against the trusted clock.
+    # maximum grounded in a finalized calibration receipt (the sole cost
+    # authority), and the whole thing bound to a signed human authorization
+    # that has not expired against the trusted clock.
     calibration = _load_json(
         calibration_path,
         context="testnet-calibration",
         code=RefusalCode.CALIBRATION_RECEIPT_ABSENT,
     )
-    operator_ceilings: dict[str, object] = {}
-    if operator_ceilings_path is not None:
-        operator_ceilings = _load_json(
-            operator_ceilings_path,
-            context="operator-ceilings",
-            code=RefusalCode.CALIBRATION_RECEIPT_ABSENT,
-        )
     manifest = build_economic_manifest(
-        plan_document, calibration=calibration, operator_ceilings=operator_ceilings
+        plan_document, calibration=calibration, operator_ceilings={}
     )
     authorization = validate_human_authorization(
         _load_json(
@@ -342,7 +334,6 @@ def run_stage(
         "plan_hash": plan_hash,
         "rc_tag": rc.rc_tag,
         "staged_steps": staged,
-        "cost_estimate": estimate,
         "economic_manifest": manifest,
         "human_authorization_nonce": authorization["nonce"],
         "build_attestation": {

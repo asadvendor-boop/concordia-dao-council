@@ -150,3 +150,84 @@ gate` remain exactly as manifested; nothing in this correction round opened
 a signing or submission path in the preparation package (the banned-token
 scan still enforces this). The proof bundle now refuses unless it discloses
 `custody_model` equal to the plan's (`single_operator`).
+
+## 5. Correction round: the live path (blockers 1–7 closed)
+
+This round replaces every "prepared but not live" surface with a bounded,
+fail-closed implementation.  Nothing below adds private-key handling to the
+package; signing stays external (wallet), and the package imports signed
+bytes only.
+
+### 5.1 Executed attestation (`attest` mode) — blocker 1
+
+```
+python3 -m tools.mainnet_canary attest \
+  --tag <annotated-rc-tag> --peeled-commit-sha <sha> \
+  --cargo-path /absolute/path/to/cargo \
+  --scratch-dir /tmp/canary-attest --out attestation.json
+```
+
+Runs the pinned cargo-odra release build TWICE per profile from independent
+clean tag-tree exports and binds the result (tag object + peeled commit +
+profile delta + toolchain + Cargo.lock digest + artifact path/size/bytes
+hash) under canonical per-entry digests.  `stage` and `bundle` now REFUSE any
+attestation that does not recompute against the repository
+(`ATTESTATION_NOT_EXECUTED`) — a caller-authored summary with plausible
+counters cannot pass.
+
+### 5.2 Raw RPC evidence — blocker 2
+
+Every calibration receipt observation and every step observation (schema
+`step-observation.v3`) embeds the bounded raw `info_get_deploy` /
+`chain_get_block` / `info_get_status` exchanges.  Digests recompute from the
+embedded bodies; the deploy hash, block identity, membership, execution
+result, and chain tip are re-derived FROM the bodies
+(`RAW_EVIDENCE_ABSENT` / `RAW_EVIDENCE_MISMATCH` / `RAW_EVIDENCE_OVERSIZED`).
+The read-only dual-node collector (`tools/mainnet_canary/collector.py`)
+is the sanctioned producer; its output is secret-scanned.
+
+### 5.3 Live submission boundary — blocker 3
+
+`tools/mainnet_canary/submission.py` is the ONLY module that can broadcast:
+
+1. import externally wallet-signed deploy bytes (never below a secret mount);
+2. recompute the authoritative deploy hash from the bytes;
+3. persist `SIGNED` (deploy hash + signed-bytes SHA-256) durably BEFORE any
+   network call; different bytes later refuse (`SIGNED_BYTES_MISMATCH`);
+4. transition `SUBMITTED` under the exclusive journal lock, then fire the
+   single RPC; any failure leaves the step in flight
+   (`SUBMISSION_UNKNOWN`) — reconciliation by the ORIGINAL hash is the only
+   continuation.  A second broadcast is impossible across restart.
+
+### 5.4 Testnet calibration harness — blocker 4
+
+`tools/mainnet_canary/harness.py`: per plan-derived economic step,
+prepare → validate/dry-run → explicit submit (journal-backed, exactly once)
+→ reconcile by original hash → dual-node depth≥8 raw-evidence observation →
+`testnet-harness-observation.v2` document → `calibration` conversion.  The
+step set derives from the FINAL plan; argument names/types/order must equal
+the Mainnet step's exactly.
+
+### 5.5 Retired inputs — blocker 6
+
+`testnet-calibration.v2` is the SOLE cost authority.  Supplying the legacy
+measured-costs or spend-ceiling documents refuses
+(`LEGACY_COST_INPUT_UNSUPPORTED`); operator ceilings refuse
+(`OPERATOR_CEILING_NOT_PERMITTED`).  No fixed line-item list and no assumed
+vote count remain on the stage/broadcast path.
+
+### 5.6 Proof-bundle revalidation — blocker 7
+
+`bundle` now REVALIDATES every constituent: the manifest must recompute from
+plan+calibration, the attestation must verify against the repository, the
+signed human authorization must re-verify against the manifest/clock/pinned
+keys, the verification report's step set must equal the plan-derived
+economic set EXACTLY (`PROOF_STEP_SET_MISMATCH` on empty/missing/duplicate/
+extra), and every economic step must be terminally journaled.  New required
+arguments: `--calibration --authorization --clock-unix --authorizer-key`.
+
+### 5.7 Nested-schema discipline — blocker 5
+
+All nested observation structures (block, execution, provider, finality,
+raw exchanges) validate with exact key sets and types BEFORE any indexing:
+malformed input returns a stable refusal code, never a traceback.

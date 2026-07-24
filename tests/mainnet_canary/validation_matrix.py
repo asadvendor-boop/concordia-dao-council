@@ -104,8 +104,6 @@ def build_matrix() -> list[dict[str, object]]:
             "--rc-declaration", str(inputs["rc"]),
             "--snapshot", str(inputs["snapshot"]),
             "--status", str(inputs["status"]),
-            "--ceiling", str(inputs["ceiling"]),
-            "--measured-costs", str(inputs["measured"]),
             "--journal", str(tmp / f"journal-{label}.jsonl"),
             "--out-dir", str(tmp / f"staged-{label}"),
         ]
@@ -149,17 +147,18 @@ def build_matrix() -> list[dict[str, object]]:
     )
     from tools.mainnet_canary.journal import CanaryJournal  # noqa: PLC0415
 
-    journal_path = tmp / "bundle-journal.jsonl"
-    journal = CanaryJournal.create(
-        journal_path, plan_hash=str(plan["canary_plan_sha256"]), rc_tag="rc"
+    journal_path = mc.terminal_journal_for(plan, tmp / "bundle-journal.jsonl")
+    bundle_calibration = mc.make_calibration(plan)
+    bundle_calibration_path = tmp / "bundle-calibration.json"
+    bundle_calibration_path.write_text(
+        json.dumps(bundle_calibration), encoding="utf-8"
     )
-    journal.close()
     manifest_path = tmp / "bundle-manifest.json"
     manifest_path.write_text(
         json.dumps(
             build_economic_manifest(
                 plan,
-                calibration=mc.make_calibration(plan),
+                calibration=bundle_calibration,
                 operator_ceilings={},
             )
         ),
@@ -167,16 +166,16 @@ def build_matrix() -> list[dict[str, object]]:
     )
     verification_path = tmp / "bundle-verification.json"
     verification_path.write_text(
-        json.dumps(
-            {"mode": "verify", "plan_hash": plan["canary_plan_sha256"], "steps": []}
-        ),
-        encoding="utf-8",
+        json.dumps(mc.full_verification_report(plan)), encoding="utf-8"
     )
+    mismatched_report = mc.full_verification_report(plan)
+    mismatched_report["plan_hash"] = "0" * 64
     mismatched_path = tmp / "bundle-verification-other-plan.json"
-    mismatched_path.write_text(
-        json.dumps({"mode": "verify", "plan_hash": "0" * 64, "steps": []}),
-        encoding="utf-8",
-    )
+    mismatched_path.write_text(json.dumps(mismatched_report), encoding="utf-8")
+    empty_report = mc.full_verification_report(plan)
+    empty_report["steps"] = []
+    empty_steps_path = tmp / "bundle-verification-empty-steps.json"
+    empty_steps_path.write_text(json.dumps(empty_report), encoding="utf-8")
 
     def bundle_argv(label: str, verification: Path, out_dir: Path) -> list[str]:
         return [
@@ -185,6 +184,10 @@ def build_matrix() -> list[dict[str, object]]:
             "--verification", str(verification),
             "--economic-manifest", str(manifest_path),
             "--attestation", str(gates["attestation_path"]),
+            "--calibration", str(bundle_calibration_path),
+            "--authorization", str(gates["authorization_path"]),
+            "--clock-unix", str(gates["clock_unix"]),
+            "--authorizer-key", key,
             "--journal", str(journal_path),
             "--out-dir", str(out_dir),
         ]
@@ -275,9 +278,51 @@ def build_matrix() -> list[dict[str, object]]:
         json.dumps(rebound_calibration), encoding="utf-8"
     )
 
+    # Correction-round fixtures: a caller-authored attestation summary whose
+    # recorded tag object does not recompute from the repository, and a
+    # calibration whose embedded raw response bytes were edited after the
+    # digests were recorded.
+    fake_attestation = mc.make_attestation(repo)
+    from tools.mainnet_canary.attestation import (  # noqa: PLC0415
+        attestation_entry_digest,
+    )
+    for profile_entry in fake_attestation["network_artifacts"].values():
+        profile_entry["tag_object_sha"] = "9" * 40
+    fake_attestation["entry_digests"] = {
+        profile: attestation_entry_digest(entry)
+        for profile, entry in fake_attestation["network_artifacts"].items()
+    }
+    fake_attestation_path = tmp / "attestation-caller-authored.json"
+    fake_attestation_path.write_text(
+        json.dumps(fake_attestation), encoding="utf-8"
+    )
+
+    tampered_raw = json.loads(json.dumps(full_calibration))
+    first_line = next(iter(tampered_raw["lines"].values()))
+    first_obs = first_line["receipt"]["observations"][0]
+    first_obs["raw_exchanges"]["info_get_status"]["response_body"] = (
+        first_obs["raw_exchanges"]["info_get_status"]["response_body"].replace(
+            "casper-test", "casper-fake"
+        )
+    )
+    tampered_raw_path = tmp / "calibration-tampered-raw.json"
+    tampered_raw_path.write_text(json.dumps(tampered_raw), encoding="utf-8")
+
     rows: list[tuple[str, str, list[str]]] = [
-        ("build attestation absent", "ARTIFACT_HASH_UNBACKED",
+        ("build attestation absent", "ATTESTATION_NOT_EXECUTED",
          stage_argv("a", **{"--attestation": str(tmp / "absent.json")})),
+        ("caller-authored attestation summary refuses",
+         "ATTESTATION_NOT_EXECUTED",
+         stage_argv("a2", **{"--attestation": str(fake_attestation_path)})),
+        ("stale legacy ceiling input refuses as unsupported",
+         "LEGACY_COST_INPUT_UNSUPPORTED",
+         stage_argv("a3") + ["--ceiling", str(inputs["ceiling"])]),
+        ("calibration raw evidence does not recompute",
+         "RAW_EVIDENCE_MISMATCH",
+         stage_argv("a4", **{"--calibration": str(tampered_raw_path)})),
+        ("bundle with empty step verifications refuses",
+         "PROOF_STEP_SET_MISMATCH",
+         bundle_argv("e1", empty_steps_path, tmp / "bundle-empty")),
         ("authorization expired vs trusted clock", "AUTHORIZATION_EXPIRED",
          stage_argv("b", **{"--clock-unix": str(int(gates["clock_unix"]) + 999_999)})),
         ("authorizer outside the pinned set", "AUTHORIZER_NOT_PINNED",

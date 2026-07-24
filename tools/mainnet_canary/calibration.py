@@ -42,8 +42,10 @@ from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
 from tools.mainnet_canary.finality_v2 import FINALITY_CONFIRMATION_DEPTH
 
 CALIBRATION_SCHEMA_ID = "concordia.mainnet-canary.testnet-calibration.v2"
+# v2 (correction round, blocker 2): every observation embeds the raw bounded
+# RPC exchanges; labels plus caller-supplied digests are insufficient.
 HARNESS_OBSERVATION_SCHEMA_ID = (
-    "concordia.mainnet-canary.testnet-harness-observation.v1"
+    "concordia.mainnet-canary.testnet-harness-observation.v2"
 )
 TESTNET_CHAIN_NAME = "casper-test"
 
@@ -119,7 +121,21 @@ _RECEIPT_FIELDS = {
 }
 _EXECUTION_FIELDS = {"success", "error_message"}
 _FINALITY_FIELDS = {"chain_tip_height"}
-_OBSERVATION_FIELDS = {"provider_id", "endpoint_host", "response_sha256"}
+# Correction round (blocker 2): a receipt observation is FULL provider
+# evidence with embedded raw exchanges, identical in shape to the v3
+# step-observation provider block.
+_OBSERVATION_FIELDS = {
+    "provider_id",
+    "endpoint_host",
+    "method",
+    "request_sha256",
+    "response_sha256",
+    "retrieved_at_unix",
+    "api_version",
+    "chainspec_name",
+    "chain_tip_height",
+    "raw_exchanges",
+}
 _HARNESS_FIELDS = {
     "schema_id",
     "step_id",
@@ -194,13 +210,26 @@ def _require_exact_keys(
     return mapping
 
 
-def _validate_observations(entries: object, *, step_id: str) -> None:
+def _validate_observations(
+    entries: object,
+    *,
+    step_id: str,
+    receipt: dict[str, object],
+    expected_success: bool,
+    expected_error_message: object,
+) -> None:
+    """Two disjoint providers, each carrying raw evidence that RE-DERIVES
+    the receipt's deploy/block/result/depth bindings (blocker 2)."""
+
+    from tools.mainnet_canary.raw_evidence import require_rederived_agreement
+
     if not isinstance(entries, list) or len(entries) != 2:
         raise _refuse(
             RefusalCode.CALIBRATION_BINDING_INVALID,
             f"{step_id}: exactly two disjoint RPC observations are required",
         )
     providers, hosts = set(), set()
+    tips: list[int] = []
     for entry in entries:
         record = _require_exact_keys(
             entry, _OBSERVATION_FIELDS, label=f"{step_id} observation"
@@ -211,15 +240,47 @@ def _validate_observations(entries: object, *, step_id: str) -> None:
                     RefusalCode.CALIBRATION_BINDING_INVALID,
                     f"{step_id}: observation {field} malformed",
                 )
-        _require_hex64(
-            record["response_sha256"], field=f"{step_id}.response_sha256"
+        for field in ("request_sha256", "response_sha256"):
+            _require_hex64(record[field], field=f"{step_id}.{field}")
+        tip = record["chain_tip_height"]
+        height = receipt["block_height"]
+        if not isinstance(tip, int) or not isinstance(height, int) or (
+            tip - height < FINALITY_CONFIRMATION_DEPTH
+        ):
+            raise _refuse(
+                RefusalCode.INSUFFICIENT_CONFIRMATIONS,
+                f"{step_id}: provider-measured depth is below "
+                f"{FINALITY_CONFIRMATION_DEPTH}",
+            )
+        # The recorded receipt fields are claims; the embedded raw exchange
+        # bodies are the evidence.  Any disagreement refuses.
+        require_rederived_agreement(
+            record,
+            label=f"calibration[{step_id}][{record['provider_id']}]",
+            expected_chain_name=TESTNET_CHAIN_NAME,
+            deploy_hash=str(receipt["deploy_hash"]),
+            block_hash=str(receipt["block_hash"]),
+            block_height=height,
+            execution_success=expected_success,
+            execution_error_message=expected_error_message,
         )
+        tips.append(tip)
         providers.add(record["provider_id"])
         hosts.add(record["endpoint_host"])
     if len(providers) != 2 or len(hosts) != 2:
         raise _refuse(
             RefusalCode.CALIBRATION_BINDING_INVALID,
             f"{step_id}: the two RPC observations are not disjoint",
+        )
+    finality = receipt.get("finality")
+    if (
+        not isinstance(finality, dict)
+        or finality.get("chain_tip_height") != min(tips)
+    ):
+        raise _refuse(
+            RefusalCode.CALIBRATION_BINDING_INVALID,
+            f"{step_id}: recorded finality tip must equal the smaller "
+            "provider-measured chain tip",
         )
 
 
@@ -382,7 +443,19 @@ def _validate_line(
             f"{step_id}: at least {FINALITY_CONFIRMATION_DEPTH} confirmations "
             "are required before a calibration receipt counts",
         )
-    _validate_observations(receipt["observations"], step_id=step_id)
+    if expected.get("execution") == "failure":
+        expected_success: bool = False
+        expected_error: object = expected.get("exact_error_message")
+    else:
+        expected_success = True
+        expected_error = None
+    _validate_observations(
+        receipt["observations"],
+        step_id=step_id,
+        receipt=receipt,
+        expected_success=expected_success,
+        expected_error_message=expected_error,
+    )
     _require_hex64(
         record["harness_artifact_sha256"],
         field=f"{step_id}.harness_artifact_sha256",

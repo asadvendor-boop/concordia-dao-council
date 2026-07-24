@@ -43,6 +43,16 @@ from tools.mainnet_canary.rc_gate import load_rc_declaration
 from tools.mainnet_canary.secret_guard import refuse_if_secret_material
 from tools.mainnet_canary.stage import run_stage
 from tools.mainnet_canary.finality_v2 import evaluate_dual_provider
+from tools.mainnet_canary.attestation import (
+    build_attestation_document,
+    production_build_runner,
+    verify_attestation_document,
+)
+from tools.mainnet_canary.economic_manifest import (
+    validate_economic_manifest,
+    validate_human_authorization,
+)
+from tools.mainnet_canary.calibration import economic_step_ids
 from tools.mainnet_canary.path_policy import CanaryPathPolicy
 from tools.mainnet_canary.journal import CanaryJournal
 from tools.mainnet_canary.proof_bundle import (
@@ -410,14 +420,112 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
         Path(args.economic_manifest), context="economic-manifest"
     )
     attestation = _read_json_file(Path(args.attestation), context="build-attestation")
-    # The journal head is READ from the journal, never taken on the
-    # operator's word, and every constituent must bind to the same plan.
+
+    # Correction round (blocker 7): every constituent is REVALIDATED here,
+    # not merely embedded.
+    # 1. The economic manifest must recompute from the plan + calibration —
+    #    checked arithmetic AND provenance, not just shape.
+    calibration = _read_json_file(
+        Path(args.calibration), context="testnet-calibration"
+    )
+    validate_economic_manifest(manifest)
+    from tools.mainnet_canary.economic_manifest import build_economic_manifest
+
+    rebuilt = build_economic_manifest(
+        plan_document, calibration=calibration, operator_ceilings={}
+    )
+    if manifest != rebuilt:
+        raise CanaryRefusal(
+            RefusalCode.BUNDLE_CROSS_BINDING_INVALID,
+            "economic manifest does not recompute from the plan and the "
+            "calibration document",
+        )
+    # 2. The attestation must be the executed double-build result.
+    rc_section = plan_document.get("rc", {})
+    verify_attestation_document(
+        Path(args.repo_root),
+        attestation,
+        rc_tag=str(rc_section.get("tag")),
+        rc_peeled_commit_sha=str(rc_section.get("peeled_commit_sha")),
+        rc_mainnet_wasm_sha256=str(rc_section.get("mainnet_wasm_sha256")),
+    )
+    # 3. The signed human authorization must revalidate against the manifest
+    #    and the trusted clock with pinned authorizer keys.
+    authorization = _read_json_file(
+        Path(args.authorization), context="human-authorization"
+    )
+    validate_human_authorization(
+        authorization,
+        manifest=manifest,
+        clock_unix=int(args.clock_unix),
+        pinned_authorizer_keys=frozenset(args.authorizer_key or ()),
+    )
+    # 4. The verification report's step set must equal the plan-derived
+    #    economic-step set EXACTLY: empty, missing, duplicate, or extra step
+    #    verifications refuse.
+    entries = verification.get("steps")
+    if not isinstance(entries, list) or not entries:
+        raise CanaryRefusal(
+            RefusalCode.PROOF_STEP_SET_MISMATCH,
+            "verification report carries no step verifications",
+        )
+    reported_ids = [
+        str(entry.get("step_id"))
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+    if len(reported_ids) != len(entries):
+        raise CanaryRefusal(
+            RefusalCode.PROOF_STEP_SET_MISMATCH,
+            "verification report carries malformed step entries",
+        )
+    expected_ids = economic_step_ids(plan_document)
+    duplicates = sorted(
+        {step for step in reported_ids if reported_ids.count(step) > 1}
+    )
+    missing = sorted(set(expected_ids) - set(reported_ids))
+    extra = sorted(set(reported_ids) - set(expected_ids))
+    if duplicates or missing or extra:
+        raise CanaryRefusal(
+            RefusalCode.PROOF_STEP_SET_MISMATCH,
+            "verification steps must equal the plan-derived economic steps "
+            f"exactly; missing={missing} extra={extra} "
+            f"duplicates={duplicates}",
+        )
+    for entry in entries:
+        if entry.get("status") != "observation_consistent":
+            raise CanaryRefusal(
+                RefusalCode.PROOF_STEP_SET_MISMATCH,
+                f"step {entry.get('step_id')} is not observation-consistent "
+                "in the verification report",
+            )
+
+    # 5. The journal head is READ from the journal, never taken on the
+    #    operator's word, and every economic step must be terminally
+    #    journaled before a proof bundle may exist.
     journal = CanaryJournal.load(Path(args.journal))
     try:
         journal_plan_hash = journal.plan_hash
         journal_head_hash = journal.head_hash
+        terminal_states = {
+            "CONFIRMED_FINALIZED",
+            "FAILED_FINALIZED",
+            "RECONCILED_CONFIRMED",
+            "RECONCILED_FAILED",
+        }
+        unterminated = sorted(
+            step_id
+            for step_id in expected_ids
+            if (status := journal.step_status(step_id)) is None
+            or status.state not in terminal_states
+        )
     finally:
         journal.close()
+    if unterminated:
+        raise CanaryRefusal(
+            RefusalCode.RECONCILIATION_REQUIRED,
+            f"economic steps not terminally journaled: {unterminated}",
+        )
     document = build_proof_bundle_document(
         plan_hash=str(plan_hash),
         rc_tag=str(plan_document.get("rc", {}).get("tag")),
@@ -459,12 +567,64 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
     return {"mode": "bundle", "bundle_path": str(written), **document}
 
 
+def _cmd_attest(args: argparse.Namespace) -> dict[str, object]:
+    """Execute the double builds and write the bound attestation document."""
+
+    document = build_attestation_document(
+        Path(args.repo_root),
+        tag=args.tag,
+        expected_peeled_commit_sha=args.peeled_commit_sha,
+        build_runner=production_build_runner(args.cargo_path),
+        scratch_dir=Path(args.scratch_dir),
+        toolchain_probe=_probe_toolchain,
+    )
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
+    return {"mode": "attest", **document}
+
+
+def _probe_toolchain() -> dict[str, str]:
+    """Pinned toolchain facts probed from the environment, fail closed."""
+
+    import subprocess
+
+    def _version(command: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                command, capture_output=True, timeout=30, check=False
+            )
+        except Exception:
+            return ""
+        if result.returncode != 0:
+            return ""
+        return result.stdout.decode("utf-8", "replace").strip().splitlines()[0]
+
+    lock_path = (
+        Path(__file__).resolve().parents[2]
+        / "contracts/odra-governance-receipt-v3/Cargo.lock"
+    )
+    lock_sha = ""
+    if lock_path.is_file():
+        lock_sha = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    return {
+        "rustc_version": _version(["/usr/bin/env", "rustc", "--version"]),
+        "cargo_odra_version": _version(
+            ["/usr/bin/env", "cargo", "odra", "--version"]
+        ),
+        "cargo_lock_sha256": lock_sha,
+    }
+
+
 def _cmd_broadcast(args: argparse.Namespace) -> dict[str, object]:
     plan_document = _read_json_file(Path(args.plan), context="plan-document")
     run_broadcast_guard(
         Path(args.repo_root),
         plan_document=plan_document,
         journal_path=Path(args.journal),
+        calibration_path=Path(args.calibration) if args.calibration else None,
         ceiling_path=Path(args.ceiling) if args.ceiling else None,
         measured_costs_path=(
             Path(args.measured_costs) if args.measured_costs else None
@@ -570,6 +730,17 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--observations", required=True)
     verify.set_defaults(handler=_cmd_verify)
 
+    attest = subparsers.add_parser(
+        "attest",
+        help="execute the double builds for both profiles and bind the result",
+    )
+    attest.add_argument("--tag", required=True)
+    attest.add_argument("--peeled-commit-sha", required=True)
+    attest.add_argument("--cargo-path", required=True)
+    attest.add_argument("--scratch-dir", required=True)
+    attest.add_argument("--out", required=True)
+    attest.set_defaults(handler=_cmd_attest)
+
     bundle = subparsers.add_parser(
         "bundle", help="emit the canary proof bundle through the path policy"
     )
@@ -577,6 +748,13 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument("--verification", required=True)
     bundle.add_argument("--economic-manifest", required=True)
     bundle.add_argument("--attestation", required=True)
+    # Correction round (blocker 7): the bundle revalidates every
+    # constituent, so it needs the calibration, the signed human
+    # authorization, the trusted clock, and the pinned authorizer keys.
+    bundle.add_argument("--calibration", required=True)
+    bundle.add_argument("--authorization", required=True)
+    bundle.add_argument("--clock-unix", required=True, type=int)
+    bundle.add_argument("--authorizer-key", action="append", required=True)
     # The journal is READ (its head is recomputed); there is deliberately no
     # --journal-head-hash argument, because an operator-typed head binds
     # nothing.
@@ -590,6 +768,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     broadcast.add_argument("--plan", required=True)
     broadcast.add_argument("--journal", required=True)
+    broadcast.add_argument("--calibration", default=None)
+    # Legacy inputs are retired (blocker 6); supplying either refuses with
+    # LEGACY_COST_INPUT_UNSUPPORTED rather than silently participating.
     broadcast.add_argument("--ceiling", default=None)
     broadcast.add_argument("--measured-costs", default=None)
     broadcast.set_defaults(handler=_cmd_broadcast)

@@ -173,8 +173,8 @@ def _stage(
         "rc_declaration_path": plan_inputs["rc"],
         "snapshot_path": plan_inputs["snapshot"],
         "status_path": plan_inputs["status"],
-        "ceiling_path": plan_inputs["ceiling"],
-        "measured_costs_path": plan_inputs["measured"],
+        "ceiling_path": None,
+        "measured_costs_path": None,
         "journal_path": tmp_path / "journal.jsonl",
         "output_dir": tmp_path / "staged",
         # The hardening gates are REQUIRED arguments of run_stage: staging
@@ -208,22 +208,30 @@ def test_stage_produces_content_addressed_unsigned_intents(
         assert status is not None and status.state == "STAGED"
 
 
-def test_stage_without_cost_grounding_is_refused(
+def test_stage_refuses_stale_legacy_measured_costs_as_unsupported(
+    plan_inputs: dict[str, Path], tmp_path: Path
+) -> None:
+    """Correction round (blocker 6): the retired measured-cost document is
+    no longer an input; supplying it refuses with a stable code."""
+
+    plan = build_valid_plan(plan_inputs)
+    with pytest.raises(CanaryRefusal) as refusal:
+        _stage(
+            plan_inputs,
+            plan,
+            tmp_path,
+            measured_costs_path=plan_inputs["measured"],
+        )
+    assert refusal.value.code == RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED
+
+
+def test_stage_refuses_stale_legacy_ceiling_as_unsupported(
     plan_inputs: dict[str, Path], tmp_path: Path
 ) -> None:
     plan = build_valid_plan(plan_inputs)
     with pytest.raises(CanaryRefusal) as refusal:
-        _stage(plan_inputs, plan, tmp_path, measured_costs_path=None)
-    assert refusal.value.code == RefusalCode.COST_LINE_UNKNOWN
-
-
-def test_stage_without_ceiling_is_refused(
-    plan_inputs: dict[str, Path], tmp_path: Path
-) -> None:
-    plan = build_valid_plan(plan_inputs)
-    with pytest.raises(CanaryRefusal) as refusal:
-        _stage(plan_inputs, plan, tmp_path, ceiling_path=None)
-    assert refusal.value.code == RefusalCode.COST_CEILING_ABSENT
+        _stage(plan_inputs, plan, tmp_path, ceiling_path=plan_inputs["ceiling"])
+    assert refusal.value.code == RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED
 
 
 def test_stage_refuses_tampered_plan(

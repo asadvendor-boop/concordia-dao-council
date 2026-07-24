@@ -23,6 +23,7 @@ from tools.mainnet_canary.constants import (
     MAINNET_CHAIN_NAME,
 )
 from tools.mainnet_canary.errors import CanaryRefusal, RefusalCode
+from tools.mainnet_canary.raw_evidence import require_rederived_agreement
 from tools.mainnet_canary.verify import (
     evaluate_expected_prequorum_refusal,
     evaluate_expected_success,
@@ -30,7 +31,7 @@ from tools.mainnet_canary.verify import (
     require_finalized_membership,
 )
 
-OBSERVATION_V2_SCHEMA_ID = "concordia.mainnet-canary.step-observation.v2"
+OBSERVATION_V3_SCHEMA_ID = "concordia.mainnet-canary.step-observation.v3"
 
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -57,6 +58,28 @@ _REQUIRED_PROVIDER = {
     # Each provider must state the chain tip it saw, so confirmation depth is
     # a MEASURED quantity rather than a constant nobody consults.
     "chain_tip_height",
+    # Correction round (blocker 2): the raw bounded JSON-RPC exchanges are
+    # part of the evidence itself; digests alone are transcription.
+    "raw_exchanges",
+}
+# Blocker 5: nested structures are validated with exact key sets BEFORE any
+# indexing, so malformed input returns a stable refusal, never a KeyError.
+_REQUIRED_BLOCK = {
+    "status",
+    "block_hash",
+    "block_height",
+    "state_root_hash",
+    "era_id",
+    "block_proofs_present",
+    "deploy_is_member",
+}
+_REQUIRED_EXECUTION = {"success", "error_message", "cost_motes"}
+_REQUIRED_TARGET = {
+    "package_hash",
+    "contract_hash",
+    "entry_point",
+    "typed_args",
+    "transfer",
 }
 
 
@@ -64,18 +87,88 @@ def _refuse(code: str, detail: str) -> CanaryRefusal:
     return CanaryRefusal(code, detail)
 
 
-def validate_observation_v2(document: object) -> dict[str, object]:
-    """Structural validation incl. the mandatory raw provider evidence."""
+def _require_exact_keys(
+    mapping: object, expected: set[str], *, label: str
+) -> dict[str, object]:
+    if not isinstance(mapping, dict) or set(mapping) != expected:
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            f"{label} must contain exactly {sorted(expected)}",
+        )
+    return mapping
+
+
+def _validate_block_structure(block: object) -> dict[str, object]:
+    record = _require_exact_keys(block, _REQUIRED_BLOCK, label="block")
+    if record["status"] not in ("finalized", "pending"):
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "block.status must be `finalized` or `pending`",
+        )
+    for field in ("block_hash", "state_root_hash"):
+        value = record[field]
+        if not isinstance(value, str) or _HEX64.match(value) is None:
+            raise _refuse(
+                RefusalCode.OBSERVATION_MALFORMED,
+                f"block.{field} must be 64 lowercase hex characters",
+            )
+    if not isinstance(record["block_height"], int) or record["block_height"] < 0:
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "block.block_height must be a non-negative integer",
+        )
+    if not isinstance(record["era_id"], int) or record["era_id"] < 0:
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "block.era_id must be a non-negative integer",
+        )
+    for field in ("block_proofs_present", "deploy_is_member"):
+        if not isinstance(record[field], bool):
+            raise _refuse(
+                RefusalCode.OBSERVATION_MALFORMED,
+                f"block.{field} must be a boolean",
+            )
+    return record
+
+
+def _validate_execution_structure(execution: object) -> dict[str, object]:
+    record = _require_exact_keys(
+        execution, _REQUIRED_EXECUTION, label="execution"
+    )
+    if not isinstance(record["success"], bool):
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "execution.success must be a boolean",
+        )
+    message = record["error_message"]
+    if message is not None and not isinstance(message, str):
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "execution.error_message must be null or a string",
+        )
+    cost = record["cost_motes"]
+    if cost is not None and (
+        not isinstance(cost, str) or not cost or not cost.isdigit()
+    ):
+        raise _refuse(
+            RefusalCode.OBSERVATION_MALFORMED,
+            "execution.cost_motes must be null or a decimal motes string",
+        )
+    return record
+
+
+def validate_observation_v3(document: object) -> dict[str, object]:
+    """Structural + raw-evidence validation of one provider observation."""
 
     if not isinstance(document, dict) or set(document) != _REQUIRED_TOP:
         raise _refuse(
             RefusalCode.OBSERVATION_MALFORMED,
-            f"v2 observation must contain exactly {sorted(_REQUIRED_TOP)}",
+            f"v3 observation must contain exactly {sorted(_REQUIRED_TOP)}",
         )
-    if document["schema_id"] != OBSERVATION_V2_SCHEMA_ID:
+    if document["schema_id"] != OBSERVATION_V3_SCHEMA_ID:
         raise _refuse(
             RefusalCode.OBSERVATION_MALFORMED,
-            f"schema_id must equal {OBSERVATION_V2_SCHEMA_ID}",
+            f"schema_id must equal {OBSERVATION_V3_SCHEMA_ID}",
         )
     deploy_hash = document["deploy_hash"]
     if not isinstance(deploy_hash, str) or _HEX64.match(deploy_hash) is None:
@@ -84,6 +177,10 @@ def validate_observation_v2(document: object) -> dict[str, object]:
         raise _refuse(
             RefusalCode.NETWORK_MISMATCH, "observation is not from chain `casper`"
         )
+    block = _validate_block_structure(document["block"])
+    execution = _validate_execution_structure(document["execution"])
+    _require_exact_keys(document["target"], _REQUIRED_TARGET, label="target")
+
     provider = document["provider"]
     if not isinstance(provider, dict) or set(provider) != _REQUIRED_PROVIDER:
         raise _refuse(
@@ -119,23 +216,14 @@ def validate_observation_v2(document: object) -> dict[str, object]:
             "provider reports a chainspec other than `casper`",
         )
     tip = provider["chain_tip_height"]
-    block_height = document["block"].get("block_height") if isinstance(
-        document.get("block"), dict
-    ) else None
-    if (
-        not isinstance(tip, int)
-        or tip < 0
-        or not isinstance(block_height, int)
-        or block_height < 0
-    ):
+    block_height = block["block_height"]
+    if not isinstance(tip, int) or tip < 0:
         raise _refuse(
             RefusalCode.OBSERVATION_MALFORMED,
-            "provider.chain_tip_height and block.block_height must both be "
-            "non-negative integers to measure confirmation depth",
+            "provider.chain_tip_height must be a non-negative integer",
         )
-    # FINALITY_CONFIRMATION_DEPTH existed as a constant that nothing read.
-    # It is now an enforced measurement: belt-and-braces on top of Casper's
-    # per-block finality signatures.
+    # FINALITY_CONFIRMATION_DEPTH is an enforced measurement: belt-and-braces
+    # on top of Casper's per-block finality signatures.
     if tip - block_height < FINALITY_CONFIRMATION_DEPTH:
         raise _refuse(
             RefusalCode.INSUFFICIENT_CONFIRMATIONS,
@@ -143,6 +231,23 @@ def validate_observation_v2(document: object) -> dict[str, object]:
             f"{FINALITY_CONFIRMATION_DEPTH} are required before an economic "
             "conclusion may rest on it",
         )
+    # Blocker 2: the recorded fields above are CLAIMS.  Every binding —
+    # deploy hash, block identity, membership, execution result, chain tip —
+    # is now independently re-derived from the embedded raw RPC bodies.
+    require_rederived_agreement(
+        provider,
+        label=f"observation[{document['step_id']}][{provider['provider_id']}]",
+        expected_chain_name=MAINNET_CHAIN_NAME,
+        deploy_hash=deploy_hash,
+        block_hash=str(block["block_hash"]),
+        block_height=block_height,
+        execution_success=execution["success"],
+        execution_error_message=execution["error_message"],
+        era_id=int(block["era_id"]),
+        state_root_hash=str(block["state_root_hash"]),
+        require_proofs=bool(block["block_proofs_present"]),
+        require_membership=bool(block["deploy_is_member"]),
+    )
     return document
 
 
@@ -269,7 +374,7 @@ def evaluate_dual_provider(
             f"configured disjoint Mainnet providers (got {len(matches)}); "
             "single-source evidence is never sufficient",
         )
-    validated = [validate_observation_v2(observation) for observation in matches]
+    validated = [validate_observation_v3(observation) for observation in matches]
     ids = {str(observation["provider"]["provider_id"]) for observation in validated}
     hosts = {str(observation["provider"]["endpoint_host"]) for observation in validated}
     if len(ids) != 2 or len(hosts) != 2:

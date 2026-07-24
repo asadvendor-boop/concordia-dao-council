@@ -26,8 +26,8 @@ def _staged(plan_inputs: dict[str, Path], tmp_path: Path) -> dict[str, object]:
         rc_declaration_path=plan_inputs["rc"],
         snapshot_path=plan_inputs["snapshot"],
         status_path=plan_inputs["status"],
-        ceiling_path=plan_inputs["ceiling"],
-        measured_costs_path=plan_inputs["measured"],
+        ceiling_path=None,
+        measured_costs_path=None,
         journal_path=tmp_path / "journal.jsonl",
         output_dir=tmp_path / "staged",
         **mc_support.stage_gate_kwargs(plan_inputs, tmp_path),
@@ -40,12 +40,14 @@ def _guard(
     plan: dict[str, object],
     tmp_path: Path,
 ) -> dict[str, object]:
+    calibration_path = tmp_path / "guard-calibration.json"
+    if not calibration_path.exists():
+        write_json(calibration_path, mc_support.make_calibration(plan))
     return run_broadcast_guard(
         plan_inputs["repo"],
         plan_document=plan,
         journal_path=tmp_path / "journal.jsonl",
-        ceiling_path=plan_inputs["ceiling"],
-        measured_costs_path=plan_inputs["measured"],
+        calibration_path=calibration_path,
     )
 
 
@@ -235,25 +237,31 @@ def test_in_flight_journal_blocks_broadcast_before_confirmation(
     assert refusal.value.code == RefusalCode.RECONCILIATION_REQUIRED
 
 
-def test_module_has_no_submission_capability() -> None:
-    """Static assertion: the package never imports a signing/submission
-    surface (pycspr factories, sockets, or subprocess casper clients)."""
+def test_module_has_no_signing_capability_and_one_submission_boundary() -> None:
+    """Static assertion, correction-round scope: PRIVATE-KEY HANDLING stays
+    banned everywhere in the package.  Submission is now sanctioned, but it
+    exists in exactly ONE journal-gated boundary module (submission.py),
+    which imports externally signed bytes and never a key."""
 
     import tools.mainnet_canary as package
 
     package_dir = Path(package.__file__).resolve().parent
-    forbidden_tokens = (
-        "create_deploy",
-        "put_deploy",
-        "account_put_deploy",
-        "sign(",
+    key_handling_tokens = (
+        "create_deploy(",
+        "create_deploy_parameters",
+        ".sign(",
         "PrivateKey",
-        "ed25519.SigningKey",
+        "SigningKey",
+        "from_private_bytes",
     )
+    submission_files = []
     for source_file in sorted(package_dir.glob("*.py")):
         text = source_file.read_text(encoding="utf-8")
-        for token in forbidden_tokens:
+        for token in key_handling_tokens:
             assert token not in text, f"{source_file.name} contains {token}"
+        if "account_put_deploy" in text:
+            submission_files.append(source_file.name)
+    assert submission_files == ["submission.py"]
 
 
 def test_json_source_has_no_authorization_header_usage() -> None:
@@ -283,10 +291,13 @@ def test_cli_broadcast_mode_refuses_end_to_end(
             str(plan_path),
             "--journal",
             str(tmp_path / "journal.jsonl"),
-            "--ceiling",
-            str(plan_inputs["ceiling"]),
-            "--measured-costs",
-            str(plan_inputs["measured"]),
+            "--calibration",
+            str(
+                write_json(
+                    tmp_path / "cli-calibration.json",
+                    mc_support.make_calibration(plan),
+                )
+            ),
         ]
     )
     assert exit_code == 2
@@ -357,9 +368,9 @@ def test_in_flight_state_created_AFTER_gate_one_is_still_caught(
     )
 
     # Drive a step in flight AFTER gate 1 would have read the journal: the
-    # cost-estimate gate is between gate 1 and gate 5, so mutating there
+    # manifest gate (gate 4) is between gate 1 and gate 5, so mutating there
     # lands the transition inside the exact window.
-    original_estimate = broadcast_module.require_approved_estimate
+    original_estimate = broadcast_module.build_economic_manifest
 
     def estimate_then_transition(*args: object, **kwargs: object) -> object:
         report = original_estimate(*args, **kwargs)
@@ -381,16 +392,45 @@ def test_in_flight_state_created_AFTER_gate_one_is_still_caught(
         return report
 
     monkeypatch.setattr(
-        broadcast_module, "require_approved_estimate", estimate_then_transition
+        broadcast_module, "build_economic_manifest", estimate_then_transition
     )
 
+    calibration_path = write_json(
+        tmp_path / "window-calibration.json", mc_support.make_calibration(plan)
+    )
     with pytest.raises(CanaryRefusal) as refusal:
         run_broadcast_guard(
             plan_inputs["repo"],
             plan_document=plan,
             journal_path=journal_path,
-            ceiling_path=plan_inputs["ceiling"],
-            measured_costs_path=plan_inputs["measured"],
+            calibration_path=calibration_path,
         )
     # It must refuse for reconciliation — NOT walk on to confirmation.
     assert refusal.value.code == RefusalCode.RECONCILIATION_REQUIRED
+
+
+
+def test_stale_legacy_ceiling_input_refuses_as_unsupported(
+    plan_inputs: dict[str, Path], tmp_path: Path
+) -> None:
+    """Correction round (blocker 6): the retired measured-cost/spend-ceiling
+    documents refuse with a stable code instead of participating."""
+
+    plan = _staged(plan_inputs, tmp_path)
+    with pytest.raises(CanaryRefusal) as refusal:
+        run_broadcast_guard(
+            plan_inputs["repo"],
+            plan_document=plan,
+            journal_path=tmp_path / "journal.jsonl",
+            ceiling_path=plan_inputs["ceiling"],
+        )
+    assert refusal.value.code == RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED
+
+    with pytest.raises(CanaryRefusal) as refusal:
+        run_broadcast_guard(
+            plan_inputs["repo"],
+            plan_document=plan,
+            journal_path=tmp_path / "journal.jsonl",
+            measured_costs_path=plan_inputs["measured"],
+        )
+    assert refusal.value.code == RefusalCode.LEGACY_COST_INPUT_UNSUPPORTED
