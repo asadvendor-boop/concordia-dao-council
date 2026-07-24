@@ -49,6 +49,9 @@ def test_frozen_request_and_core_cover_the_organizer_census() -> None:
     core = CORE.read_text()
 
     assert request["schema_version"] == "concordia.organizer_rendered_link_request.v2"
+    assert request["app_origin"] == "https://concordiadao.xyz"
+    assert "sslip.io" not in REQUEST.read_text()
+    assert "HISTORICAL_REQUEST_SHA256" not in core
     assert len(request["known_links"]) == 17
     assert "docs_judge_quickstart_anchor" in {
         row["link_id"] for row in request["known_links"]
