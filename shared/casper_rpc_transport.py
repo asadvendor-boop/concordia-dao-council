@@ -468,7 +468,14 @@ def _normalize_success_response(
             "value": _project_method_result(method, raw_result["value"]),
         }
     else:
-        result = _project_method_result(method, raw_result)
+        projected = _project_method_result(method, raw_result)
+        if method == "query_balance_details":
+            result = {
+                "name": "query_balance_details_result",
+                "value": projected,
+            }
+        else:
+            result = projected
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 

@@ -377,6 +377,46 @@ def test_success_response_is_projected_to_method_schema_before_return(
     }
 
 
+def test_unwrapped_balance_details_is_normalized_to_frozen_named_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = {
+        "api_version": "2.0.0",
+        "total_balance": "625000000000",
+        "available_balance": "625000000000",
+        "total_balance_proof": "01ab",
+        "holds": [],
+    }
+    client = _client(
+        monkeypatch,
+        _Response(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "balance",
+                    "result": result,
+                }
+            ).encode("ascii")
+        ),
+    )
+
+    response = client.call(
+        NODE_A,
+        "query_balance_details",
+        {},
+        "balance",
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "balance",
+        "result": {
+            "name": "query_balance_details_result",
+            "value": result,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     "method",
     (
@@ -418,10 +458,16 @@ def test_every_allowed_method_projects_away_unrecognized_result_fields(
         method,
         allow_submit=method == "account_put_deploy",
     )
+    expected_result: dict[str, object] = {"api_version": "2.0.0"}
+    if method == "query_balance_details":
+        expected_result = {
+            "name": "query_balance_details_result",
+            "value": expected_result,
+        }
     assert response == {
         "jsonrpc": "2.0",
         "id": method,
-        "result": {"api_version": "2.0.0"},
+        "result": expected_result,
     }
 
 
