@@ -1220,21 +1220,28 @@ def _normalize_deploy_json(value: object) -> object:
     return normalize_deploy_rpc_json(value)
 
 
-def _without_non_consensus_clvalue_parsed(value: object) -> object:
-    """Remove only RPC display values whose CLValue bytes are authoritative."""
+_BOOL_PARSED_DISPLAY_SENTINEL = object()
+
+
+def _normalize_bool_clvalue_parsed(value: object) -> object:
+    """Normalize only the node-vs-pycspr spelling of complete Bool CLValues."""
 
     if isinstance(value, Mapping):
         keys = set(value)
         return {
-            str(key): _without_non_consensus_clvalue_parsed(item)
-            for key, item in value.items()
-            if not (
-                key == "parsed"
-                and keys == {"bytes", "cl_type", "parsed"}
+            str(key): (
+                _BOOL_PARSED_DISPLAY_SENTINEL
+                if (
+                    key == "parsed"
+                    and keys == {"bytes", "cl_type", "parsed"}
+                    and value.get("cl_type") == "Bool"
+                )
+                else _normalize_bool_clvalue_parsed(item)
             )
+            for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_without_non_consensus_clvalue_parsed(item) for item in value]
+        return [_normalize_bool_clvalue_parsed(item) for item in value]
     return value
 
 
@@ -1261,9 +1268,9 @@ def validate_finalized_install_deploy(
         raise InstallValidationError(
             "install deploy cannot be decoded canonically"
         ) from exc
-    if _without_non_consensus_clvalue_parsed(
+    if _normalize_bool_clvalue_parsed(
         _normalize_deploy_json(canonical_json)
-    ) != _without_non_consensus_clvalue_parsed(_normalize_deploy_json(value)):
+    ) != _normalize_bool_clvalue_parsed(_normalize_deploy_json(value)):
         raise InstallValidationError(
             "install deploy parsed fields disagree with canonical bytes"
         )

@@ -435,6 +435,40 @@ def test_wasm_07_finalized_install_accepts_node_boolean_parsed_values() -> None:
     assert facts["deploy_hash"] == node_json["hash"].lower()
     assert facts["wasm_sha256"] == hashlib.sha256(wasm).hexdigest()
 
+    offline_facts = validate_finalized_install_deploy(node_json, manifest)
+    assert offline_facts["deploy_hash"] == node_json["hash"].lower()
+
+    missing_bool_display = copy.deepcopy(node_json)
+    missing_bool_value = next(
+        value
+        for name, value in missing_bool_display["session"]["ModuleBytes"]["args"]
+        if name == "odra_cfg_is_upgradable"
+    )
+    del missing_bool_value["parsed"]
+    with pytest.raises(
+        InstallValidationError,
+        match="parsed fields disagree with canonical bytes",
+    ):
+        validate_finalized_install_deploy(
+            missing_bool_display,
+            manifest,
+            expected_signed_deploy=signed_json,
+        )
+
+    forged_non_bool_display = copy.deepcopy(node_json)
+    forged_payment = forged_non_bool_display["payment"]["ModuleBytes"]["args"][0][1]
+    assert forged_payment["cl_type"] == "U512"
+    forged_payment["parsed"] = "30000000001"
+    with pytest.raises(
+        InstallValidationError,
+        match="parsed fields disagree with canonical bytes",
+    ):
+        validate_finalized_install_deploy(
+            forged_non_bool_display,
+            manifest,
+            expected_signed_deploy=signed_json,
+        )
+
     different = create_deploy(
         create_deploy_parameters(private, "casper-test", timestamp=1_784_750_401),
         create_standard_payment(30_000_000_000),
