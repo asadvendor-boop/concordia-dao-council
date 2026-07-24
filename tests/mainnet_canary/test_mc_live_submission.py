@@ -46,6 +46,7 @@ def _step() -> dict[str, object]:
         "expected_outcome": {
             "recipient_account": RECIPIENT.hex(),
             "amount_motes": str(AMOUNT),
+            "transfer_id": str(TRANSFER_ID),
         },
     }
 
@@ -226,15 +227,17 @@ class TestExactlyOnce:
             )
         finally:
             journal.close()
-        # Resume with DIFFERENT bytes (a different transfer id → different
-        # deploy) — a second economic action in disguise.
+        # Resume with DIFFERENT bytes (a later timestamp → a different deploy
+        # hash) that still validate against the same plan step — a second
+        # economic action in disguise. The mismatch is caught by the persisted
+        # SIGNED digest, not by field validation.
         other = build_signed_native_transfer_deploy(
             source_private_key=SOURCE_KEY,
             recipient_account_hash=RECIPIENT,
             amount_motes=AMOUNT,
-            transfer_id=TRANSFER_ID + 1,
+            transfer_id=TRANSFER_ID,
             payment_amount_motes=PAYMENT,
-            timestamp_seconds=1_700_000_000.0,
+            timestamp_seconds=1_700_000_099.0,
             chain_name="casper",
         )
         other_facts = validate_signed_step_deploy(

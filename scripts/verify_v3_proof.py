@@ -154,6 +154,119 @@ def _find_named_key(value: object, name: str) -> str | None:
     return None
 
 
+def _git_show_blob(commit: str, relpath: str) -> bytes:
+    """Read one blob at an exact commit via argv-based git plumbing.
+
+    argv form (never a shell string), rooted at the repository, so a path or
+    commit value can never be interpolated into a command line.
+    """
+
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{commit}:{relpath}"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ProofVerificationError(
+            f"historical blob {relpath} is absent at commit {commit[:12]}"
+        )
+    return result.stdout
+
+
+def _git_object_is_commit(commit: str) -> bool:
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "cat-file", "-t", commit],
+        capture_output=True,
+        check=False,
+    )
+    return (
+        result.returncode == 0
+        and result.stdout.decode("utf-8", "replace").strip() == "commit"
+    )
+
+
+def verify_release_files_historical(
+    manifest: Mapping[str, Any], *, source_commit: str
+) -> None:
+    """Historical verification (SEC/test-contract split).
+
+    The frozen manifest pins (source, wasm, schema) are the immutable truth;
+    this confirms them against the blobs AT the proof's declared build commit
+    rather than the live worktree.  The expected commit is NOT caller-chosen:
+    it is the finalized proof deployment's ``source_commit`` (validated as a
+    full commit SHA by the caller).  A forger would need a real git commit
+    whose blobs all hash to the frozen pins — which only the true historical
+    commit satisfies.  Strict release-worktree verification stays a separate,
+    unchanged function (:func:`_verify_release_files`).
+    """
+
+    if _COMMIT.fullmatch(source_commit) is None or not _git_object_is_commit(
+        source_commit
+    ):
+        raise ProofVerificationError(
+            "historical source commit is not a full, existing commit object"
+        )
+    local_template = json.loads(
+        (V3_ROOT / "deployment.manifest.json").read_text(encoding="utf-8")
+    )
+    for field in ("schema_id", "network", "package_key_name", "contract_name", "toolchain", "abi"):
+        _same(f"deployment {field}", manifest.get(field), local_template.get(field))
+    build = manifest.get("build")
+    if not isinstance(build, Mapping) or set(build) != set(local_template["build"]):
+        raise ProofVerificationError("deployment build identity is invalid")
+    for field in ("command", "schema_command", "wasm_path", "schema_path"):
+        if build[field] != local_template["build"][field]:
+            raise ProofVerificationError(f"deployment build {field} is not frozen")
+    crate_rel = "contracts/odra-governance-receipt-v3"
+    # Wasm + schema are COMMITTED at the historical commit, so git-show is a
+    # legitimate provenance source for them here.
+    for label, path_key, hash_key in (
+        ("wasm", "wasm_path", "wasm_sha256"),
+        ("schema", "schema_path", "schema_sha256"),
+    ):
+        relative = build[path_key]
+        blob = _git_show_blob(source_commit, f"{crate_rel}/{relative}")
+        if hashlib.sha256(blob).hexdigest() != build[hash_key]:
+            raise ProofVerificationError(
+                f"deployment {label} hash differs from historical commit blob"
+            )
+    if len(_git_show_blob(source_commit, f"{crate_rel}/{build['wasm_path']}")) != (
+        build["wasm_size_bytes"]
+    ):
+        raise ProofVerificationError("deployment Wasm size differs at historical commit")
+    source = manifest.get("source")
+    expected_sources = {
+        "lib_rs_sha256": "src/lib.rs",
+        "encoding_rs_sha256": "src/encoding.rs",
+        "cargo_lock_sha256": "Cargo.lock",
+    }
+    if not isinstance(source, Mapping) or set(source) != set(expected_sources):
+        raise ProofVerificationError("deployment source identity is invalid")
+    for field, relative in expected_sources.items():
+        blob = _git_show_blob(source_commit, f"{crate_rel}/{relative}")
+        if hashlib.sha256(blob).hexdigest() != source[field]:
+            raise ProofVerificationError(
+                f"deployment source hash differs for {field} at historical commit"
+            )
+    _verify_historical_isolation(manifest)
+
+
+def _verify_historical_isolation(manifest: Mapping[str, Any]) -> None:
+    historical = manifest.get("historical_isolation")
+    inventory = ROOT / "handoff/HISTORICAL_ODRA_SHA256.txt"
+    if (
+        not isinstance(historical, Mapping)
+        or historical.get("tracked_file_count") != 18
+        or historical.get("pre_post_diff") != "empty"
+        or historical.get("manifest_sha256") != hashlib.sha256(inventory.read_bytes()).hexdigest()
+    ):
+        raise ProofVerificationError("deployment historical-isolation evidence is invalid")
+
+
 def _verify_release_files(manifest: Mapping[str, Any]) -> None:
     local_template = json.loads((V3_ROOT / "deployment.manifest.json").read_text(encoding="utf-8"))
     for field in ("schema_id", "network", "package_key_name", "contract_name", "toolchain", "abi"):
@@ -227,11 +340,17 @@ def _verify_deployment_manifest(value: object) -> dict[str, Any]:
         raise ProofVerificationError("deployment manifest field set is not finalized/frozen")
     if value["status"] != "finalized" or value["network"] != "casper-test":
         raise ProofVerificationError("deployment manifest is not finalized on casper-test")
-    _verify_release_files(value)
+    # Split-API (Codex security correction): the finalized proof declares the
+    # exact commit it was built at; the frozen manifest pins are verified
+    # against the blobs AT THAT COMMIT via argv git plumbing, so a proof stays
+    # verifiable on any branch whose live worktree has legitimately evolved.
+    # The strict live-worktree verifier (`_verify_release_files`) remains a
+    # SEPARATE release-gate function, unchanged.
     if not isinstance(value["source_commit"], str) or _COMMIT.fullmatch(value["source_commit"]) is None:
         raise ProofVerificationError("deployment source_commit is invalid")
     if not isinstance(value["deployment_commit"], str) or _COMMIT.fullmatch(value["deployment_commit"]) is None:
         raise ProofVerificationError("deployment deployment_commit is invalid")
+    verify_release_files_historical(value, source_commit=value["source_commit"])
     package_hash = _lower_hash(value["package_hash"], "deployment package hash")
     contract_hash = _lower_hash(value["contract_hash"], "deployment contract hash")
     if value["contract_version"] != 1:

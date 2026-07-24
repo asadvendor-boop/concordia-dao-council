@@ -120,11 +120,59 @@ def _decode_canonical(raw: bytes) -> Deploy:
     return deploy
 
 
+def _clvalue_scalar(value: object) -> object:
+    """The comparable scalar behind a decoded CLValue (bytes → lowercase hex)."""
+
+    inner = getattr(value, "value", value)
+    if isinstance(inner, (bytes, bytearray)):
+        return bytes(inner).hex()
+    return inner
+
+
+def _plan_arg_expected(arg: dict[str, object]) -> object:
+    """The plan step's declared argument value, normalized for comparison."""
+
+    raw = arg.get("value")
+    if isinstance(raw, str):
+        return raw.lower() if all(c in "0123456789abcdefABCDEF" for c in raw) and raw else raw
+    return raw
+
+
+def _require_session_args_match_plan(session: object, plan_args: list) -> None:
+    """SEC5: session argument names, order, AND canonical values match plan.
+
+    Comparing names/order alone lets a signer keep the argument shape while
+    swapping a value (e.g. a different threshold or nonce).  The decoded
+    CLValue scalar of each argument is compared to the plan step's declared
+    value, so every governance/constructor argument is bound.
+    """
+
+    session_names = [argument.name for argument in session.arguments]
+    plan_names = [str(argument.get("name")) for argument in plan_args]
+    if session_names != plan_names:
+        raise _refuse(
+            RefusalCode.SIGNED_BYTES_INVALID,
+            "session argument names/order do not equal the plan step's "
+            "typed arguments",
+        )
+    for argument, plan_arg in zip(session.arguments, plan_args):
+        observed = _clvalue_scalar(argument.value)
+        expected = _plan_arg_expected(plan_arg)
+        if str(observed) != str(expected):
+            raise _refuse(
+                RefusalCode.SIGNED_BYTES_INVALID,
+                f"session argument {argument.name!r} value does not equal the "
+                "plan step's bound value",
+            )
+
+
 def validate_signed_step_deploy(
     raw: bytes,
     *,
     step: dict[str, object],
     max_payment_motes: int,
+    attested_mainnet_wasm_sha256: str | None = None,
+    expected_signer_account_hash: str | None = None,
     expected_chain_name: str = MAINNET_CHAIN_NAME,
 ) -> dict[str, object]:
     """Fail closed unless ``raw`` is the one expected step deploy.
@@ -194,6 +242,17 @@ def validate_signed_step_deploy(
             "signed deploy source account does not equal the plan step's "
             "signing account",
         )
+    # SEC5: the signer identity is pinned, not merely well-formed.  A deploy
+    # signed by any key other than the plan step's bound role is refused even
+    # if every other field matches.
+    if (
+        expected_signer_account_hash is not None
+        and signing_account_hash != str(expected_signer_account_hash)
+    ):
+        raise _refuse(
+            RefusalCode.SIGNED_BYTES_INVALID,
+            "signed deploy signer does not equal the pinned role account hash",
+        )
 
     if type(deploy.payment) is not DeployOfModuleBytes:
         raise _refuse(
@@ -220,6 +279,7 @@ def validate_signed_step_deploy(
 
     kind = str(step.get("kind"))
     session = deploy.session
+    plan_args = step.get("typed_args") or []
     if kind == "native_transfer":
         if type(session) is not DeployOfTransfer:
             raise _refuse(
@@ -234,7 +294,15 @@ def validate_signed_step_deploy(
                 "target, amount, id",
             )
         expected = step.get("expected_outcome", {})
+        # SEC5: the target must be the ACCOUNT-variant Key (not a URef or a
+        # hash), and its identifier must equal the plan's bound recipient.
         target_value = session.arguments[0].value
+        key_type = getattr(target_value, "key_type", None)
+        if key_type is None or getattr(key_type, "name", str(key_type)) != "ACCOUNT":
+            raise _refuse(
+                RefusalCode.SIGNED_BYTES_INVALID,
+                "transfer target must be an ACCOUNT-variant Key",
+            )
         recipient = getattr(target_value, "identifier", None)
         if (
             type(recipient) is not bytes
@@ -250,35 +318,101 @@ def validate_signed_step_deploy(
                 RefusalCode.SIGNED_BYTES_INVALID,
                 "transfer amount does not equal the plan's bound amount",
             )
-    else:
+        # SEC5: the transfer id (Option::Some(U64)) must equal the plan's
+        # bound transfer id — an unbound or mismatched id is refused.
+        id_option = session.arguments[2].value
+        id_inner = getattr(id_option, "value", None)
+        transfer_id = getattr(id_inner, "value", id_inner)
+        if str(transfer_id) != str(expected.get("transfer_id")):
+            raise _refuse(
+                RefusalCode.SIGNED_BYTES_INVALID,
+                "transfer id does not equal the plan's bound transfer id",
+            )
+    elif kind == "contract_install":
+        # SEC8: an install is a ModuleBytes session whose module bytes must
+        # hash to the ATTESTED Mainnet Wasm (never the Testnet artifact, never
+        # a caller-declared hash), with exact ordered constructor args.
+        if type(session) is not DeployOfModuleBytes:
+            raise _refuse(
+                RefusalCode.SIGNED_BYTES_INVALID,
+                "contract-install step requires a ModuleBytes session",
+            )
+        if attested_mainnet_wasm_sha256 is None:
+            raise _refuse(
+                RefusalCode.ARTIFACT_HASH_UNBACKED,
+                "install validation requires the attested Mainnet Wasm hash; "
+                "a caller-declared hash cannot establish the install artifact",
+            )
+        module_bytes = getattr(session, "module_bytes", None)
+        if type(module_bytes) is not bytes or not module_bytes:
+            raise _refuse(
+                RefusalCode.SIGNED_BYTES_INVALID,
+                "install session carries no module bytes",
+            )
+        if hashlib.sha256(module_bytes).hexdigest() != str(
+            attested_mainnet_wasm_sha256
+        ):
+            raise _refuse(
+                RefusalCode.ARTIFACT_HASH_UNBACKED,
+                "install module bytes do not hash to the attested Mainnet "
+                "Wasm; a Testnet-chained or caller-supplied artifact is "
+                "refused",
+            )
+        _require_session_args_match_plan(session, plan_args)
+    elif kind == "contract_call":
         if type(session) not in (
             DeployOfStoredContractByHash,
             DeployOfStoredContractByHashVersioned,
         ):
             raise _refuse(
                 RefusalCode.SIGNED_BYTES_INVALID,
-                "contract step requires a stored-contract-by-hash session",
+                "contract-call step requires a stored-contract-by-hash "
+                "session",
             )
+        # SEC5: the stored-contract target (package/contract hash) must equal
+        # the plan step's bound target when the plan declares one.
+        expected_target = step.get("target") or {}
+        contract_hash = getattr(session, "hash", None)
+        if isinstance(expected_target, dict) and expected_target.get(
+            "contract_hash"
+        ) is not None:
+            observed = (
+                contract_hash.hex()
+                if isinstance(contract_hash, bytes)
+                else str(contract_hash)
+            )
+            if observed != str(expected_target["contract_hash"]):
+                raise _refuse(
+                    RefusalCode.SIGNED_BYTES_INVALID,
+                    "stored-contract target does not equal the plan step's "
+                    "bound contract hash",
+                )
         if session.entry_point != step.get("entry_point"):
             raise _refuse(
                 RefusalCode.SIGNED_BYTES_INVALID,
                 "session entry point does not equal the plan step's",
             )
-        session_names = [argument.name for argument in session.arguments]
-        plan_args = step.get("typed_args") or []
-        plan_names = [str(argument.get("name")) for argument in plan_args]
-        if session_names != plan_names:
-            raise _refuse(
-                RefusalCode.SIGNED_BYTES_INVALID,
-                "session argument names/order do not equal the plan step's "
-                "typed arguments",
-            )
+        _require_session_args_match_plan(session, plan_args)
+    else:
+        raise _refuse(
+            RefusalCode.SIGNED_BYTES_INVALID,
+            f"unsupported economic step kind {kind!r} for signed-deploy "
+            "validation",
+        )
 
+    # SEC6: the decoded session arguments (name + canonical scalar value) are
+    # returned so calibration can recompute the deploy-argument digest from
+    # the ACTUAL signed bytes rather than from caller-supplied metadata.
+    decoded_args = [
+        {"name": argument.name, "value": _clvalue_scalar(argument.value)}
+        for argument in getattr(session, "arguments", [])
+    ]
     return {
         "deploy_hash_hex": computed_deploy_hash.hex(),
         "signed_bytes_sha256": hashlib.sha256(raw).hexdigest(),
         "chain_name": deploy.header.chain_name,
         "payment_amount_motes": str(payment_amount),
+        "decoded_session_args": decoded_args,
     }
 
 

@@ -53,6 +53,14 @@ def _toolchain() -> dict[str, str]:
     }
 
 
+def _executable() -> dict[str, str]:
+    return {
+        "path": "/opt/toolchain/bin/cargo",
+        "path_sha256": "cd" * 32,
+        "version": "cargo-odra 0.1.7",
+    }
+
+
 def _deterministic_runner(tree: Path, env_delta: dict[str, str]) -> Path:
     """Fake accepted release command: output depends only on tree + profile."""
 
@@ -84,8 +92,11 @@ def _attest(repo: Path, tmp_path: Path, *, profile: str = "mainnet-native", runn
         expected_peeled_commit_sha=mc_support.repo_head(repo),
         profile=profile,
         build_runner=runner or _deterministic_runner,
-        scratch_dir=tmp_path / f"scratch-{profile}",
+        # SEC7: the scratch parent must already exist; the attestation owns a
+        # uniquely-named child under it and never creates/deletes the root.
+        scratch_dir=tmp_path,
         toolchain_probe=toolchain or _toolchain,
+        executable_probe=_executable,
     )
 
 

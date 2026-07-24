@@ -536,9 +536,15 @@ def build_calibration_from_harness(
 
     by_step: dict[str, dict[str, object]] = {}
     for document in harness_documents:
-        record = _require_exact_keys(
-            document, _HARNESS_FIELDS, label="harness observation"
-        )
+        # SEC6: `deploy_decoded_args` is an OPTIONAL v2 field (present when the
+        # harness ran a real signed deploy); the rest are exact.
+        keys = set(document) if isinstance(document, dict) else None
+        if keys is not None and keys - {"deploy_decoded_args"} == _HARNESS_FIELDS:
+            record = document
+        else:
+            record = _require_exact_keys(
+                document, _HARNESS_FIELDS, label="harness observation"
+            )
         if record["schema_id"] != HARNESS_OBSERVATION_SCHEMA_ID:
             raise _refuse(
                 RefusalCode.CALIBRATION_BINDING_INVALID,
@@ -592,6 +598,28 @@ def build_calibration_from_harness(
             for plan_arg, testnet_arg in zip(plan_args, testnet_args)
             if plan_arg.get("value") != testnet_arg.get("value")
         ]
+        # SEC6: the Testnet deploy-argument digest is recomputed from the
+        # DECODED arguments of the actual signed deploy when present, and the
+        # recorded metadata args must agree with them argument-for-argument
+        # (name + canonical value).  A metadata/deploy divergence refuses.
+        decoded = harness.get("deploy_decoded_args")
+        if isinstance(decoded, list) and decoded:
+            if len(decoded) != len(testnet_args):
+                raise _refuse(
+                    RefusalCode.CALIBRATION_BINDING_INVALID,
+                    f"{step_id}: decoded deploy arg count differs from the "
+                    "recorded Testnet typed args",
+                )
+            for meta_arg, real_arg in zip(testnet_args, decoded):
+                if str(meta_arg.get("name")) != str(real_arg.get("name")) or (
+                    str(meta_arg.get("value")) != str(real_arg.get("value"))
+                ):
+                    raise _refuse(
+                        RefusalCode.CALIBRATION_BINDING_INVALID,
+                        f"{step_id}: recorded Testnet arg "
+                        f"{meta_arg.get('name')!r} does not equal the decoded "
+                        "signed-deploy argument",
+                    )
         lines[step_id] = {
             "mainnet_step_id": step_id,
             "mainnet_typed_args_sha256": typed_args_sha256(plan_args),

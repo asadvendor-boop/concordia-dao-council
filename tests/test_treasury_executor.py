@@ -47,8 +47,13 @@ SOURCE_KEY = parse_private_key_bytes(bytes(range(1, 33)), KeyAlgorithm.ED25519)
 SOURCE_ACCOUNT = SOURCE_KEY.to_public_key().to_account_hash()
 RECIPIENT_ACCOUNT = bytes.fromhex("42" * 32)
 TIMESTAMP_SECONDS = 1_753_228_800.0
-SOURCE_COMMIT = "ab" * 20
-DEPLOYMENT_COMMIT = "cd" * 20
+from tests.test_clvalue_roundtrip import _HISTORICAL_SOURCE_COMMIT
+
+# The authorization/proof source commit must equal the deployment's declared
+# build commit (the split-API historical verifier binds both to the frozen
+# manifest pins at that exact commit).
+SOURCE_COMMIT = _HISTORICAL_SOURCE_COMMIT
+DEPLOYMENT_COMMIT = _HISTORICAL_SOURCE_COMMIT
 
 
 def _verified(

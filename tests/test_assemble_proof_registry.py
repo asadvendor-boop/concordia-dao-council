@@ -29,6 +29,24 @@ from shared.proof_registry import (
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY_CLI = ROOT / "packages/verify/dist/cli.js"
+VERIFY_DIST_INDEX = ROOT / "packages/verify/dist/index.js"
+
+# Test-contract (Codex correction C3): the `@concordia-dao/verify` package is
+# a BUILD PRODUCT.  On a bare fresh clone `packages/verify/dist/` does not
+# exist, so these tests would otherwise error at collection with a confusing
+# ERR_MODULE_NOT_FOUND.  A precise, actionable skip is honest — the capability
+# is untested until built — and keeps a bare `pytest tests/` free of
+# unexplained errors.  CI and the release gates BUILD the package (see the
+# reviewer runbook) and therefore RUN these tests rather than skipping them.
+_verify_built = VERIFY_DIST_INDEX.is_file() and VERIFY_CLI.is_file()
+pytestmark = pytest.mark.skipif(
+    not _verify_built,
+    reason=(
+        "packages/verify is not built — run: "
+        "cd packages/verify && npm ci && npm run build "
+        "(CI/release gates build it and DO run these tests)"
+    ),
+)
 
 
 def _canonical_bytes(value: object) -> bytes:

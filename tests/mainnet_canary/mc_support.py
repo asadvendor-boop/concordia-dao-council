@@ -299,6 +299,11 @@ def make_attestation(repo: Path, **overrides: object) -> dict[str, object]:
                 "cargo_odra_version": "cargo-odra 0.1.7",
                 "cargo_lock_sha256": hermetic_cargo_lock_sha(repo),
             },
+            "build_executable": {
+                "path": "/opt/toolchain/bin/cargo",
+                "path_sha256": "ab" * 32,
+                "version": "cargo-odra 0.1.7",
+            },
         }
 
     entries = {
@@ -334,6 +339,7 @@ def make_raw_provider(
     api_version: str = "2.0.0",
     chain_tip_height: int = 200,
     retrieved_at_unix: int = 1_700_000_000,
+    session: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Full provider evidence whose raw exchanges re-derive its own claims."""
 
@@ -347,12 +353,15 @@ def make_raw_provider(
         if success
         else {"Version2": {"error_message": error_message}}
     )
+    deploy_object: dict[str, object] = {"hash": deploy_hash}
+    if session is not None:
+        deploy_object["session"] = session
     responses = {
         "info_get_deploy": {
             "jsonrpc": "2.0",
             "id": "canary-info_get_deploy",
             "result": {
-                "deploy": {"hash": deploy_hash},
+                "deploy": deploy_object,
                 "execution_results": [
                     {"block_hash": block_hash, "result": execution_result}
                 ],
@@ -836,11 +845,92 @@ def terminal_journal_for(plan: dict[str, object], path: Path) -> Path:
     return path
 
 
+HARNESS_RECIPIENT = bytes.fromhex("2b" * 32)
+
+
+def harness_source_key():
+    """A deterministic test signing key (never a real key)."""
+
+    from pycspr import KeyAlgorithm
+    from pycspr.factory.accounts import parse_private_key_bytes
+
+    return parse_private_key_bytes(bytes(range(1, 33)), KeyAlgorithm.ED25519)
+
+
+def signed_transfer_bytes(
+    *, recipient: bytes, amount: int, transfer_id: int, chain_name: str = "casper"
+) -> bytes:
+    """A signed native-transfer deploy for the round-2 security tests."""
+
+    from shared.native_transfer_deploy import build_signed_native_transfer_deploy
+
+    return build_signed_native_transfer_deploy(
+        source_private_key=harness_source_key(),
+        recipient_account_hash=recipient,
+        amount_motes=amount,
+        transfer_id=transfer_id,
+        payment_amount_motes=100_000_000,
+        timestamp_seconds=1_700_000_000.0,
+        chain_name=chain_name,
+    )
+
+
+def full_observation_bundle(plan: dict[str, object]) -> list[dict[str, object]]:
+    """Two agreeing v3 observations per economic step, matching each step's
+    expected outcome — a bundle that passes the real dual-provider evaluator."""
+
+    package = "8b" * 32
+    contract = "9c" * 32
+    bundle: list[dict[str, object]] = []
+    for step in plan["steps"]:
+        if not step["economic"]:
+            continue
+        step_id = str(step["step_id"])
+        expected = step["expected_outcome"]
+        overrides: dict[str, object] = {}
+        transfer = None
+        if expected.get("execution") == "failure":
+            overrides["execution"] = {
+                "success": False,
+                "error_message": expected["exact_error_message"],
+                "cost_motes": "100000000",
+            }
+        if step["kind"] == "native_transfer":
+            transfer = {
+                "source_account": expected["source_account"],
+                "recipient_account": expected["recipient_account"],
+                "amount_motes": expected["amount_motes"],
+                "transfer_id": expected["transfer_id"],
+            }
+        bundle.extend(
+            make_v2_pair(
+                step_id,
+                target={
+                    "package_hash": package,
+                    "contract_hash": contract,
+                    "entry_point": step["entry_point"],
+                    "typed_args": {
+                        str(arg["name"]): arg["value"]
+                        for arg in step["typed_args"]
+                    },
+                    "transfer": transfer,
+                },
+                **overrides,
+            )
+        )
+    return bundle
+
+
 def full_verification_report(plan: dict[str, object]) -> dict[str, object]:
-    """A verification report covering exactly the plan's economic steps."""
+    """A verification report covering exactly the plan's economic steps, with
+    the raw dual-provider observations embedded per step (SEC2 replay)."""
 
     from tools.mainnet_canary.calibration import economic_step_ids
 
+    bundle = full_observation_bundle(plan)
+    by_step: dict[str, list[dict[str, object]]] = {}
+    for observation in bundle:
+        by_step.setdefault(str(observation["step_id"]), []).append(observation)
     return {
         "mode": "verify",
         "plan_hash": plan["canary_plan_sha256"],
@@ -849,6 +939,7 @@ def full_verification_report(plan: dict[str, object]) -> dict[str, object]:
                 "step_id": step_id,
                 "status": "observation_consistent",
                 "providers": ["provider-a", "provider-b"],
+                "observations": by_step[step_id],
             }
             for step_id in economic_step_ids(plan)
         ],

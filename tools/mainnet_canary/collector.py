@@ -212,6 +212,26 @@ def collect_dual_observations(
             RefusalCode.NODE_SET_INVALID,
             "the two pinned providers do not resolve to disjoint hosts",
         )
+    # SEC4: two labels wrapped around ONE callable/source are not two
+    # providers.  If both provider ids map to the same underlying callable
+    # object (identity), the "disjoint" evidence is a single source in
+    # disguise and is refused.
+    call_objects = list(calls.values())
+    if call_objects[0] is call_objects[1]:
+        raise _refuse(
+            RefusalCode.NODE_SET_INVALID,
+            "the two provider labels wrap the same callable; a single source "
+            "behind two names is not disjoint evidence",
+        )
+    bound_source = getattr(call_objects[0], "__self__", None)
+    if bound_source is not None and bound_source is getattr(
+        call_objects[1], "__self__", None
+    ):
+        raise _refuse(
+            RefusalCode.NODE_SET_INVALID,
+            "the two provider callables are bound to the same transport "
+            "instance; that is one source, not two",
+        )
     observations = []
     for provider_id in sorted(calls):
         observations.append(
@@ -229,8 +249,75 @@ def collect_dual_observations(
     return observations
 
 
+class PinnedRpcReadTransport:
+    """A read-only provider that OWNS a validated PinnedHttpsJsonRpc (SEC4).
+
+    The collector never receives a bare lambda for the live lane: it binds a
+    `shared.casper_rpc_transport.PinnedHttpsJsonRpc` validated over exactly
+    one canonical endpoint, records that endpoint's resolved network identity
+    (pinned IP + chainspec), and exposes a `read` callable whose identity is
+    the transport instance — so two labels wrapping the same transport are
+    caught by the disjointness guard above.
+    """
+
+    def __init__(self, endpoint: str, *, resolver: object | None = None):
+        from shared.casper_rpc_transport import (
+            PinnedHttpsJsonRpc,
+            validate_public_rpc_endpoints,
+        )
+
+        validated = validate_public_rpc_endpoints(
+            [endpoint], resolver=resolver
+        )
+        self.endpoint = validated[0].url
+        self.pinned_ip = validated[0].pinned_ip
+        self._rpc = PinnedHttpsJsonRpc([endpoint], resolver=resolver)
+
+    def read(self, method: str, params: dict[str, object]) -> dict[str, object]:
+        # Reads only; the underlying transport refuses the write method
+        # unless explicit submit authority is passed (never here).
+        return self._rpc.call(
+            self.endpoint, method, params, f"canary-collect-{method}"
+        )
+
+
+def bind_dual_read_calls(
+    transports: list[PinnedRpcReadTransport],
+) -> tuple[dict[str, ReadCall], dict[str, str]]:
+    """Build the (calls, hosts) maps from two owned, distinct transports."""
+
+    if len(transports) != 2:
+        raise _refuse(
+            RefusalCode.NODE_SET_INVALID,
+            "exactly two owned read transports are required",
+        )
+    if transports[0] is transports[1] or (
+        transports[0].endpoint == transports[1].endpoint
+    ):
+        raise _refuse(
+            RefusalCode.NODE_SET_INVALID,
+            "the two read transports must be distinct instances on distinct "
+            "canonical endpoints",
+        )
+    if transports[0].pinned_ip == transports[1].pinned_ip:
+        raise _refuse(
+            RefusalCode.NODE_SET_INVALID,
+            "the two read transports resolve to the same pinned network "
+            "identity; that is one source",
+        )
+    calls: dict[str, ReadCall] = {}
+    hosts: dict[str, str] = {}
+    for index, transport in enumerate(transports):
+        provider_id = f"provider-{index}"
+        calls[provider_id] = transport.read
+        hosts[provider_id] = transport.endpoint
+    return calls, hosts
+
+
 __all__ = [
     "ReadCall",
+    "PinnedRpcReadTransport",
+    "bind_dual_read_calls",
     "collect_dual_observations",
     "collect_provider_observation",
     "derive_execution_from_result",

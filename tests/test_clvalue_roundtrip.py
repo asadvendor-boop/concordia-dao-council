@@ -75,6 +75,55 @@ DEPLOYMENT_MANIFEST = (
 HISTORICAL_ODRA_MANIFEST = ROOT / "handoff/HISTORICAL_ODRA_SHA256.txt"
 
 
+def _resolve_historical_source_commit() -> str:
+    """The commit whose contract-crate blobs match the frozen manifest pins.
+
+    Resolved dynamically (never hard-coded) so the split-API historical
+    verifier is exercised against the real immutable commit regardless of the
+    branch's later history.
+    """
+
+    import hashlib as _hashlib
+    import json as _json
+    import subprocess as _subprocess
+
+    manifest = _json.loads(DEPLOYMENT_MANIFEST.read_text(encoding="utf-8"))
+    pins = {
+        "src/lib.rs": manifest["source"]["lib_rs_sha256"],
+        "src/encoding.rs": manifest["source"]["encoding_rs_sha256"],
+        "Cargo.lock": manifest["source"]["cargo_lock_sha256"],
+    }
+    crate = "contracts/odra-governance-receipt-v3"
+    commits = _subprocess.run(
+        ["git", "-C", str(ROOT), "log", "--format=%H", "--", crate],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    for sha in commits:
+        ok = True
+        for rel, expected in pins.items():
+            blob = _subprocess.run(
+                ["git", "-C", str(ROOT), "show", f"{sha}:{crate}/{rel}"],
+                capture_output=True,
+                check=False,
+            )
+            if blob.returncode != 0 or (
+                _hashlib.sha256(blob.stdout).hexdigest() != expected
+            ):
+                ok = False
+                break
+        if ok:
+            return sha
+    raise AssertionError(
+        "no committed revision matches the frozen deployment manifest source "
+        "pins; the historical proof fixture cannot bind"
+    )
+
+
+_HISTORICAL_SOURCE_COMMIT = _resolve_historical_source_commit()
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -887,8 +936,12 @@ def _deployment_evidence(
             "deployment_domain": deployment_domain,
             "installation_nonce": nonce,
             "roles": roles,
-            "source_commit": "ab" * 20,
-            "deployment_commit": "cd" * 20,
+            # The proof declares the exact commit it was built at; the
+            # split-API verifier confirms the frozen manifest pins against
+            # the blobs AT that commit, so historical proofs stay verifiable
+            # on any branch whose live worktree has legitimately evolved.
+            "source_commit": _HISTORICAL_SOURCE_COMMIT,
+            "deployment_commit": _HISTORICAL_SOURCE_COMMIT,
             "installer_public_key": installer_public.account_key.hex(),
             "installer_account_hash": installer_public.to_account_hash().hex(),
             "threshold": 2,

@@ -59,6 +59,7 @@ def _testnet_step(plan: dict[str, object], step_id: str) -> dict[str, object]:
             testnet["expected_outcome"] = {
                 "recipient_account": RECIPIENT.hex(),
                 "amount_motes": amount,
+                "transfer_id": "1",
             }
             return testnet
     raise AssertionError(step_id)

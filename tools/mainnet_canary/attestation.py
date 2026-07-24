@@ -19,6 +19,7 @@ touches live artifacts.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import tarfile
@@ -43,6 +44,11 @@ _REQUIRED_TOOLCHAIN_FIELDS = (
 
 BuildRunner = Callable[[Path, dict[str, str]], Path]
 ToolchainProbe = Callable[[], dict[str, str]]
+# SEC1: the identity of the executable that actually produced the artifact —
+# probed at build time, bound into the attestation, never caller-asserted.
+ExecutableProbe = Callable[[], dict[str, str]]
+
+_REQUIRED_EXECUTABLE_FIELDS = ("path", "path_sha256", "version")
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,62 @@ class TagResolution:
     tag: str
     tag_object_sha: str
     peeled_commit_sha: str
+
+
+class _OwnedScratchChild:
+    """A uniquely-owned child directory under a validated parent (SEC7).
+
+    The attestation never recursively deletes a caller-selected scratch root:
+    a stray path (or the operator's home, or ``/``) passed as ``scratch_dir``
+    must never be walked by ``rmtree``.  Instead a uniquely-named child is
+    created with ``O_EXCL`` semantics under a parent that must already exist
+    and be a real (non-symlink) directory, and ONLY that child is removed on
+    exit.  Unrelated sibling entries are provably untouched.
+    """
+
+    def __init__(self, parent: Path):
+        if not parent.exists():
+            raise CanaryRefusal(
+                RefusalCode.BUILD_COMMAND_INVALID,
+                "attestation scratch parent must already exist; this lane "
+                "never creates or deletes a caller-selected root",
+            )
+        if parent.is_symlink() or not parent.is_dir():
+            raise CanaryRefusal(
+                RefusalCode.BUILD_COMMAND_INVALID,
+                "attestation scratch parent must be a real directory, not a "
+                "symlink or file",
+            )
+        # A unique, non-predictable child name; mkdir fails closed if it
+        # somehow already exists (never adopt an existing target).
+        name = "mc-attest-" + os.urandom(8).hex()
+        child = parent / name
+        try:
+            child.mkdir(mode=0o700)
+        except FileExistsError as exc:
+            raise CanaryRefusal(
+                RefusalCode.BUILD_COMMAND_INVALID,
+                "attestation scratch child already exists; refusing to adopt "
+                "an unowned directory",
+            ) from exc
+        self.parent = parent
+        self.path = child
+
+    def __enter__(self) -> Path:
+        return self.path
+
+    def __exit__(self, *exc: object) -> None:
+        # Remove ONLY our owned child, and only if it is still a real
+        # directory we created inside the validated parent.
+        try:
+            if (
+                self.path.is_dir()
+                and not self.path.is_symlink()
+                and self.path.parent == self.parent
+            ):
+                shutil.rmtree(self.path, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
@@ -172,6 +234,7 @@ def attest_network_build(
     build_runner: BuildRunner,
     scratch_dir: Path,
     toolchain_probe: ToolchainProbe,
+    executable_probe: ExecutableProbe | None = None,
 ) -> dict[str, object]:
     """Double-build one network artifact from independent clean trees."""
 
@@ -185,6 +248,26 @@ def attest_network_build(
         repo_root, tag, expected_peeled_commit_sha=expected_peeled_commit_sha
     )
     require_pristine_worktree(repo_root)
+
+    # SEC1: bind the executable that will produce the artifact BEFORE building.
+    build_executable: dict[str, str] = {}
+    if executable_probe is not None:
+        probed = executable_probe()
+        missing_exe = [
+            field
+            for field in _REQUIRED_EXECUTABLE_FIELDS
+            if not isinstance(probed.get(field), str) or not probed.get(field)
+        ]
+        if missing_exe:
+            raise CanaryRefusal(
+                RefusalCode.ATTESTATION_NOT_EXECUTED,
+                f"build executable identity is incomplete (missing "
+                f"{missing_exe}); an attestation that cannot name the "
+                "executable it ran is not established by a build",
+            )
+        build_executable = {
+            field: probed[field] for field in _REQUIRED_EXECUTABLE_FIELDS
+        }
 
     toolchain = toolchain_probe()
     missing = [
@@ -202,12 +285,15 @@ def attest_network_build(
     env_delta = {ALLOWED_BUILD_ENV_KEY: profile}
     artifacts: list[bytes] = []
     artifact_relpath: str | None = None
-    try:
+    # SEC7: never rmtree the caller-selected scratch root.  Own exactly one
+    # uniquely-named child under it and remove only that child; siblings the
+    # caller placed under the same parent are provably untouched.
+    with _OwnedScratchChild(scratch_dir) as owned:
         for build_index in (1, 2):
             tree = export_commit_tree(
                 repo_root,
                 resolution.peeled_commit_sha,
-                scratch_dir / f"build-{build_index}",
+                owned / f"build-{build_index}",
             )
             if build_index == 1:
                 first_tree_digest = _tree_digest(tree)
@@ -234,8 +320,6 @@ def attest_network_build(
                 )
             artifacts.append(artifact_path.read_bytes())
             artifact_relpath = str(artifact_path.relative_to(tree))
-    finally:
-        shutil.rmtree(scratch_dir, ignore_errors=True)
 
     if artifacts[0] != artifacts[1]:
         raise CanaryRefusal(
@@ -244,7 +328,7 @@ def attest_network_build(
             "artifact hash cannot be attested",
         )
     wasm_sha256 = hashlib.sha256(artifacts[0]).hexdigest()
-    return {
+    entry: dict[str, object] = {
         "schema_id": RC_ATTESTATION_SCHEMA_ID,
         "tag": resolution.tag,
         "tag_object_sha": resolution.tag_object_sha,
@@ -259,6 +343,9 @@ def attest_network_build(
             field: toolchain[field] for field in _REQUIRED_TOOLCHAIN_FIELDS
         },
     }
+    if build_executable:
+        entry["build_executable"] = build_executable
+    return entry
 
 
 ATTESTATION_DOCUMENT_SCHEMA_ID = (
@@ -281,6 +368,8 @@ _ENTRY_FIELDS = frozenset(
         "wasm_sha256",
         "wasm_size_bytes",
         "toolchain",
+        # SEC1: the executable identity that actually produced the artifact.
+        "build_executable",
     }
 )
 
@@ -352,6 +441,37 @@ def production_build_runner(cargo_path: str) -> BuildRunner:
     return _run
 
 
+def probe_build_executable(cargo_path: str) -> ExecutableProbe:
+    """Probe the pinned cargo executable's identity (path sha256 + version)."""
+
+    def _probe() -> dict[str, str]:
+        path = Path(cargo_path)
+        if not path.is_file():
+            raise CanaryRefusal(
+                RefusalCode.ATTESTATION_NOT_EXECUTED,
+                "pinned build executable does not exist at the given path",
+            )
+        path_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        result = subprocess.run(
+            [cargo_path, "odra", "--version"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        version = (
+            result.stdout.decode("utf-8", "replace").strip().splitlines()[0]
+            if result.returncode == 0 and result.stdout
+            else ""
+        )
+        return {
+            "path": str(path),
+            "path_sha256": path_sha256,
+            "version": version,
+        }
+
+    return _probe
+
+
 def attestation_entry_digest(entry: dict[str, object]) -> str:
     """Canonical digest of one double-build result, domain-separated."""
 
@@ -420,6 +540,26 @@ def verify_attestation_entry(
         raise CanaryRefusal(
             RefusalCode.ATTESTATION_NOT_EXECUTED,
             f"{profile}: attestation does not record two independent builds",
+        )
+    # SEC1: the build-executable identity must be present and well-formed; an
+    # attestation that cannot name the executable that produced it was not
+    # established by a real build.
+    executable = entry["build_executable"]
+    if not isinstance(executable, dict) or set(executable) != set(
+        _REQUIRED_EXECUTABLE_FIELDS
+    ):
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: build executable identity must contain exactly "
+            f"{list(_REQUIRED_EXECUTABLE_FIELDS)}",
+        )
+    exe_sha = executable["path_sha256"]
+    if not isinstance(exe_sha, str) or len(exe_sha) != 64 or not isinstance(
+        executable["version"], str
+    ) or not executable["version"]:
+        raise CanaryRefusal(
+            RefusalCode.ATTESTATION_NOT_EXECUTED,
+            f"{profile}: build executable sha256/version malformed",
         )
     if entry["tag"] != expected_tag:
         raise CanaryRefusal(
@@ -584,9 +724,13 @@ def build_attestation_document(
     build_runner: BuildRunner,
     scratch_dir: Path,
     toolchain_probe: ToolchainProbe,
+    executable_probe: ExecutableProbe | None = None,
 ) -> dict[str, object]:
     """Execute the double builds for BOTH profiles and bind the result."""
 
+    # The caller-selected scratch root must already exist; each profile build
+    # owns its own uniquely-named child under it (SEC7).  We never create or
+    # delete the root itself.
     entries: dict[str, dict[str, object]] = {}
     for profile in ALLOWED_PROFILES:
         entries[profile] = attest_network_build(
@@ -595,8 +739,9 @@ def build_attestation_document(
             expected_peeled_commit_sha=expected_peeled_commit_sha,
             profile=profile,
             build_runner=build_runner,
-            scratch_dir=scratch_dir / profile,
+            scratch_dir=scratch_dir,
             toolchain_probe=toolchain_probe,
+            executable_probe=executable_probe,
         )
     require_disjoint_network_artifacts(
         entries["testnet"], entries["mainnet-native"]

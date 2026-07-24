@@ -231,3 +231,44 @@ arguments: `--calibration --authorization --clock-unix --authorizer-key`.
 All nested observation structures (block, execution, provider, finality,
 raw exchanges) validate with exact key sets and types BEFORE any indexing:
 malformed input returns a stable refusal code, never a traceback.
+
+## 6. Public-tag test contract (Codex correction — fresh-clone green)
+
+The 101 failures / 11 errors a bare `pytest tests/` used to show were NOT
+canary defects: the 101 were the frozen v3 deployment manifest's source pins
+being checked against a live worktree whose contract crate legitimately
+evolved on this lane, and the 11 were an undeclared `packages/verify` build
+prerequisite. Both are resolved without rewriting any historical artifact:
+
+### 6.1 Split-API historical verification (no caller-controlled ref)
+`scripts/verify_v3_proof.py` now has two SEPARATE functions:
+- `_verify_release_files(...)` — strict live-worktree verification, UNCHANGED,
+  used by the RC release gate.
+- `verify_release_files_historical(manifest, *, source_commit)` — verifies the
+  frozen manifest pins against the blobs AT the commit the finalized proof
+  itself declares (`deployment.source_commit`), via argv-based `git show`
+  plumbing. The expected commit is NOT a caller flag or a conftest mode: it is
+  taken from the proof, confirmed to be a full existing commit object, and the
+  frozen manifest pins must equal the blobs at exactly that commit. Wasm/schema
+  are verified this way only because they are genuinely committed at that
+  revision. A forger cannot substitute a different commit: only the true
+  historical commit's blobs hash to the frozen pins.
+
+### 6.2 Build-prerequisite skips (bare clone only)
+`tests/test_assemble_proof_registry.py` skips with an actionable reason when
+`packages/verify/dist/` is absent. CI and the release gates BUILD the package
+(`cd packages/verify && npm ci && npm run build`) and therefore RUN these
+tests — the skip is for a bare local checkout only, never for CI/release.
+
+### 6.3 The exact fresh-clone command
+```bash
+# 1. Canary lane (self-contained, always green):
+PYTHONPATH="$PWD" python -m pytest tests/mainnet_canary/ -q
+python3 tests/mainnet_canary/validation_matrix.py
+# 2. Full Testnet suite (green after 6.1; 6.2 skips are labeled):
+PYTHONPATH="$PWD" python -m pytest tests/ -q
+# 3. To execute (not skip) the verifier tests, build the package first:
+cd packages/verify && npm ci && npm run build && cd ../..
+```
+A bare `pytest tests/` yields zero unexplained failures/errors — only the
+clearly-labeled build-prerequisite skips.

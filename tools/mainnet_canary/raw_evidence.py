@@ -183,11 +183,43 @@ def _derive_deploy_facts(
     success, error_message = derive_execution_from_result(
         entry.get("result"), label=f"{label}.execution.result"
     )
+    # SEC3: the target/entry-point/typed-args/transfer are DERIVED from the
+    # raw deploy session when present, never copied from observation metadata.
+    session = deploy.get("session") if isinstance(deploy.get("session"), dict) else None
+    target: dict[str, object] | None = None
+    if session is not None:
+        target = _derive_target_from_session(session, label=f"{label}.session")
     return {
         "deploy_hash": deploy_hash,
         "block_hash": block_hash,
         "success": success,
         "error_message": error_message,
+        "derived_target": target,
+    }
+
+
+def _derive_target_from_session(
+    session: dict[str, object], *, label: str
+) -> dict[str, object]:
+    """Pull entry point, typed args, and any transfer from a raw session."""
+
+    entry_point = session.get("entry_point")
+    raw_args = session.get("args")
+    typed_args: dict[str, object] = {}
+    if isinstance(raw_args, list):
+        for pair in raw_args:
+            # Casper args serialize as [name, {cl_type, parsed, ...}].
+            if isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], str):
+                clvalue = pair[1]
+                parsed = (
+                    clvalue.get("parsed") if isinstance(clvalue, dict) else None
+                )
+                typed_args[pair[0]] = parsed
+    transfer = session.get("transfer")
+    return {
+        "entry_point": entry_point,
+        "typed_args": typed_args,
+        "transfer": transfer if isinstance(transfer, dict) else None,
     }
 
 
@@ -368,6 +400,7 @@ def require_rederived_agreement(
     state_root_hash: str | None = None,
     require_proofs: bool = False,
     require_membership: bool = False,
+    observed_target: dict[str, object] | None = None,
 ) -> None:
     """Re-derive every recorded binding from the raw bodies; refuse drift.
 
@@ -380,6 +413,19 @@ def require_rederived_agreement(
     deploy_facts = _derive_deploy_facts(
         parsed["info_get_deploy"], label=f"{label}.info_get_deploy"
     )
+    # SEC3: when the raw deploy carries a session, the observation's target
+    # metadata (entry point, typed args, transfer) must equal the values
+    # DERIVED from that raw session — a metadata target that disagrees with
+    # the on-chain deploy is refused rather than trusted.
+    derived_target = deploy_facts.get("derived_target")
+    if derived_target is not None and observed_target is not None:
+        for field in ("entry_point", "typed_args", "transfer"):
+            if observed_target.get(field) != derived_target.get(field):
+                raise _refuse(
+                    RefusalCode.RAW_EVIDENCE_MISMATCH,
+                    f"{label}: observation target.{field} does not equal the "
+                    "value derived from the raw deploy session",
+                )
     block_facts = _derive_block_facts(
         parsed["chain_get_block"], label=f"{label}.chain_get_block"
     )

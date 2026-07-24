@@ -45,6 +45,7 @@ from tools.mainnet_canary.stage import run_stage
 from tools.mainnet_canary.finality_v2 import evaluate_dual_provider
 from tools.mainnet_canary.attestation import (
     build_attestation_document,
+    probe_build_executable,
     production_build_runner,
     verify_attestation_document,
 )
@@ -308,6 +309,30 @@ def _cmd_funding(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _expectation_for_step(
+    step: dict[str, object], plan_document: dict[str, object]
+) -> dict[str, object]:
+    """The dual-provider expectation for one economic step (shared by verify
+    and the proof-bundle replay so both enforce identical bindings)."""
+
+    expected = step["expected_outcome"]
+    if step["kind"] == "native_transfer":
+        derived = plan_document["envelope"]["derived"]
+        return {
+            "type": "native_transfer",
+            "source_account": str(expected["source_account"]),
+            "recipient_account": str(expected["recipient_account"]),
+            "amount_motes": str(expected["amount_motes"]),
+            "transfer_id": str(derived["transfer_id"]),
+        }
+    if expected.get("execution") == "failure":
+        return {
+            "type": "exact_refusal",
+            "error_message": str(expected["exact_error_message"]),
+        }
+    return {"type": "expected_success"}
+
+
 def _cmd_verify(args: argparse.Namespace) -> dict[str, object]:
     plan_document = _read_json_file(Path(args.plan), context="plan-document")
     if plan_document.get("canary_plan_sha256") != plan_document_hash(plan_document):
@@ -339,37 +364,30 @@ def _cmd_verify(args: argparse.Namespace) -> dict[str, object]:
     # response evidence. A single-source bundle refuses with
     # NODE_SET_INVALID rather than being quietly accepted.
     results: list[dict[str, object]] = []
-    envelope = plan_document["envelope"]
-    derived = envelope["derived"]
     for step in plan_document["steps"]:
         step_id = str(step["step_id"])
         if not step["economic"]:
             continue
         expected = step["expected_outcome"]
-        if step["kind"] == "native_transfer":
-            expectation: dict[str, object] = {
-                "type": "native_transfer",
-                "source_account": str(expected["source_account"]),
-                "recipient_account": str(expected["recipient_account"]),
-                "amount_motes": str(expected["amount_motes"]),
-                "transfer_id": str(derived["transfer_id"]),
-            }
-        elif expected.get("execution") == "failure":
-            expectation = {
-                "type": "exact_refusal",
-                "error_message": str(expected["exact_error_message"]),
-            }
-        else:
-            expectation = {"type": "expected_success"}
+        expectation = _expectation_for_step(step, plan_document)
         consensus = evaluate_dual_provider(
             bundle, step_id=step_id, expectation=expectation
         )
+        step_observations = [
+            observation
+            for observation in bundle
+            if isinstance(observation, dict)
+            and observation.get("step_id") == step_id
+        ]
         result: dict[str, object] = {
             "step_id": step_id,
             "status": "observation_consistent",
             "providers": consensus["providers"],
             "consensus_block_hash": consensus["consensus_block_hash"],
             "raw_response_sha256s": consensus["raw_response_sha256s"],
+            # SEC2: the raw observations are embedded in the verification
+            # output so the proof bundle can REPLAY them, not trust a status.
+            "observations": step_observations,
         }
         # ``refusal_observed`` is DERIVED, never planned: it appears only
         # when a refusal-probe step's dual-provider consensus matched the
@@ -492,13 +510,42 @@ def _cmd_bundle(args: argparse.Namespace) -> dict[str, object]:
             f"exactly; missing={missing} extra={extra} "
             f"duplicates={duplicates}",
         )
+    # SEC2: a status line is not proof.  Every step's verification entry must
+    # embed its raw dual-provider observations, and the bundle REPLAYS them
+    # through the real dual-provider evaluator against the plan step's exact
+    # expected outcome.  A status-only report (no embedded observations) is
+    # refused; the bundle never trusts "observation_consistent" on its word.
+    from tools.mainnet_canary.finality_v2 import evaluate_dual_provider
+
+    plan_steps_by_id = {
+        str(step["step_id"]): step for step in plan_document["steps"]
+    }
     for entry in entries:
+        step_id = str(entry.get("step_id"))
         if entry.get("status") != "observation_consistent":
             raise CanaryRefusal(
                 RefusalCode.PROOF_STEP_SET_MISMATCH,
-                f"step {entry.get('step_id')} is not observation-consistent "
-                "in the verification report",
+                f"step {step_id} is not observation-consistent in the "
+                "verification report",
             )
+        observations = entry.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise CanaryRefusal(
+                RefusalCode.OBSERVATION_ABSENT,
+                f"step {step_id}: proof bundle refuses a status-only "
+                "verification entry; the raw dual-provider observations must "
+                "be embedded and replayed",
+            )
+        step = plan_steps_by_id.get(step_id)
+        if step is None:
+            raise CanaryRefusal(
+                RefusalCode.PROOF_STEP_SET_MISMATCH,
+                f"step {step_id} has no matching plan step",
+            )
+        expectation = _expectation_for_step(step, plan_document)
+        evaluate_dual_provider(
+            observations, step_id=step_id, expectation=expectation
+        )
 
     # 5. The journal head is READ from the journal, never taken on the
     #    operator's word, and every economic step must be terminally
@@ -577,6 +624,7 @@ def _cmd_attest(args: argparse.Namespace) -> dict[str, object]:
         build_runner=production_build_runner(args.cargo_path),
         scratch_dir=Path(args.scratch_dir),
         toolchain_probe=_probe_toolchain,
+        executable_probe=probe_build_executable(args.cargo_path),
     )
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

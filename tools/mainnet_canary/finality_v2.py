@@ -247,6 +247,9 @@ def validate_observation_v3(document: object) -> dict[str, object]:
         state_root_hash=str(block["state_root_hash"]),
         require_proofs=bool(block["block_proofs_present"]),
         require_membership=bool(block["deploy_is_member"]),
+        observed_target=document["target"]
+        if isinstance(document.get("target"), dict)
+        else None,
     )
     return document
 

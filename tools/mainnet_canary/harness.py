@@ -276,6 +276,10 @@ def emit_harness_observation(
         "entry_point": testnet_step.get("entry_point"),
         "wasm_sha256": testnet_step.get("wasm_sha256"),
         "testnet_typed_args": testnet_step.get("typed_args"),
+        # SEC6: the decoded arguments from the ACTUAL signed deploy, and the
+        # payment recomputed from it — calibration digests these, not the
+        # metadata typed_args.
+        "deploy_decoded_args": facts.get("decoded_session_args"),
         "deploy_payment_motes": str(facts["payment_amount_motes"]),
         "deploy_hash": facts["deploy_hash_hex"],
         "block_hash": block_hash,
