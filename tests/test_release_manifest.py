@@ -2196,7 +2196,6 @@ def _npm_raw(release_commit: str) -> dict[str, object]:
         "metadata": {
             "name": "@concordia-dao/verify",
             "version": "0.1.1",
-            "gitHead": release_commit,
             "time": "2026-07-23T00:08:00Z",
             "dist": {
                 "tarball": "https://registry.npmjs.org/@concordia-dao/verify/-/verify-0.1.1.tgz",
@@ -2324,7 +2323,6 @@ def test_npm_provenance_parser_binds_subject_workflow_runner_and_commit() -> Non
         raw,
         attestation_url=attestation_url,
         version="0.1.1",
-        source_commit=source_commit,
         integrity=integrity,
     )
 
@@ -2404,6 +2402,55 @@ def test_npm_projection_requires_registry_visible_workflow_provenance(
 
     with pytest.raises(ReleaseManifestError, match="npm provenance"):
         capture_release_observations_once(repository)
+
+
+def test_npm_may_precede_integration_only_when_package_tree_is_unchanged(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+) -> None:
+    repository, commits, _, _ = release_repository
+    snapshot = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    snapshot = replace(snapshot, npm=_npm_raw(commits["source"]))
+
+    projections, _ = release_manifest._project_snapshot(
+        repository,
+        snapshot,
+        now=datetime(2026, 7, 23, 0, 10, 30, tzinfo=UTC),
+        canaries=(),
+        integration_commit=commits["integration"],
+    )
+
+    assert projections["pages"]["deployment_commit"] == commits["integration"]
+    assert projections["npm"]["publication_commit"] == commits["source"]
+
+
+def test_npm_package_tree_change_after_publication_is_detected(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    _git(repository, "config", "user.name", "Release Test")
+    _git(repository, "config", "user.email", "release@example.invalid")
+    _write_bytes(repository, "packages/verify/package.json", b'{"version":"0.1.1"}\n')
+    publication_commit = _commit(repository, "published verifier")
+
+    _write_bytes(repository, "docs/release.md", b"unrelated release documentation\n")
+    unrelated_commit = _commit(repository, "unrelated integration work")
+    assert release_manifest._path_is_unchanged_between_commits(
+        repository,
+        ancestor=publication_commit,
+        descendant=unrelated_commit,
+        relative="packages/verify",
+    )
+
+    _write_bytes(repository, "packages/verify/package.json", b'{"version":"0.1.2"}\n')
+    changed_commit = _commit(repository, "changed verifier")
+    assert not release_manifest._path_is_unchanged_between_commits(
+        repository,
+        ancestor=publication_commit,
+        descendant=changed_commit,
+        relative="packages/verify",
+    )
 
 
 def _rpc_raw(observed_at: str) -> list[dict[str, object]]:

@@ -592,7 +592,7 @@
     "provenance_free_bootstrap_allowed": false,
     "required_postpublish_check": "npm audit signatures",
     "required_binding": [
-      "registry gitHead",
+      "provenance resolvedDependencies gitCommit",
       "exact tarball SHA-512 and SHA-256",
       "package releaseCommit",
       "committed prepack digest",

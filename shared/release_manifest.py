@@ -2020,6 +2020,35 @@ def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
+def _path_is_unchanged_between_commits(
+    root: Path,
+    *,
+    ancestor: str,
+    descendant: str,
+    relative: str,
+) -> bool:
+    _git40(ancestor, "path comparison ancestor")
+    _git40(descendant, "path comparison descendant")
+    _validate_relative_path(relative)
+    if (
+        not _commit_exists(root, ancestor)
+        or not _commit_exists(root, descendant)
+        or not _is_ancestor(root, ancestor, descendant)
+    ):
+        raise ReleaseManifestError(
+            f"{relative} source commit is unavailable or not an ancestor"
+        )
+    result = _git(
+        root,
+        ["diff", "--quiet", ancestor, descendant, "--", relative],
+        check=False,
+        limit=_CONTROL_LIMIT,
+    )
+    if result.returncode not in {0, 1}:
+        raise ReleaseManifestError(f"{relative} commit comparison failed")
+    return result.returncode == 0
+
+
 def _require_ordered_ancestry(
     root: Path,
     *,
@@ -7173,7 +7202,7 @@ def _parse_npm_provenance_attestation(
     *,
     attestation_url: str,
     version: str,
-    source_commit: str,
+    source_commit: str | None = None,
     integrity: str,
 ) -> dict[str, object]:
     document, _ = _strict_json(raw, "npm provenance attestations")
@@ -7259,21 +7288,30 @@ def _parse_npm_provenance_attestation(
         "git+https://github.com/asadvendor-boop/"
         "concordia-dao-council@refs/heads/main"
     )
-    bound_dependencies = []
+    repository_dependencies: list[str] = []
     for item in dependencies:
         dependency = _mapping(item, "npm provenance dependency")
         dependency_digest = _mapping(
             dependency.get("digest"), "npm provenance dependency digest"
         )
-        if (
-            dependency.get("uri") == expected_uri
-            and dependency_digest.get("gitCommit") == source_commit
-        ):
-            bound_dependencies.append(dependency)
-    if len(bound_dependencies) != 1:
+        if dependency.get("uri") == expected_uri:
+            repository_dependencies.append(
+                _git40(
+                    dependency_digest.get("gitCommit"),
+                    "npm provenance source commit",
+                )
+            )
+    if len(repository_dependencies) != 1:
         raise ReleaseManifestError(
-            "npm provenance does not bind the exact source commit"
+            "npm provenance does not bind exactly one source commit"
         )
+    provenance_source_commit = repository_dependencies[0]
+    if (
+        source_commit is not None
+        and provenance_source_commit
+        != _git40(source_commit, "expected npm provenance source commit")
+    ):
+        raise ReleaseManifestError("npm provenance source commit differs")
 
     details = _mapping(predicate.get("runDetails"), "npm provenance run details")
     builder = _mapping(details.get("builder"), "npm provenance builder")
@@ -7292,7 +7330,7 @@ def _parse_npm_provenance_attestation(
         "predicate_type": _NPM_PROVENANCE_PREDICATE,
         "subject_sha512": expected_digest,
         "source_repository": _NPM_PROVENANCE_REPOSITORY,
-        "source_commit": source_commit,
+        "source_commit": provenance_source_commit,
         "workflow_path": _NPM_PROVENANCE_WORKFLOW,
         "workflow_ref": "refs/heads/main",
         "builder_id": _NPM_PROVENANCE_BUILDER,
@@ -7316,7 +7354,6 @@ def _npm_projection(
     version = _text(metadata.get("version"), "npm version")
     if _SEMVER.fullmatch(version) is None:
         raise ReleaseManifestError("npm version is invalid")
-    git_head = _git40(metadata.get("gitHead"), "npm gitHead")
     published_at = _parse_timestamp(metadata.get("time"), "npm published_at")[0]
     dist = _mapping(metadata.get("dist"), "npm dist")
     tarball_url = _text(dist.get("tarball"), "npm tarball URL")
@@ -7333,6 +7370,10 @@ def _npm_projection(
     if registry_signatures != {"invalid": [], "missing": []}:
         raise ReleaseManifestError("npm registry signatures did not verify")
     provenance = _mapping(npm.get("provenance"), "npm provenance")
+    provenance_source_commit = _git40(
+        provenance.get("source_commit"),
+        "npm provenance source commit",
+    )
     expected_provenance = {
         "attestation_url": _validate_npm_attestation_url(
             provenance.get("attestation_url"), version=version
@@ -7340,7 +7381,7 @@ def _npm_projection(
         "predicate_type": _NPM_PROVENANCE_PREDICATE,
         "subject_sha512": hashlib.sha512(tarball).hexdigest(),
         "source_repository": _NPM_PROVENANCE_REPOSITORY,
-        "source_commit": git_head,
+        "source_commit": provenance_source_commit,
         "workflow_path": _NPM_PROVENANCE_WORKFLOW,
         "workflow_ref": "refs/heads/main",
         "builder_id": _NPM_PROVENANCE_BUILDER,
@@ -7360,9 +7401,9 @@ def _npm_projection(
     source_commit = _git40(
         package.get("sourceCommit"), "npm package source commit"
     )
-    if source_commit != git_head:
+    if source_commit != provenance_source_commit:
         raise ReleaseManifestError(
-            "npm registry gitHead differs from the reproduced package source"
+            "npm provenance commit differs from the reproduced package source"
         )
     if (
         package.get("name") != metadata["name"]
@@ -7390,7 +7431,7 @@ def _npm_projection(
         "name": metadata["name"],
         "version": version,
         "source_commit": source_commit,
-        "publication_commit": git_head,
+        "publication_commit": provenance_source_commit,
         "publication_policy": "registry_signed_exact_source_reproduction",
         "published_at": published_at,
         "tarball_url": tarball_url,
@@ -7595,8 +7636,6 @@ def _project_snapshot(
     )
     npm, tarball = _npm_projection(root, snapshot.npm, canaries)
     pages = _pages_projection(snapshot.pages, canaries)
-    if pages.get("deployment_commit") != npm.get("publication_commit"):
-        raise ReleaseManifestError("Pages and npm do not bind the same release commit")
     release_commit = _git40(pages.get("deployment_commit"), "surface release commit")
     integration_commit = _git40(
         integration_commit,
@@ -7604,7 +7643,20 @@ def _project_snapshot(
     )
     if release_commit != integration_commit:
         raise ReleaseManifestError(
-            "Pages and npm do not bind the command-gated integration commit"
+            "Pages do not bind the command-gated integration commit"
+        )
+    npm_publication_commit = _git40(
+        npm.get("publication_commit"),
+        "npm provenance publication commit",
+    )
+    if not _path_is_unchanged_between_commits(
+        root,
+        ancestor=npm_publication_commit,
+        descendant=integration_commit,
+        relative="packages/verify",
+    ):
+        raise ReleaseManifestError(
+            "npm package tree changed after the provenance-bound publication"
         )
     if not _commit_exists(root, release_commit) or not _is_ancestor(
         root, release_commit, "HEAD"
@@ -13473,13 +13525,15 @@ class _DefaultCollector:
             raise ReleaseManifestError(
                 "npm provenance attestation download failed"
             )
-        source_commit = _git40(metadata.get("gitHead"), "npm registry gitHead")
         provenance = _parse_npm_provenance_attestation(
             attestation_raw,
             attestation_url=attestation_url,
             version=version,
-            source_commit=source_commit,
             integrity=computed_integrity,
+        )
+        source_commit = _git40(
+            provenance.get("source_commit"),
+            "npm provenance source commit",
         )
         # Execute package code only after registry integrity and signatures
         # authenticate the exact downloaded bytes.
@@ -13492,7 +13546,6 @@ class _DefaultCollector:
             "metadata": {
                 "name": metadata.get("name"),
                 "version": version,
-                "gitHead": metadata.get("gitHead"),
                 "time": published_at,
                 "dist": {
                     "tarball": tarball_url,
@@ -13765,7 +13818,9 @@ def _inspect_npm_tarball(
             raise ReleaseManifestError("npm source archive is invalid") from exc
         rebuild_root = source_root / "packages" / "verify"
         if not rebuild_root.is_dir():
-            raise ReleaseManifestError("npm package source is unavailable at gitHead")
+            raise ReleaseManifestError(
+                "npm package source is unavailable at the provenance commit"
+            )
         _run(
             rebuild_root,
             [

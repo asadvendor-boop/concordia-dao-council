@@ -367,12 +367,13 @@ def test_financial_claims_and_first_publish_cannot_fail_open() -> None:
     assert release["provenance_free_bootstrap_allowed"] is False
     assert release["required_postpublish_check"] == "npm audit signatures"
     for binding in [
-        "registry gitHead",
+        "provenance resolvedDependencies gitCommit",
         "exact tarball SHA-512 and SHA-256",
         "provenance subject digest",
         "provenance source repository and commit",
     ]:
         assert binding in release["required_binding"]
+    assert "registry gitHead" not in release["required_binding"]
 
 
 def test_every_known_scope_gap_remains_explicitly_blocking() -> None:
