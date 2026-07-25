@@ -90,6 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          npm cache add '@noble/hashes@1.8.0'
           npm test
           npm run lint
           npm audit --audit-level=high
