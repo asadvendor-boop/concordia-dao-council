@@ -24,8 +24,22 @@ export type CasperAccountBalanceInput = Readonly<{
   expectedBalanceMotes?: string | number | bigint;
 }>;
 
+export type CasperAccountAbsenceInput = Readonly<{
+  chainStatusRequest: unknown;
+  chainStatusPayload: unknown;
+  canonicalBlockRequest: unknown;
+  canonicalBlockPayload: unknown;
+  balanceRequest: unknown;
+  absenceObservations: readonly unknown[];
+  expectedAccountHash: string;
+  expectedBlockHash: string;
+  expectedBlockHeight: number;
+  expectedStateRootHash: string;
+}>;
+
 export type AccountBalanceFacts = Readonly<{
   network: "casper-test";
+  accountExists: boolean;
   accountHash: string;
   blockHash: string;
   blockHeight: number;
@@ -35,7 +49,9 @@ export type AccountBalanceFacts = Readonly<{
   balanceHoldsTotalMotes: string;
   balanceHolds: readonly Readonly<{ time: string; amount: string; proof: string }>[];
   nodeProvidedMerkleProofHex: string;
-  merkleProofVerificationScope: "node-provided-not-locally-verified";
+  merkleProofVerificationScope:
+    | "node-provided-not-locally-verified"
+    | "two-public-nodes-prove-account-absent";
   balanceRequestMethod: "query_balance_details";
   balanceRequestId: number | string;
   transcriptSha256: Readonly<{
@@ -93,6 +109,42 @@ function requestId(value: unknown, label: string): number | string {
     (typeof value !== "string" || value.length === 0)
   ) {
     throw new Error(`${label} request id is invalid`);
+  }
+  return value;
+}
+
+function publicNodeUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("account absence node URL must be canonical public HTTPS");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("account absence node URL must be canonical public HTTPS");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const labels = hostname.split(".");
+  const canonicalDnsName =
+    labels.length >= 2 &&
+    labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) &&
+    /[a-z]/.test(labels.at(-1) ?? "");
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== "/rpc" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.port !== "" ||
+    !canonicalDnsName ||
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname) ||
+    parsed.href !== value
+  ) {
+    throw new Error("account absence node URL must be canonical public HTTPS");
   }
   return value;
 }
@@ -327,6 +379,24 @@ function parseBalanceResponse(
   });
 }
 
+function parseAbsenceResponse(payload: unknown, expectedId: number | string): void {
+  const body = record(payload, "account absence response");
+  exactOwnKeys(body, ["jsonrpc", "id", "error"], "account absence response");
+  if (own(body, "jsonrpc") !== "2.0" || own(body, "id") !== expectedId) {
+    throw new Error("account absence response identity does not match request");
+  }
+  const error = record(own(body, "error"), "account absence error");
+  exactOwnKeys(error, ["code", "message", "data"], "account absence error");
+  if (
+    own(error, "code") !== -32026 ||
+    typeof own(error, "message") !== "string" ||
+    own(error, "message") === ""
+  ) {
+    throw new Error("account absence response has wrong RPC error code");
+  }
+  canonicalTranscriptJson(own(error, "data"), "account absence error data");
+}
+
 export function verifyAccountBalanceAtBlock(input: CasperAccountBalanceInput): AccountBalanceFacts {
   for (const field of [
     "chainStatusRequest",
@@ -388,6 +458,7 @@ export function verifyAccountBalanceAtBlock(input: CasperAccountBalanceInput): A
 
   return Object.freeze({
     network,
+    accountExists: true,
     accountHash,
     blockHash: block.blockHash,
     blockHeight: block.blockHeight,
@@ -400,6 +471,162 @@ export function verifyAccountBalanceAtBlock(input: CasperAccountBalanceInput): A
     merkleProofVerificationScope: "node-provided-not-locally-verified",
     balanceRequestMethod: balanceRequest.method,
     balanceRequestId: balanceRequest.requestId,
+    transcriptSha256,
+  });
+}
+
+export function verifyAccountAbsenceAtBlock(
+  input: CasperAccountAbsenceInput,
+): AccountBalanceFacts {
+  for (const field of [
+    "chainStatusRequest",
+    "chainStatusPayload",
+    "canonicalBlockRequest",
+    "canonicalBlockPayload",
+    "balanceRequest",
+    "absenceObservations",
+    "expectedAccountHash",
+    "expectedBlockHash",
+    "expectedBlockHeight",
+    "expectedStateRootHash",
+  ] as const) {
+    if (!Object.hasOwn(input, field)) {
+      throw new Error(`required own account absence field ${field} is missing`);
+    }
+  }
+  const accountHash = lowerHash(input.expectedAccountHash, "expected account hash");
+  const expectedBlockHash = lowerHash(input.expectedBlockHash, "expected block hash");
+  const expectedStateRootHash = lowerHash(
+    input.expectedStateRootHash,
+    "expected state root hash",
+  );
+  const expectedBlockHeight = height(input.expectedBlockHeight, "expected block height");
+  if (!Array.isArray(input.absenceObservations) || input.absenceObservations.length !== 2) {
+    throw new Error("account absence requires exactly two node observations");
+  }
+
+  const origins = new Set<string>();
+  const observations = input.absenceObservations.map((raw, index) => {
+    const observation = record(raw, `account absence observation ${index}`);
+    exactOwnKeys(
+      observation,
+      [
+        "node_url",
+        "status_request",
+        "status_response",
+        "block_request",
+        "block_response",
+        "balance_request",
+        "balance_response",
+      ],
+      `account absence observation ${index}`,
+    );
+    const nodeUrl = publicNodeUrl(own(observation, "node_url"));
+    const origin = new URL(nodeUrl).origin;
+    if (origins.has(origin)) throw new Error("account absence nodes must be distinct");
+    origins.add(origin);
+
+    const statusRequest = own(observation, "status_request");
+    const statusResponse = own(observation, "status_response");
+    const statusId = exactRequest(statusRequest, "info_get_status", {}, "account absence status");
+    requireResponseId(statusResponse, statusId, "account absence status");
+    parseNetwork(statusResponse);
+
+    const blockRequest = own(observation, "block_request");
+    const blockResponse = own(observation, "block_response");
+    const blockId = exactRequest(
+      blockRequest,
+      "chain_get_block",
+      { block_identifier: { Hash: expectedBlockHash } },
+      "account absence block",
+    );
+    requireResponseId(blockResponse, blockId, "account absence block");
+    const block = parseBlock(blockResponse);
+    if (
+      block.blockHash !== expectedBlockHash ||
+      block.blockHeight !== expectedBlockHeight ||
+      block.stateRootHash !== expectedStateRootHash
+    ) {
+      throw new Error("account absence observation does not bind the expected block");
+    }
+
+    const balanceRequest = own(observation, "balance_request");
+    const parsedBalanceRequest = parseBalanceRequest(
+      balanceRequest,
+      accountHash,
+      expectedStateRootHash,
+    );
+    const balanceResponse = own(observation, "balance_response");
+    parseAbsenceResponse(balanceResponse, parsedBalanceRequest.requestId);
+    return Object.freeze({
+      node_url: nodeUrl,
+      status_request: statusRequest,
+      status_response: statusResponse,
+      block_request: blockRequest,
+      block_response: blockResponse,
+      balance_request: balanceRequest,
+      balance_response: balanceResponse,
+    });
+  });
+  const primary = observations[0];
+  if (primary === undefined) throw new Error("account absence requires a primary node");
+  for (const [actual, expected, label] of [
+    [input.chainStatusRequest, primary.status_request, "status request"],
+    [input.chainStatusPayload, primary.status_response, "status response"],
+    [input.canonicalBlockRequest, primary.block_request, "block request"],
+    [input.canonicalBlockPayload, primary.block_response, "block response"],
+    [input.balanceRequest, primary.balance_request, "balance request"],
+  ] as const) {
+    if (
+      canonicalTranscriptJson(actual, `primary ${label}`) !==
+      canonicalTranscriptJson(expected, `observation ${label}`)
+    ) {
+      throw new Error(`account absence primary ${label} does not match first observation`);
+    }
+  }
+  const parsedBalanceRequest = parseBalanceRequest(
+    input.balanceRequest,
+    accountHash,
+    expectedStateRootHash,
+  );
+  const absenceBundle = {
+    schema_id: "concordia.account-absence-observations.v1",
+    node_observations: observations,
+  };
+  const transcripts = {
+    statusRequest: canonicalTranscriptJson(input.chainStatusRequest, "status request"),
+    status: canonicalTranscriptJson(input.chainStatusPayload, "status payload"),
+    blockRequest: canonicalTranscriptJson(
+      input.canonicalBlockRequest,
+      "canonical block request",
+    ),
+    block: canonicalTranscriptJson(input.canonicalBlockPayload, "block payload"),
+    balanceRequest: canonicalTranscriptJson(input.balanceRequest, "balance request"),
+    balanceResponse: canonicalTranscriptJson(absenceBundle, "account absence observations"),
+  };
+  const transcriptSha256 = Object.freeze({
+    statusRequest: sha256CanonicalTranscript(transcripts.statusRequest),
+    status: sha256CanonicalTranscript(transcripts.status),
+    blockRequest: sha256CanonicalTranscript(transcripts.blockRequest),
+    block: sha256CanonicalTranscript(transcripts.block),
+    balanceRequest: sha256CanonicalTranscript(transcripts.balanceRequest),
+    balanceResponse: sha256CanonicalTranscript(transcripts.balanceResponse),
+  });
+  return Object.freeze({
+    network: "casper-test",
+    accountExists: false,
+    accountHash,
+    blockHash: expectedBlockHash,
+    blockHeight: expectedBlockHeight,
+    stateRootHash: expectedStateRootHash,
+    balanceMotes: "0",
+    availableBalanceMotes: "0",
+    balanceHoldsTotalMotes: "0",
+    balanceHolds: Object.freeze([]),
+    nodeProvidedMerkleProofHex: "",
+    merkleProofVerificationScope: "two-public-nodes-prove-account-absent",
+    balanceRequestMethod: parsedBalanceRequest.method,
+    balanceRequestId: parsedBalanceRequest.requestId,
     transcriptSha256,
   });
 }

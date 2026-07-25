@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { before, test } from "node:test";
 
 import {
@@ -9,12 +7,11 @@ import {
   canonicalTranscriptJson,
   corroborateCasperBundleObservations,
   corroborateCasperTestnetBundle,
-  parseJsonStrict,
   verifyExactEnvelopeV3Artifact,
   verifyLive,
 } from "../dist/index.js";
+import { loadExactV3ProofFixture } from "./helpers/exact-v3-proof-fixtures.mjs";
 
-const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 const OBSERVED_AT = "2026-07-23T01:00:00Z";
 const ENDPOINTS = ["https://rpc-a.example.com/rpc", "https://rpc-b.example.com/rpc"];
 const READ_ONLY = new Set([
@@ -83,18 +80,7 @@ const CHECKS = [
 ];
 
 before(() => {
-  const script = [
-    "import json",
-    "from tests.test_clvalue_roundtrip import _bound_v3_proof",
-    "proof, _, _ = _bound_v3_proof()",
-    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
-  ].join("\n");
-  const text = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", script], {
-    cwd: REPOSITORY,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  const artifact = parseJsonStrict(text);
+  const { raw: text, proof: artifact } = loadExactV3ProofFixture();
   const facts = verifyExactEnvelopeV3Artifact(artifact);
   const bytes = Buffer.from(text, "utf8");
   responses = collectResponses(artifact);

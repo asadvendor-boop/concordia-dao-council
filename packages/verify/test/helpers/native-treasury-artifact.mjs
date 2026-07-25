@@ -114,6 +114,51 @@ function snapshotObservation({ nodeUrl, capturedAt, bundle }) {
   };
 }
 
+function absentBalanceBundle({ account, blockHash, blockHeight, stateRootHash }) {
+  const observations = [
+    ["https://absence-a.example.com/rpc", 20],
+    ["https://absence-b.example.com/rpc", 70],
+  ].map(([nodeUrl, idBase]) => {
+    const bundle = balanceBundle({
+      account,
+      blockHash,
+      blockHeight,
+      stateRootHash,
+      balance: "0",
+      idBase,
+    });
+    return {
+      node_url: nodeUrl,
+      status_request: bundle.status_request,
+      status_response: bundle.status,
+      block_request: bundle.block_request,
+      block_response: bundle.block,
+      balance_request: bundle.balance_request,
+      balance_response: {
+        jsonrpc: "2.0",
+        id: bundle.balance_request.id,
+        error: {
+          code: -32026,
+          message: "Failed to retrieve balance",
+          data: "ValueNotFound",
+        },
+      },
+    };
+  });
+  const primary = observations[0];
+  return {
+    status_request: primary.status_request,
+    status: primary.status_response,
+    block_request: primary.block_request,
+    block: primary.block_response,
+    balance_request: primary.balance_request,
+    balance_response: {
+      schema_id: "concordia.account-absence-observations.v1",
+      node_observations: observations,
+    },
+  };
+}
+
 function finalityNode(nodeUrl, offset, deployHash, finalityHeight) {
   const statusId = 100 + offset;
   const transactionId = 110 + offset;
@@ -281,14 +326,21 @@ export async function buildNativeTreasuryArtifact(options = {}) {
       }),
     ],
   };
-  const preRecipient = balanceBundle({
-    account: recipient,
-    blockHash: body.snapshot_block_hash,
-    blockHeight: snapshotHeight,
-    stateRootHash: SNAPSHOT_ROOT,
-    balance: PRE_RECIPIENT,
-    idBase: 20,
-  });
+  const preRecipient = options.absentRecipient === true
+    ? absentBalanceBundle({
+        account: recipient,
+        blockHash: body.snapshot_block_hash,
+        blockHeight: snapshotHeight,
+        stateRootHash: SNAPSHOT_ROOT,
+      })
+    : balanceBundle({
+        account: recipient,
+        blockHash: body.snapshot_block_hash,
+        blockHeight: snapshotHeight,
+        stateRootHash: SNAPSHOT_ROOT,
+        balance: PRE_RECIPIENT,
+        idBase: 20,
+      });
   const postSource = balanceBundle({
     account: source,
     blockHash: FINALITY_BLOCK,
@@ -302,7 +354,7 @@ export async function buildNativeTreasuryArtifact(options = {}) {
     blockHash: FINALITY_BLOCK,
     blockHeight: finalityHeight,
     stateRootHash: FINALITY_ROOT,
-    balance: POST_RECIPIENT,
+    balance: options.absentRecipient === true ? body.amount_motes : POST_RECIPIENT,
     idBase: 40,
   });
   const nodeObservations = [

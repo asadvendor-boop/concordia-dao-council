@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   parseJsonStrict,
+  verifyAccountAbsenceAtBlock,
   verifyAccountBalanceAtBlock,
   verifyNoDuplicateNativeTransfer,
   verifyPostTransferBalance,
@@ -110,6 +111,52 @@ function balanceInput({ account, blockHash, stateRootHash, blockHeight, balanceM
     expectedBlockHeight: blockHeight,
     expectedStateRootHash: stateRootHash,
     expectedBalanceMotes: balanceMotes,
+  };
+}
+
+function absentBalanceInput({ account, blockHash, stateRootHash, blockHeight }) {
+  const observations = [
+    ["https://rpc-a.example/rpc", 50],
+    ["https://rpc-b.example/rpc", 60],
+  ].map(([nodeUrl, idBase]) => {
+    const balance = balanceInput({
+      account,
+      blockHash,
+      stateRootHash,
+      blockHeight,
+      balanceMotes: "0",
+      idBase,
+    });
+    return {
+      node_url: nodeUrl,
+      status_request: balance.chainStatusRequest,
+      status_response: balance.chainStatusPayload,
+      block_request: balance.canonicalBlockRequest,
+      block_response: balance.canonicalBlockPayload,
+      balance_request: balance.balanceRequest,
+      balance_response: {
+        jsonrpc: "2.0",
+        id: balance.balanceRequest.id,
+        error: {
+          code: -32026,
+          message: "Failed to retrieve balance",
+          data: "ValueNotFound",
+        },
+      },
+    };
+  });
+  const primary = observations[0];
+  return {
+    chainStatusRequest: primary.status_request,
+    chainStatusPayload: primary.status_response,
+    canonicalBlockRequest: primary.block_request,
+    canonicalBlockPayload: primary.block_response,
+    balanceRequest: primary.balance_request,
+    absenceObservations: observations,
+    expectedAccountHash: account,
+    expectedBlockHash: blockHash,
+    expectedBlockHeight: blockHeight,
+    expectedStateRootHash: stateRootHash,
   };
 }
 
@@ -321,6 +368,27 @@ test("balance adapter derives one exact historical balance from six raw RPC tran
   }
 });
 
+test("balance adapter derives exact zero only from two-node account absence", () => {
+  const input = absentBalanceInput({
+    account: RECIPIENT,
+    blockHash: PRE_BLOCK,
+    stateRootHash: PRE_ROOT,
+    blockHeight: PRE_HEIGHT,
+  });
+  const facts = verifyAccountAbsenceAtBlock(input);
+  assert.equal(facts.accountExists, false);
+  assert.equal(facts.balanceMotes, "0");
+  assert.equal(facts.nodeProvidedMerkleProofHex, "");
+  assert.equal(facts.merkleProofVerificationScope, "two-public-nodes-prove-account-absent");
+
+  const oneNode = structuredClone(input);
+  oneNode.absenceObservations.pop();
+  assert.throws(() => verifyAccountAbsenceAtBlock(oneNode), /exactly two/i);
+  const wrongCode = structuredClone(input);
+  wrongCode.absenceObservations[1].balance_response.error.code = -32003;
+  assert.throws(() => verifyAccountAbsenceAtBlock(wrongCode), /error code/i);
+});
+
 test("balance adapter binds request methods, IDs, network, block, root, account, and exact U512 balance", () => {
   const base = balanceInput({
     account: SOURCE,
@@ -391,6 +459,30 @@ test("post-transfer adapter independently proves exact source and recipient delt
   assert.equal(proof.transcriptSha256Inventory.length, 24);
   assert.equal(proof.transcriptSha256Inventory[0][0], "pre_source.status_request");
   assert.equal(proof.transcriptSha256Inventory[23][0], "post_recipient.balance_response");
+});
+
+test("post-transfer adapter proves a first transfer to a two-node absent recipient", () => {
+  const input = postTransferInput();
+  const absence = absentBalanceInput({
+    account: RECIPIENT,
+    blockHash: PRE_BLOCK,
+    stateRootHash: PRE_ROOT,
+    blockHeight: PRE_HEIGHT,
+  });
+  input.preRecipientBalance = {
+    ...absence,
+    balanceResponse: {
+      schema_id: "concordia.account-absence-observations.v1",
+      node_observations: absence.absenceObservations,
+    },
+  };
+  input.postRecipientBalance.balanceResponse.result.value.total_balance = AMOUNT;
+  input.postRecipientBalance.balanceResponse.result.value.available_balance = AMOUNT;
+  input.postRecipientBalance.expectedBalanceMotes = AMOUNT;
+
+  const proof = verifyPostTransferBalance(input);
+  assert.equal(proof.recipientBalanceBeforeMotes, "0");
+  assert.equal(proof.recipientBalanceAfterMotes, AMOUNT);
 });
 
 test("post-transfer adapter fails closed on snapshot, role, finality, and delta mismatches", () => {

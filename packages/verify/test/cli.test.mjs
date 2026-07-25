@@ -28,14 +28,20 @@ function run(...args) {
   });
 }
 
-test("package metadata cannot auto-publish and the reviewed workflow owns provenance", async () => {
+test("supported package metadata discloses the provenance-free bootstrap and requires workflow provenance", async () => {
   const metadata = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
   const readme = await readFile(path.join(PACKAGE_ROOT, "README.md"), "utf8");
+  assert.equal(metadata.version, "0.1.1");
   assert.deepEqual(metadata.publishConfig, { access: "public" });
   assert.equal(Object.hasOwn(metadata.publishConfig, "provenance"), false);
   assert.equal(Object.hasOwn(metadata.scripts, "publish"), false);
+  assert.match(readme, /`0\.1\.0` was operator-published without an npm provenance attestation/i);
+  assert.match(readme, /deprecated/i);
+  assert.match(readme, /`0\.1\.1` is the first supported release/i);
   assert.match(readme, /publish-verifier\.yml/);
   assert.match(readme, /npm publish --provenance --access public/);
+  assert.match(readme, /OIDC trusted publisher/i);
+  assert.match(readme, /no\s+long-lived npm publish token/i);
   assert.match(readme, /registry\/artifact modes use bounded `GET` requests/);
   assert.match(readme, /Live mode sends `POST`\s+requests only for an explicit allowlist of read-only Casper JSON-RPC methods/);
   assert.doesNotMatch(readme, /performs\s+only `GET` requests/);
