@@ -534,9 +534,11 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
                         "ContractNamedKey": {
                             "key": "hash-" + ids["contract"],
                             "dictionary_name": "state",
+                            "dictionary_item_key": state_dictionary_key(
+                                index, mapping
+                            ),
                         }
                     },
-                    "dictionary_item_key": state_dictionary_key(index, mapping),
                 },
                 {"stored_value": _cl_bytes(inner)},
             )
@@ -545,20 +547,21 @@ def _readback_fixture() -> tuple[list[dict[str, object]], dict[str, str]]:
     proposal_key = (
         len(ids["proposal"].encode()).to_bytes(4, "little") + ids["proposal"].encode()
     )
-    dictionary(1, b"", (3).to_bytes(4, "little"))
-    dictionary(2, b"", bytes.fromhex(ids["domain"]))
-    dictionary(3, b"", len(b"casper-test").to_bytes(4, "little") + b"casper-test")
-    dictionary(4, b"", bytes.fromhex("01" * 32))
-    dictionary(5, b"", bytes.fromhex("02" * 32))
-    dictionary(6, b"", bytes.fromhex("03" * 32))
-    dictionary(7, b"", bytes.fromhex("04" * 32))
-    dictionary(8, b"", bytes.fromhex("05" * 32))
-    dictionary(9, b"", b"\x02")
-    dictionary(11, proposal_key, bytes.fromhex(ids["envelope"]))
-    dictionary(12, proposal_key, b"\x02")
-    dictionary(14, proposal_key, b"\x01")
-    dictionary(15, proposal_key, bytes.fromhex(ids["envelope"]))
-    dictionary(16, bytes.fromhex(ids["action"]), b"\x01")
+    dictionary(1, b"", bytes.fromhex("06" * 32))
+    dictionary(2, b"", (3).to_bytes(4, "little"))
+    dictionary(3, b"", bytes.fromhex(ids["domain"]))
+    dictionary(4, b"", len(b"casper-test").to_bytes(4, "little") + b"casper-test")
+    dictionary(5, b"", bytes.fromhex("01" * 32))
+    dictionary(6, b"", bytes.fromhex("02" * 32))
+    dictionary(7, b"", bytes.fromhex("03" * 32))
+    dictionary(8, b"", bytes.fromhex("04" * 32))
+    dictionary(9, b"", bytes.fromhex("05" * 32))
+    dictionary(10, b"", b"\x02")
+    dictionary(12, proposal_key, bytes.fromhex(ids["envelope"]))
+    dictionary(13, proposal_key, b"\x02")
+    dictionary(15, proposal_key, b"\x01")
+    dictionary(16, proposal_key, bytes.fromhex(ids["envelope"]))
+    dictionary(17, bytes.fromhex(ids["action"]), b"\x01")
     return transcripts, ids
 
 
@@ -1026,35 +1029,45 @@ def _bound_v3_proof() -> tuple[dict[str, object], dict[str, object], dict[str, s
         for name, private in _role_private_keys().items()
     }
     role_indexes = {
-        4: "proposer",
-        5: "finalizer",
-        6: "signer_a",
-        7: "signer_b",
-        8: "signer_c",
+        5: "proposer",
+        6: "finalizer",
+        7: "signer_a",
+        8: "signer_b",
+        9: "signer_c",
     }
     for transcript in transcripts:
         params = transcript["params"]
+        identifier = (
+            params.get("dictionary_identifier") if isinstance(params, dict) else None
+        )
+        named_key = (
+            identifier.get("ContractNamedKey")
+            if isinstance(identifier, dict)
+            else None
+        )
         item_key = (
-            params.get("dictionary_item_key") if isinstance(params, dict) else None
+            named_key.get("dictionary_item_key")
+            if isinstance(named_key, dict)
+            else None
         )
         replacements = {
-            state_dictionary_key(11, old_proposal_key): state_dictionary_key(
-                11, new_proposal_key
-            ),
             state_dictionary_key(12, old_proposal_key): state_dictionary_key(
                 12, new_proposal_key
             ),
-            state_dictionary_key(14, old_proposal_key): state_dictionary_key(
-                14, new_proposal_key
+            state_dictionary_key(13, old_proposal_key): state_dictionary_key(
+                13, new_proposal_key
             ),
             state_dictionary_key(15, old_proposal_key): state_dictionary_key(
                 15, new_proposal_key
             ),
+            state_dictionary_key(16, old_proposal_key): state_dictionary_key(
+                16, new_proposal_key
+            ),
             state_dictionary_key(
-                16, bytes.fromhex(ids["action"])
-            ): state_dictionary_key(16, bytes.fromhex(prepared["action_id"])),
+                17, bytes.fromhex(ids["action"])
+            ): state_dictionary_key(17, bytes.fromhex(prepared["action_id"])),
         }
-        if item_key == state_dictionary_key(2):
+        if item_key == state_dictionary_key(3):
             transcript["response"]["result"]["stored_value"] = _cl_bytes(
                 bytes.fromhex(document["header"]["deployment_domain"])
             )
@@ -1064,10 +1077,10 @@ def _bound_v3_proof() -> tuple[dict[str, object], dict[str, object], dict[str, s
                     bytes.fromhex(role_accounts[role])
                 )
         if item_key in replacements:
-            params["dictionary_item_key"] = replacements[item_key]
+            named_key["dictionary_item_key"] = replacements[item_key]
         if item_key in (
-            state_dictionary_key(11, old_proposal_key),
-            state_dictionary_key(15, old_proposal_key),
+            state_dictionary_key(12, old_proposal_key),
+            state_dictionary_key(16, old_proposal_key),
         ):
             transcript["response"]["result"]["stored_value"] = _cl_bytes(
                 bytes.fromhex(prepared["envelope_hash"])
@@ -1195,10 +1208,16 @@ def test_readback_rejects_zero_or_cross_role_colliding_governance_state(
     mutation: str,
 ) -> None:
     transcripts, ids = _readback_fixture()
-    key = state_dictionary_key(4 if mutation == "zero_proposer" else 5)
+    key = state_dictionary_key(5 if mutation == "zero_proposer" else 6)
     replacement = bytes(32) if mutation == "zero_proposer" else bytes.fromhex("03" * 32)
     target = next(
-        item for item in transcripts if item["params"].get("dictionary_item_key") == key
+        item
+        for item in transcripts
+        if item["params"]
+        .get("dictionary_identifier", {})
+        .get("ContractNamedKey", {})
+        .get("dictionary_item_key")
+        == key
     )
     target["response"]["result"]["stored_value"] = _cl_bytes(replacement)
     target["canonical_sha256"] = hashlib.sha256(

@@ -119,9 +119,11 @@ def sealed_v3_readback(
                         "ContractNamedKey": {
                             "key": "hash-" + contract_hash.hex(),
                             "dictionary_name": "state",
+                            "dictionary_item_key": state_dictionary_key(
+                                index, mapping_key
+                            ),
                         }
                     },
-                    "dictionary_item_key": state_dictionary_key(index, mapping_key),
                 },
                 {"stored_value": _cl_bytes(inner)},
                 sequence,
@@ -129,20 +131,21 @@ def sealed_v3_readback(
         )
 
     proposal_key = len(proposal_id.encode("ascii")).to_bytes(4, "little") + proposal_id.encode("ascii")
-    dictionary(1, b"", (3).to_bytes(4, "little"))
-    dictionary(2, b"", deployment_domain)
-    dictionary(3, b"", len(b"casper-test").to_bytes(4, "little") + b"casper-test")
-    dictionary(4, b"", bytes.fromhex("01" * 32))
-    dictionary(5, b"", bytes.fromhex("02" * 32))
-    dictionary(6, b"", bytes.fromhex("03" * 32))
-    dictionary(7, b"", bytes.fromhex("04" * 32))
-    dictionary(8, b"", bytes.fromhex("05" * 32))
-    dictionary(9, b"", b"\x02")
-    dictionary(11, proposal_key, envelope_hash)
-    dictionary(12, proposal_key, b"\x02")
-    dictionary(14, proposal_key, b"\x01")
-    dictionary(15, proposal_key, envelope_hash)
-    dictionary(16, action_id, b"\x01")
+    dictionary(1, b"", bytes.fromhex("06" * 32))
+    dictionary(2, b"", (3).to_bytes(4, "little"))
+    dictionary(3, b"", deployment_domain)
+    dictionary(4, b"", len(b"casper-test").to_bytes(4, "little") + b"casper-test")
+    dictionary(5, b"", bytes.fromhex("01" * 32))
+    dictionary(6, b"", bytes.fromhex("02" * 32))
+    dictionary(7, b"", bytes.fromhex("03" * 32))
+    dictionary(8, b"", bytes.fromhex("04" * 32))
+    dictionary(9, b"", bytes.fromhex("05" * 32))
+    dictionary(10, b"", b"\x02")
+    dictionary(12, proposal_key, envelope_hash)
+    dictionary(13, proposal_key, b"\x02")
+    dictionary(15, proposal_key, b"\x01")
+    dictionary(16, proposal_key, envelope_hash)
+    dictionary(17, action_id, b"\x01")
     artifact = build_readback_artifact_from_transcripts(
         transcripts=transcripts,
         expected_network="casper-test",
