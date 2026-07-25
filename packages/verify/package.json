@@ -1,6 +1,6 @@
 {
   "name": "@concordia-dao/verify",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only, fail-closed verifier for Concordia proof registries and typed v3 envelopes.",
   "type": "module",
   "private": false,

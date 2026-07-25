@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { parseUnsigned } from "../encoders.js";
 import {
+  verifyAccountAbsenceAtBlock,
   verifyAccountBalanceAtBlock,
   type AccountBalanceFacts,
   type CasperAccountBalanceInput,
@@ -81,6 +82,46 @@ function assertPostSnapshot(proof: AccountBalanceFacts, finality: FinalizedNativ
   if (proof.stateRootHash !== finality.stateRootHash) throw new Error("post-state does not match finality state root");
 }
 
+function verifyBalanceInput(
+  input: CasperAccountBalanceInput,
+  allowAbsence: boolean,
+): AccountBalanceFacts {
+  const balanceResponse = input.balanceResponse;
+  if (
+    allowAbsence &&
+    typeof balanceResponse === "object" &&
+    balanceResponse !== null &&
+    !Array.isArray(balanceResponse)
+  ) {
+    const absence = balanceResponse as Record<string, unknown>;
+    if (
+      !Object.hasOwn(absence, "schema_id") ||
+      absence.schema_id !== "concordia.account-absence-observations.v1"
+    ) {
+      return verifyAccountBalanceAtBlock(input);
+    }
+    if (
+      !Object.hasOwn(absence, "node_observations") ||
+      !Array.isArray(absence.node_observations)
+    ) {
+      throw new Error("pre-recipient account absence observations are malformed");
+    }
+    return verifyAccountAbsenceAtBlock({
+      chainStatusRequest: input.chainStatusRequest,
+      chainStatusPayload: input.chainStatusPayload,
+      canonicalBlockRequest: input.canonicalBlockRequest,
+      canonicalBlockPayload: input.canonicalBlockPayload,
+      balanceRequest: input.balanceRequest,
+      absenceObservations: absence.node_observations,
+      expectedAccountHash: input.expectedAccountHash,
+      expectedBlockHash: input.expectedBlockHash,
+      expectedBlockHeight: input.expectedBlockHeight,
+      expectedStateRootHash: input.expectedStateRootHash,
+    });
+  }
+  return verifyAccountBalanceAtBlock(input);
+}
+
 export function verifyPostTransferBalance(input: PostTransferInput): PostTransferFacts {
   for (const field of [
     "preSourceBalance",
@@ -100,11 +141,14 @@ export function verifyPostTransferBalance(input: PostTransferInput): PostTransfe
   const amount = parseUnsigned(input.expectedAmountMotes, 512);
   if (amount === 0n) throw new Error("expected amount must be positive U512");
 
-  const preSource = verifyAccountBalanceAtBlock(input.preSourceBalance);
-  const preRecipient = verifyAccountBalanceAtBlock(input.preRecipientBalance);
-  const postSource = verifyAccountBalanceAtBlock(input.postSourceBalance);
-  const postRecipient = verifyAccountBalanceAtBlock(input.postRecipientBalance);
+  const preSource = verifyBalanceInput(input.preSourceBalance, false);
+  const preRecipient = verifyBalanceInput(input.preRecipientBalance, true);
+  const postSource = verifyBalanceInput(input.postSourceBalance, false);
+  const postRecipient = verifyBalanceInput(input.postRecipientBalance, false);
   const finality = verifyFinalizedNativeTransfer(input.finality);
+  if (!preSource.accountExists || !postSource.accountExists || !postRecipient.accountExists) {
+    throw new Error("source and post-state balances must be proof-bearing accounts");
+  }
 
   if (finality.signedDeploy.sourceAccountHash !== source) {
     throw new Error("expected source does not match signed transfer source");

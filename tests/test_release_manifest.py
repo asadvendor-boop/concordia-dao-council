@@ -2191,28 +2191,219 @@ def _http_raw(
 def _npm_raw(release_commit: str) -> dict[str, object]:
     tarball = b"npm-tarball-exact-bytes\x00\x01"
     integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode()
+    subject_sha512 = hashlib.sha512(tarball).hexdigest()
     return {
         "metadata": {
             "name": "@concordia-dao/verify",
-            "version": "0.1.0",
+            "version": "0.1.1",
             "gitHead": release_commit,
             "time": "2026-07-23T00:08:00Z",
             "dist": {
-                "tarball": "https://registry.npmjs.org/@concordia-dao/verify/-/verify-0.1.0.tgz",
+                "tarball": "https://registry.npmjs.org/@concordia-dao/verify/-/verify-0.1.1.tgz",
                 "integrity": integrity,
             },
         },
         "tarball": tarball,
         "registry_signatures": {"invalid": [], "missing": []},
+        "provenance": {
+            "attestation_url": (
+                "https://registry.npmjs.org/-/npm/v1/attestations/"
+                "@concordia-dao%2Fverify@0.1.1"
+            ),
+            "predicate_type": "https://slsa.dev/provenance/v1",
+            "subject_sha512": subject_sha512,
+            "source_repository": (
+                "https://github.com/asadvendor-boop/concordia-dao-council"
+            ),
+            "source_commit": release_commit,
+            "workflow_path": ".github/workflows/publish-verifier.yml",
+            "workflow_ref": "refs/heads/main",
+            "builder_id": "https://github.com/actions/runner/github-hosted",
+            "invocation_id": (
+                "https://github.com/asadvendor-boop/concordia-dao-council/"
+                "actions/runs/123456789/attempts/1"
+            ),
+        },
         "package_projection": {
             "name": "@concordia-dao/verify",
-            "version": "0.1.0",
+            "version": "0.1.1",
             "sourceCommit": release_commit,
             "files": ["LICENSE", "README.md", "dist/cli.js", "package.json"],
             "consumer_install_sha256": "ce" * 32,
             "self_test_digest": "ef" * 32,
         },
     }
+
+
+def _npm_attestation_raw(
+    *,
+    version: str,
+    source_commit: str,
+    tarball: bytes,
+) -> tuple[bytes, str, str]:
+    attestation_url = (
+        "https://registry.npmjs.org/-/npm/v1/attestations/"
+        f"@concordia-dao%2Fverify@{version}"
+    )
+    integrity = (
+        "sha512-"
+        + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
+    )
+    statement = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [
+            {
+                "name": f"pkg:npm/%40concordia-dao/verify@{version}",
+                "digest": {"sha512": hashlib.sha512(tarball).hexdigest()},
+            }
+        ],
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "predicate": {
+            "buildDefinition": {
+                "externalParameters": {
+                    "workflow": {
+                        "ref": "refs/heads/main",
+                        "repository": (
+                            "https://github.com/asadvendor-boop/"
+                            "concordia-dao-council"
+                        ),
+                        "path": ".github/workflows/publish-verifier.yml",
+                    }
+                },
+                "resolvedDependencies": [
+                    {
+                        "uri": (
+                            "git+https://github.com/asadvendor-boop/"
+                            "concordia-dao-council@refs/heads/main"
+                        ),
+                        "digest": {"gitCommit": source_commit},
+                    }
+                ],
+            },
+            "runDetails": {
+                "builder": {
+                    "id": "https://github.com/actions/runner/github-hosted"
+                },
+                "metadata": {
+                    "invocationId": (
+                        "https://github.com/asadvendor-boop/"
+                        "concordia-dao-council/actions/runs/123456789/"
+                        "attempts/1"
+                    )
+                },
+            },
+        },
+    }
+    document = {
+        "attestations": [
+            {
+                "predicateType": "https://slsa.dev/provenance/v1",
+                "bundle": {
+                    "dsseEnvelope": {
+                        "payload": base64.b64encode(
+                            _canonical(statement).rstrip(b"\n")
+                        ).decode("ascii")
+                    }
+                },
+            }
+        ]
+    }
+    return _canonical(document), attestation_url, integrity
+
+
+def test_npm_provenance_parser_binds_subject_workflow_runner_and_commit() -> None:
+    tarball = b"supported-verifier-tarball"
+    source_commit = "ab" * 20
+    raw, attestation_url, integrity = _npm_attestation_raw(
+        version="0.1.1",
+        source_commit=source_commit,
+        tarball=tarball,
+    )
+
+    projection = release_manifest._parse_npm_provenance_attestation(
+        raw,
+        attestation_url=attestation_url,
+        version="0.1.1",
+        source_commit=source_commit,
+        integrity=integrity,
+    )
+
+    assert projection["subject_sha512"] == hashlib.sha512(tarball).hexdigest()
+    assert projection["source_commit"] == source_commit
+    assert projection["workflow_path"] == ".github/workflows/publish-verifier.yml"
+    assert projection["builder_id"] == (
+        "https://github.com/actions/runner/github-hosted"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("subject", "00" * 64, "subject"),
+        ("source_commit", "cd" * 20, "source commit"),
+        ("workflow_path", ".github/workflows/other.yml", "workflow identity"),
+        ("builder_id", "https://runner.invalid", "runner identity"),
+    ],
+)
+def test_npm_provenance_parser_rejects_every_release_binding_mutation(
+    field: str,
+    replacement: str,
+    message: str,
+) -> None:
+    tarball = b"supported-verifier-tarball"
+    source_commit = "ab" * 20
+    raw, attestation_url, integrity = _npm_attestation_raw(
+        version="0.1.1",
+        source_commit=source_commit,
+        tarball=tarball,
+    )
+    document = json.loads(raw)
+    envelope = document["attestations"][0]["bundle"]["dsseEnvelope"]
+    statement = json.loads(base64.b64decode(envelope["payload"]))
+    if field == "subject":
+        statement["subject"][0]["digest"]["sha512"] = replacement
+    elif field == "source_commit":
+        statement["predicate"]["buildDefinition"]["resolvedDependencies"][0][
+            "digest"
+        ]["gitCommit"] = replacement
+    elif field == "workflow_path":
+        statement["predicate"]["buildDefinition"]["externalParameters"]["workflow"][
+            "path"
+        ] = replacement
+    else:
+        statement["predicate"]["runDetails"]["builder"]["id"] = replacement
+    envelope["payload"] = base64.b64encode(
+        _canonical(statement).rstrip(b"\n")
+    ).decode("ascii")
+
+    with pytest.raises(ReleaseManifestError, match=message):
+        release_manifest._parse_npm_provenance_attestation(
+            _canonical(document),
+            attestation_url=attestation_url,
+            version="0.1.1",
+            source_commit=source_commit,
+            integrity=integrity,
+        )
+
+
+def test_npm_projection_requires_registry_visible_workflow_provenance(
+    release_repository: tuple[Path, dict[str, str], FakeCollector, FakeVerifier],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, commits, _, verifier = release_repository
+    bad = _snapshot(CAPTURED_AT, commits["integration"], repository)
+    bad.npm.pop("provenance")
+    monkeypatch.setattr(
+        release_manifest,
+        "_collector_factory",
+        lambda root: FakeCollector([bad]),
+    )
+    monkeypatch.setattr(
+        release_manifest, "_proof_verifier_factory", lambda root: verifier
+    )
+
+    with pytest.raises(ReleaseManifestError, match="npm provenance"):
+        capture_release_observations_once(repository)
 
 
 def _rpc_raw(observed_at: str) -> list[dict[str, object]]:

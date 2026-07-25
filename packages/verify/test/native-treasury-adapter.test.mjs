@@ -36,6 +36,25 @@ test("native treasury adapter independently derives the full bounded execution p
   );
 });
 
+test("native treasury adapter verifies a two-node absent zero recipient", async () => {
+  const artifact = await buildNativeTreasuryArtifact({ absentRecipient: true });
+  const facts = verifyNativeTreasuryExecutionArtifact(artifact);
+
+  assert.equal(facts.amountMotes, "50000000000");
+  assert.equal(
+    artifact.balance_evidence.pre_recipient.balance_response.schema_id,
+    "concordia.account-absence-observations.v1",
+  );
+  assert.equal(
+    artifact.balance_evidence.pre_recipient.balance_response.node_observations.length,
+    2,
+  );
+  assert.equal(
+    artifact.balance_evidence.post_recipient.balance_response.result.value.total_balance,
+    "50000000000",
+  );
+});
+
 test("native treasury adapter independently verifies and hash-binds both snapshot observers", async () => {
   const mutations = [
     [

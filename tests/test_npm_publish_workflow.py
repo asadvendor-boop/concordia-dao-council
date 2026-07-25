@@ -26,8 +26,17 @@ def test_verifier_publish_workflow_is_manual_exact_commit_and_provenance_bound()
     assert "npm publish '${{ steps.pack.outputs.tarball }}'" not in source
     assert "--provenance" in source
     assert "--access public" in source
-    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in source
+    assert "NODE_AUTH_TOKEN" not in source
     assert "npm audit signatures" in source
+    assert "default: 0.1.1" in source
+    assert "dist?.attestations" in source
+    assert "https://slsa.dev/provenance/v1" in source
+    assert "https://in-toto.io/Statement/v1" in source
+    assert ".github/workflows/publish-verifier.yml" in source
+    assert 'npm view "$package" name version dist repository gitHead --json' in source
+    assert "node-version: 22.22.0" in source
+    assert "npm install --global npm@11.18.0" in source
+    assert 'test "$(npm --version)" = "11.18.0"' in source
 
 
 def test_verifier_publish_workflow_pins_actions_and_disables_release_cache() -> None:

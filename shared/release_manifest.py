@@ -42,7 +42,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import bcrypt
 
@@ -525,6 +525,16 @@ _TIMESTAMP = re.compile(
 )
 _SEMVER = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
+_NPM_PROVENANCE_PREDICATE = "https://slsa.dev/provenance/v1"
+_NPM_PROVENANCE_REPOSITORY = (
+    "https://github.com/asadvendor-boop/concordia-dao-council"
+)
+_NPM_PROVENANCE_WORKFLOW = ".github/workflows/publish-verifier.yml"
+_NPM_PROVENANCE_BUILDER = "https://github.com/actions/runner/github-hosted"
+_NPM_PROVENANCE_INVOCATION = re.compile(
+    r"^https://github\.com/asadvendor-boop/concordia-dao-council/"
+    r"actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*$"
 )
 _SECRET_TEXT_PATTERNS = (
     re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
@@ -7138,6 +7148,158 @@ def _pages_projection(
     return projection
 
 
+def _validate_npm_attestation_url(value: object, *, version: str) -> str:
+    url = _text(value, "npm provenance attestation URL")
+    parsed = urlsplit(url)
+    expected_path = f"/-/npm/v1/attestations/@concordia-dao/verify@{version}"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "registry.npmjs.org"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+        or unquote(parsed.path) != expected_path
+    ):
+        raise ReleaseManifestError(
+            "npm provenance attestation URL is outside the fixed registry"
+        )
+    return url
+
+
+def _parse_npm_provenance_attestation(
+    raw: bytes,
+    *,
+    attestation_url: str,
+    version: str,
+    source_commit: str,
+    integrity: str,
+) -> dict[str, object]:
+    document, _ = _strict_json(raw, "npm provenance attestations")
+    if set(document) != {"attestations"}:
+        raise ReleaseManifestError("npm provenance attestation envelope differs")
+    attestations = _sequence(
+        document.get("attestations"), "npm provenance attestations"
+    )
+    matches = []
+    for item in attestations:
+        attestation = _mapping(item, "npm provenance attestation")
+        if attestation.get("predicateType") == _NPM_PROVENANCE_PREDICATE:
+            matches.append(attestation)
+    if len(matches) != 1:
+        raise ReleaseManifestError(
+            "npm provenance requires exactly one SLSA provenance attestation"
+        )
+    attestation = matches[0]
+    bundle = _mapping(attestation.get("bundle"), "npm provenance bundle")
+    envelope = _mapping(
+        bundle.get("dsseEnvelope"), "npm provenance DSSE envelope"
+    )
+    payload = _text(envelope.get("payload"), "npm provenance DSSE payload")
+    try:
+        statement_raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ReleaseManifestError(
+            "npm provenance DSSE payload is not canonical base64"
+        ) from exc
+    statement, _ = _strict_json(statement_raw, "npm provenance statement")
+    if (
+        statement.get("_type") != "https://in-toto.io/Statement/v1"
+        or statement.get("predicateType") != _NPM_PROVENANCE_PREDICATE
+    ):
+        raise ReleaseManifestError("npm provenance statement type differs")
+
+    subjects = _sequence(statement.get("subject"), "npm provenance subject")
+    if len(subjects) != 1:
+        raise ReleaseManifestError("npm provenance subject cardinality differs")
+    subject = _mapping(subjects[0], "npm provenance subject")
+    digest = _mapping(subject.get("digest"), "npm provenance subject digest")
+    if not integrity.startswith("sha512-"):
+        raise ReleaseManifestError("npm provenance integrity algorithm differs")
+    try:
+        expected_digest = base64.b64decode(
+            integrity.removeprefix("sha512-"), validate=True
+        ).hex()
+    except (binascii.Error, ValueError) as exc:
+        raise ReleaseManifestError("npm provenance integrity is invalid") from exc
+    if (
+        subject.get("name")
+        != f"pkg:npm/%40concordia-dao/verify@{version}"
+        or digest != {"sha512": expected_digest}
+    ):
+        raise ReleaseManifestError(
+            "npm provenance subject differs from the registry tarball"
+        )
+
+    predicate = _mapping(
+        statement.get("predicate"), "npm provenance predicate"
+    )
+    build = _mapping(
+        predicate.get("buildDefinition"), "npm provenance build definition"
+    )
+    external = _mapping(
+        build.get("externalParameters"), "npm provenance external parameters"
+    )
+    workflow = _mapping(
+        external.get("workflow"), "npm provenance workflow"
+    )
+    if workflow != {
+        "ref": "refs/heads/main",
+        "repository": _NPM_PROVENANCE_REPOSITORY,
+        "path": _NPM_PROVENANCE_WORKFLOW,
+    }:
+        raise ReleaseManifestError("npm provenance workflow identity differs")
+
+    dependencies = _sequence(
+        build.get("resolvedDependencies"),
+        "npm provenance resolved dependencies",
+    )
+    expected_uri = (
+        "git+https://github.com/asadvendor-boop/"
+        "concordia-dao-council@refs/heads/main"
+    )
+    bound_dependencies = []
+    for item in dependencies:
+        dependency = _mapping(item, "npm provenance dependency")
+        dependency_digest = _mapping(
+            dependency.get("digest"), "npm provenance dependency digest"
+        )
+        if (
+            dependency.get("uri") == expected_uri
+            and dependency_digest.get("gitCommit") == source_commit
+        ):
+            bound_dependencies.append(dependency)
+    if len(bound_dependencies) != 1:
+        raise ReleaseManifestError(
+            "npm provenance does not bind the exact source commit"
+        )
+
+    details = _mapping(predicate.get("runDetails"), "npm provenance run details")
+    builder = _mapping(details.get("builder"), "npm provenance builder")
+    metadata = _mapping(details.get("metadata"), "npm provenance run metadata")
+    invocation_id = _text(
+        metadata.get("invocationId"), "npm provenance invocation ID"
+    )
+    if (
+        builder != {"id": _NPM_PROVENANCE_BUILDER}
+        or _NPM_PROVENANCE_INVOCATION.fullmatch(invocation_id) is None
+    ):
+        raise ReleaseManifestError("npm provenance GitHub runner identity differs")
+
+    return {
+        "attestation_url": attestation_url,
+        "predicate_type": _NPM_PROVENANCE_PREDICATE,
+        "subject_sha512": expected_digest,
+        "source_repository": _NPM_PROVENANCE_REPOSITORY,
+        "source_commit": source_commit,
+        "workflow_path": _NPM_PROVENANCE_WORKFLOW,
+        "workflow_ref": "refs/heads/main",
+        "builder_id": _NPM_PROVENANCE_BUILDER,
+        "invocation_id": invocation_id,
+    }
+
+
 def _npm_projection(
     root: Path,
     raw: Mapping[str, object],
@@ -7170,6 +7332,30 @@ def _npm_projection(
     )
     if registry_signatures != {"invalid": [], "missing": []}:
         raise ReleaseManifestError("npm registry signatures did not verify")
+    provenance = _mapping(npm.get("provenance"), "npm provenance")
+    expected_provenance = {
+        "attestation_url": _validate_npm_attestation_url(
+            provenance.get("attestation_url"), version=version
+        ),
+        "predicate_type": _NPM_PROVENANCE_PREDICATE,
+        "subject_sha512": hashlib.sha512(tarball).hexdigest(),
+        "source_repository": _NPM_PROVENANCE_REPOSITORY,
+        "source_commit": git_head,
+        "workflow_path": _NPM_PROVENANCE_WORKFLOW,
+        "workflow_ref": "refs/heads/main",
+        "builder_id": _NPM_PROVENANCE_BUILDER,
+        "invocation_id": provenance.get("invocation_id"),
+    }
+    invocation_id = provenance.get("invocation_id")
+    if (
+        set(provenance) != set(expected_provenance)
+        or provenance != expected_provenance
+        or not isinstance(invocation_id, str)
+        or _NPM_PROVENANCE_INVOCATION.fullmatch(invocation_id) is None
+    ):
+        raise ReleaseManifestError(
+            "npm provenance does not bind the supported workflow release"
+        )
     package = _mapping(npm.get("package_projection"), "npm package projection")
     source_commit = _git40(
         package.get("sourceCommit"), "npm package source commit"
@@ -7215,6 +7401,7 @@ def _npm_projection(
         "consumer_install_sha256": consumer_install_sha256,
         "self_test_digest": self_test_digest,
         "registry_signatures": {"invalid": [], "missing": []},
+        "provenance": expected_provenance,
     }
     _assert_safe_projection(projection, canaries, "npm projection")
     return projection, tarball
@@ -13236,6 +13423,23 @@ class _DefaultCollector:
         dist = _mapping(metadata.get("dist"), "npm dist")
         tarball_url = _text(dist.get("tarball"), "npm tarball URL")
         _validate_npm_tarball_url(tarball_url)
+        version = _text(metadata.get("version"), "npm published version")
+        attestation_metadata = _mapping(
+            dist.get("attestations"), "npm provenance metadata"
+        )
+        provenance_metadata = _mapping(
+            attestation_metadata.get("provenance"),
+            "npm provenance predicate metadata",
+        )
+        if provenance_metadata != {
+            "predicateType": _NPM_PROVENANCE_PREDICATE
+        }:
+            raise ReleaseManifestError(
+                "npm registry metadata lacks SLSA provenance"
+            )
+        attestation_url = _validate_npm_attestation_url(
+            attestation_metadata.get("url"), version=version
+        )
         packument_status, _, packument_raw = _fixed_https_json(
             url="https://registry.npmjs.org/@concordia-dao%2Fverify"
         )
@@ -13243,7 +13447,6 @@ class _DefaultCollector:
             raise ReleaseManifestError("public npm publish chronology is unavailable")
         packument = _decode_json_response(packument_raw, "npm package history")
         published_times = _mapping(packument.get("time"), "npm publish times")
-        version = _text(metadata.get("version"), "npm published version")
         published_at = published_times.get(version)
         status, _, tarball = _fixed_https_json(url=tarball_url, limit=_NPM_LIMIT)
         if status != 200:
@@ -13262,9 +13465,24 @@ class _DefaultCollector:
             tarball_url=tarball_url,
             integrity=computed_integrity,
         )
+        attestation_status, _, attestation_raw = _fixed_https_json(
+            url=attestation_url,
+            limit=_CONTROL_LIMIT,
+        )
+        if attestation_status != 200:
+            raise ReleaseManifestError(
+                "npm provenance attestation download failed"
+            )
+        source_commit = _git40(metadata.get("gitHead"), "npm registry gitHead")
+        provenance = _parse_npm_provenance_attestation(
+            attestation_raw,
+            attestation_url=attestation_url,
+            version=version,
+            source_commit=source_commit,
+            integrity=computed_integrity,
+        )
         # Execute package code only after registry integrity and signatures
         # authenticate the exact downloaded bytes.
-        source_commit = _git40(metadata.get("gitHead"), "npm registry gitHead")
         package_projection = _inspect_npm_tarball(
             tarball,
             self.root,
@@ -13279,11 +13497,18 @@ class _DefaultCollector:
                 "dist": {
                     "tarball": tarball_url,
                     "integrity": dist.get("integrity"),
+                    "attestations": {
+                        "url": attestation_url,
+                        "provenance": {
+                            "predicateType": _NPM_PROVENANCE_PREDICATE
+                        },
+                    },
                 },
             },
             "tarball": tarball,
             "tarball_sha256": tarball_sha256,
             "registry_signatures": registry_signatures,
+            "provenance": provenance,
             "package_projection": package_projection,
         }
 

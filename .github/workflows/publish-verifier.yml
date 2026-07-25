@@ -13,7 +13,7 @@ on:
       version:
         description: Exact package version expected in packages/verify/package.json
         required: true
-        default: 0.1.0
+        default: 0.1.1
         type: string
 
 permissions:
@@ -44,9 +44,16 @@ jobs:
       - name: Set up pinned Node runtime and npm registry
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.12.0
+          node-version: 22.22.0
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Install pinned npm CLI with trusted-publishing support
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.18.0
+          test "$(npm --version)" = "11.18.0"
 
       - name: Bind release inputs to main and package metadata
         shell: bash
@@ -117,10 +124,6 @@ jobs:
           npm publish "$TARBALL" --provenance --access public
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-          # Required for the provenance-bearing first publish. After npm trusted
-          # publishing is bound to this exact workflow, this secret can be
-          # removed and OIDC remains the publication authority.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify registry copy, clean install, CLI, and signatures
         shell: bash
@@ -132,7 +135,7 @@ jobs:
           package="@concordia-dao/verify@$PACKAGE_VERSION"
           registry_json="$(mktemp)"
           for attempt in $(seq 1 12); do
-            if npm view "$package" name version dist.integrity dist.shasum repository gitHead --json > "$registry_json"; then
+            if npm view "$package" name version dist repository gitHead --json > "$registry_json"; then
               break
             fi
             test "$attempt" -lt 12
@@ -141,6 +144,48 @@ jobs:
           test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.name)" "$registry_json")" = '@concordia-dao/verify'
           test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.version)" "$registry_json")" = "$PACKAGE_VERSION"
           test "$(node -e "const x=require(process.argv[1]); process.stdout.write(x.gitHead)" "$registry_json")" = "$COMMIT_SHA"
+          attestation_url="$(node -e "const x=require(process.argv[1]); const a=x.dist?.attestations; if(a?.provenance?.predicateType!=='https://slsa.dev/provenance/v1'||typeof a.url!=='string') process.exit(1); const u=new URL(a.url); const expected='/-/npm/v1/attestations/@concordia-dao/verify@'+process.env.PACKAGE_VERSION; if(u.protocol!=='https:'||u.hostname!=='registry.npmjs.org'||decodeURIComponent(u.pathname)!==expected) process.exit(1); process.stdout.write(a.url)" "$registry_json")"
+          attestation_json="$(mktemp)"
+          curl --fail --silent --show-error "$attestation_url" > "$attestation_json"
+          node --input-type=module - "$registry_json" "$attestation_json" <<'NODE'
+          import { readFileSync } from "node:fs";
+          const [metadataPath, attestationsPath] = process.argv.slice(2);
+          const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+          const document = JSON.parse(readFileSync(attestationsPath, "utf8"));
+          const provenance = document.attestations?.find(
+            (item) => item?.predicateType === "https://slsa.dev/provenance/v1",
+          );
+          if (!provenance?.bundle?.dsseEnvelope?.payload) process.exit(1);
+          const statement = JSON.parse(
+            Buffer.from(provenance.bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+          );
+          const expectedDigest = Buffer.from(
+            metadata.dist.integrity.slice("sha512-".length),
+            "base64",
+          ).toString("hex");
+          const subject = statement.subject;
+          const build = statement.predicate?.buildDefinition;
+          const workflow = build?.externalParameters?.workflow;
+          const dependency = build?.resolvedDependencies;
+          const details = statement.predicate?.runDetails;
+          const invocation = details?.metadata?.invocationId;
+          if (
+            statement._type !== "https://in-toto.io/Statement/v1"
+            || statement.predicateType !== "https://slsa.dev/provenance/v1"
+            || !Array.isArray(subject)
+            || subject.length !== 1
+            || subject[0]?.name !== `pkg:npm/%40concordia-dao/verify@${process.env.PACKAGE_VERSION}`
+            || subject[0]?.digest?.sha512 !== expectedDigest
+            || workflow?.repository !== "https://github.com/asadvendor-boop/concordia-dao-council"
+            || workflow?.path !== ".github/workflows/publish-verifier.yml"
+            || workflow?.ref !== "refs/heads/main"
+            || !Array.isArray(dependency)
+            || !dependency.some((item) => item?.digest?.gitCommit === process.env.COMMIT_SHA)
+            || details?.builder?.id !== "https://github.com/actions/runner/github-hosted"
+            || typeof invocation !== "string"
+            || !/^https:\/\/github\.com\/asadvendor-boop\/concordia-dao-council\/actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/.test(invocation)
+          ) process.exit(1);
+          NODE
 
           consumer="$(mktemp -d)"
           cd "$consumer"

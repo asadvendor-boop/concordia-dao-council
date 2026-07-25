@@ -18,6 +18,7 @@ const READBACK_FACT_FIELDS = Object.freeze([
   "network",
   "package_hash",
   "contract_hash",
+  "owner",
   "schema_version",
   "deployment_domain",
   "casper_chain_name",
@@ -42,6 +43,7 @@ export type V3ReadbackFacts = Readonly<{
   network: "casper-test";
   packageHash: string;
   contractHash: string;
+  owner: string;
   schemaVersion: 3;
   deploymentDomain: string;
   casperChainName: "casper-test";
@@ -290,14 +292,14 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
   }
 
   const rawTranscripts = own(artifact, "transcripts");
-  if (!Array.isArray(rawTranscripts) || rawTranscripts.length !== 16) {
-    throw new Error("v3 readback requires exactly sixteen transcripts");
+  if (!Array.isArray(rawTranscripts) || rawTranscripts.length !== 17) {
+    throw new Error("v3 readback requires exactly seventeen transcripts");
   }
   const transcripts = rawTranscripts.map((value) => transcript(value));
   const blockCalls = transcripts.filter((item) => own(item, "method") === "chain_get_block");
   const contractCalls = transcripts.filter((item) => own(item, "method") === "query_global_state");
   const dictionaryCalls = transcripts.filter((item) => own(item, "method") === "state_get_dictionary_item");
-  if (blockCalls.length !== 1 || contractCalls.length !== 1 || dictionaryCalls.length !== 14) {
+  if (blockCalls.length !== 1 || contractCalls.length !== 1 || dictionaryCalls.length !== 15) {
     throw new Error("v3 readback transcript method inventory is invalid");
   }
   const blockResponse = record(own(blockCalls[0] as Record<string, unknown>, "response"), "v3 readback block response");
@@ -316,16 +318,26 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
     throw new Error("v3 readback exact contract does not belong to expected package");
   }
 
-  const dictionaryIdentifier = {
-    ContractNamedKey: { key: `hash-${contractHash}`, dictionary_name: "state" },
-  };
   const byKey = new Map<string, Record<string, unknown>>();
   for (const item of dictionaryCalls) {
     const params = record(own(item, "params"), "v3 readback dictionary params");
-    exactOwnKeys(params, ["state_root_hash", "dictionary_identifier", "dictionary_item_key"], "v3 readback dictionary params");
+    exactOwnKeys(params, ["state_root_hash", "dictionary_identifier"], "v3 readback dictionary params");
     if (own(params, "state_root_hash") !== block.stateRootHash) throw new Error("v3 readback dictionary query uses another state root");
-    equalCanonical(own(params, "dictionary_identifier"), dictionaryIdentifier, "v3 readback dictionary identity");
-    const itemKey = own(params, "dictionary_item_key");
+    const identifier = record(own(params, "dictionary_identifier"), "v3 readback dictionary identity");
+    exactOwnKeys(identifier, ["ContractNamedKey"], "v3 readback dictionary identity");
+    const namedKey = record(own(identifier, "ContractNamedKey"), "v3 readback ContractNamedKey");
+    exactOwnKeys(
+      namedKey,
+      ["key", "dictionary_name", "dictionary_item_key"],
+      "v3 readback ContractNamedKey",
+    );
+    if (
+      own(namedKey, "key") !== `hash-${contractHash}` ||
+      own(namedKey, "dictionary_name") !== "state"
+    ) {
+      throw new Error("v3 readback dictionary query uses another contract");
+    }
+    const itemKey = own(namedKey, "dictionary_item_key");
     if (typeof itemKey !== "string" || !HEX32.test(itemKey) || byKey.has(itemKey)) {
       throw new Error("v3 readback dictionary key is invalid or duplicated");
     }
@@ -335,20 +347,21 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
   const proposalBytes = Buffer.from(proposalId, "ascii");
   const proposalKey = concatBytes(littleU32(proposalBytes.length), proposalBytes);
   const stateItems: Readonly<Record<string, readonly [number, Uint8Array]>> = Object.freeze({
-    schema_version: [1, new Uint8Array()],
-    deployment_domain: [2, new Uint8Array()],
-    casper_chain_name: [3, new Uint8Array()],
-    proposer: [4, new Uint8Array()],
-    finalizer: [5, new Uint8Array()],
-    signer_a: [6, new Uint8Array()],
-    signer_b: [7, new Uint8Array()],
-    signer_c: [8, new Uint8Array()],
-    threshold: [9, new Uint8Array()],
-    proposed_envelope: [11, proposalKey],
-    approval_count: [12, proposalKey],
-    finalized: [14, proposalKey],
-    finalized_envelope: [15, proposalKey],
-    action_authorized: [16, hexBytes(actionId, 32)],
+    owner: [1, new Uint8Array()],
+    schema_version: [2, new Uint8Array()],
+    deployment_domain: [3, new Uint8Array()],
+    casper_chain_name: [4, new Uint8Array()],
+    proposer: [5, new Uint8Array()],
+    finalizer: [6, new Uint8Array()],
+    signer_a: [7, new Uint8Array()],
+    signer_b: [8, new Uint8Array()],
+    signer_c: [9, new Uint8Array()],
+    threshold: [10, new Uint8Array()],
+    proposed_envelope: [12, proposalKey],
+    approval_count: [13, proposalKey],
+    finalized: [15, proposalKey],
+    finalized_envelope: [16, proposalKey],
+    action_authorized: [17, hexBytes(actionId, 32)],
   });
   const observed: Record<string, Uint8Array> = Object.create(null);
   for (const [name, [index, mappingKey]] of Object.entries(stateItems)) {
@@ -359,6 +372,7 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
   }
   if (byKey.size !== Object.keys(observed).length) throw new Error("v3 readback contains an unexpected state query");
 
+  const owner = bytes32Value(observed.owner as Uint8Array, "v3 readback owner");
   const schemaVersion = u32(observed.schema_version as Uint8Array, "v3 readback schema_version");
   const deploymentDomain = bytes32Value(observed.deployment_domain as Uint8Array, "v3 readback deployment_domain");
   const casperChainName = stringValue(observed.casper_chain_name as Uint8Array, "v3 readback casper_chain_name");
@@ -379,6 +393,7 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
   if (
     schemaVersion !== 3 ||
     casperChainName !== "casper-test" ||
+    owner === "00".repeat(32) ||
     roles.some((role) => role === "00".repeat(32)) ||
     new Set(roles).size !== 5 ||
     (threshold !== 2 && threshold !== 3)
@@ -393,6 +408,7 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
     network: "casper-test",
     package_hash: packageHash,
     contract_hash: contractHash,
+    owner,
     schema_version: schemaVersion,
     deployment_domain: deploymentDomain,
     casper_chain_name: casperChainName,
@@ -419,6 +435,7 @@ export function verifyV3ReadbackArtifact(input: unknown): V3ReadbackFacts {
     network: "casper-test",
     packageHash,
     contractHash,
+    owner,
     schemaVersion: 3,
     deploymentDomain,
     casperChainName: "casper-test",

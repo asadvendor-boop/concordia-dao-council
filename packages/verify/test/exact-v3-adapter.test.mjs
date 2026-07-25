@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { before, test } from "node:test";
 
-import { canonicalTranscriptJson, parseJsonStrict, verifyExactEnvelopeV3Artifact } from "../dist/index.js";
+import {
+  canonicalTranscriptJson,
+  verifyExactEnvelopeV3Artifact,
+  verifyV3ReadbackArtifact,
+} from "../dist/index.js";
+import { loadExactV3ProofFixture } from "./helpers/exact-v3-proof-fixtures.mjs";
 
-const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 let baseline;
 
 function sha256Canonical(value) {
@@ -63,18 +65,7 @@ function addInstallTwoNodeFinality(proof) {
 }
 
 before(() => {
-  const script = [
-    "import json",
-    "from tests.test_clvalue_roundtrip import _bound_v3_proof",
-    "proof, _, _ = _bound_v3_proof()",
-    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
-  ].join("\n");
-  const raw = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", script], {
-    cwd: REPOSITORY,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  baseline = parseJsonStrict(raw);
+  baseline = loadExactV3ProofFixture().proof;
 });
 
 test("exact-envelope v3 adapter independently verifies the frozen seven-step proof", () => {
@@ -86,6 +77,10 @@ test("exact-envelope v3 adapter independently verifies the frozen seven-step pro
   assert.equal(facts.envelopeHash, baseline.prepared.envelope_hash);
   assert.equal(facts.packageHash, baseline.deployment.package_hash);
   assert.equal(facts.contractHash, baseline.deployment.contract_hash);
+  assert.equal(
+    verifyV3ReadbackArtifact(baseline.readback).owner,
+    baseline.readback.facts.owner,
+  );
   assert.equal(facts.deploymentDomain, baseline.deployment.deployment_domain);
   assert.equal(facts.installDeployHash, baseline.deployment.install_deploy_hash.toLowerCase());
   assert.equal(facts.contractStepOutcomes.finalize_pre_quorum.userError, 8);
@@ -149,25 +144,7 @@ test("exact-envelope v3 adapter accepts only hash-reconciled lost broadcast evid
 });
 
 test("exact-envelope v3 adapter matches the producer's 3000-bps negative mutation branch", () => {
-  const script = [
-    "import json",
-    "import tests.test_clvalue_roundtrip as fixtures",
-    "from shared.actions_v3 import build_native_material",
-    "document = fixtures._native_document()",
-    "document['header']['requested_allocation_bps'] = '4000'",
-    "document['header']['approved_allocation_bps'] = '3000'",
-    "document['body']['amount_motes'] = '187500000000'",
-    "document['header'], document['body'], _ = build_native_material(document['header'], document['body'])",
-    "fixtures._native_document = lambda: document",
-    "proof, _, _ = fixtures._bound_v3_proof()",
-    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
-  ].join("\n");
-  const raw = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", script], {
-    cwd: REPOSITORY,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  const proof = parseJsonStrict(raw);
+  const proof = loadExactV3ProofFixture("mutated-3000").proof;
   assert.equal(proof.run.steps[4].deploy.session.StoredContractByHash.args
     .find(([name]) => name === "approved_allocation_bps")[1].parsed, 2999);
   assert.equal(verifyExactEnvelopeV3Artifact(proof).contractStepOutcomes.finalize_mutated_3000_bps.userError, 10);

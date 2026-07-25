@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { before, test } from "node:test";
 
 import {
@@ -11,9 +9,9 @@ import {
   verifyNativeTreasuryExecutionArtifact,
   verifyProofRegistry,
 } from "../dist/index.js";
+import { loadExactV3ProofFixture } from "./helpers/exact-v3-proof-fixtures.mjs";
 import { buildNativeTreasuryArtifact } from "./helpers/native-treasury-artifact.mjs";
 
-const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 const OBSERVED_AT = "2026-07-23T00:00:00Z";
 let exactBytes;
 let exactFacts;
@@ -52,33 +50,11 @@ const TREASURY_CHECKS = [
   "no_second_native_transaction_observed_through_block",
 ];
 
-function generateExactProofScript(useTreasuryDocument = false) {
-  return [
-    "import json",
-    ...(useTreasuryDocument
-      ? [
-          "from pathlib import Path",
-          "import tests.test_clvalue_roundtrip as fixtures",
-          "core = json.loads(Path('packages/verify/test/fixtures/native-treasury-core.json').read_text())",
-          "document = {'schema_id': 'concordia.exact-envelope-v3.input.v1', 'action': 'NativeTransferV1', 'header': core['authorization']['typed_header'], 'body': core['authorization']['typed_body']}",
-          "fixtures._native_document = lambda: document",
-          "proof, _, _ = fixtures._bound_v3_proof()",
-        ]
-      : [
-          "from tests.test_clvalue_roundtrip import _bound_v3_proof",
-          "proof, _, _ = _bound_v3_proof()",
-        ]),
-    "print(json.dumps(proof, sort_keys=True, separators=(',', ':')))",
-  ].join("\n");
-}
-
 function generateExactProof(useTreasuryDocument = false) {
-  const raw = execFileSync("uv", ["run", "--frozen", "--python", "python3.12", "python", "-c", generateExactProofScript(useTreasuryDocument)], {
-    cwd: REPOSITORY,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return { raw, proof: parseJsonStrict(raw) };
+  const { raw, proof } = loadExactV3ProofFixture(
+    useTreasuryDocument ? "treasury" : "default",
+  );
+  return { raw, proof };
 }
 
 function resealExactTemporalEvidence(proof, finalizationBlockHeight, finalizationBlockHash) {
