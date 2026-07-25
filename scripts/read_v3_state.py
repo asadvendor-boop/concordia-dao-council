@@ -33,6 +33,30 @@ from shared.atomic_private_file import (
 SCHEMA_ID = "concordia.v3-chain-readback.v1"
 CHECKPOINT_SCHEMA_ID = "concordia.v3-checkpoint-state-readback.v1"
 NETWORK = "casper-test"
+# Exact declaration order from GovernanceReceiptV3 in
+# contracts/odra-governance-receipt-v3/src/lib.rs. Odra assigns one-based
+# storage indices in this order; mappings that are not part of the readback
+# remain present so an insertion or offset cannot silently shift later fields.
+ODRA_STORAGE_LAYOUT = (
+    ("owner", 1),
+    ("schema_version", 2),
+    ("deployment_domain", 3),
+    ("casper_chain_name", 4),
+    ("proposer", 5),
+    ("finalizer", 6),
+    ("signer_a", 7),
+    ("signer_b", 8),
+    ("signer_c", 9),
+    ("threshold", 10),
+    ("signers", 11),
+    ("proposed_envelope", 12),
+    ("approval_count", 13),
+    ("approvals", 14),
+    ("finalized", 15),
+    ("finalized_envelope", 16),
+    ("action_authorized", 17),
+)
+_ODRA_STORAGE_INDEX = dict(ODRA_STORAGE_LAYOUT)
 _PROCESS_SEAL_KEY = secrets.token_bytes(32)
 _FACTORY_TOKEN = object()
 
@@ -96,6 +120,7 @@ class VerifiedV3Readback:
         "network",
         "package_hash",
         "contract_hash",
+        "owner",
         "schema_version",
         "deployment_domain",
         "casper_chain_name",
@@ -126,6 +151,7 @@ class VerifiedV3Readback:
         for name in (
             "package_hash",
             "contract_hash",
+            "owner",
             "deployment_domain",
             "proposer",
             "finalizer",
@@ -362,20 +388,27 @@ def _expected_state_items(
     proposal_raw = proposal_id.encode("ascii")
     proposal_key = len(proposal_raw).to_bytes(4, "little") + proposal_raw
     return {
-        "schema_version": (1, b""),
-        "deployment_domain": (2, b""),
-        "casper_chain_name": (3, b""),
-        "proposer": (4, b""),
-        "finalizer": (5, b""),
-        "signer_a": (6, b""),
-        "signer_b": (7, b""),
-        "signer_c": (8, b""),
-        "threshold": (9, b""),
-        "proposed_envelope": (11, proposal_key),
-        "approval_count": (12, proposal_key),
-        "finalized": (14, proposal_key),
-        "finalized_envelope": (15, proposal_key),
-        "action_authorized": (16, action_id),
+        "owner": (_ODRA_STORAGE_INDEX["owner"], b""),
+        "schema_version": (_ODRA_STORAGE_INDEX["schema_version"], b""),
+        "deployment_domain": (_ODRA_STORAGE_INDEX["deployment_domain"], b""),
+        "casper_chain_name": (_ODRA_STORAGE_INDEX["casper_chain_name"], b""),
+        "proposer": (_ODRA_STORAGE_INDEX["proposer"], b""),
+        "finalizer": (_ODRA_STORAGE_INDEX["finalizer"], b""),
+        "signer_a": (_ODRA_STORAGE_INDEX["signer_a"], b""),
+        "signer_b": (_ODRA_STORAGE_INDEX["signer_b"], b""),
+        "signer_c": (_ODRA_STORAGE_INDEX["signer_c"], b""),
+        "threshold": (_ODRA_STORAGE_INDEX["threshold"], b""),
+        "proposed_envelope": (
+            _ODRA_STORAGE_INDEX["proposed_envelope"],
+            proposal_key,
+        ),
+        "approval_count": (_ODRA_STORAGE_INDEX["approval_count"], proposal_key),
+        "finalized": (_ODRA_STORAGE_INDEX["finalized"], proposal_key),
+        "finalized_envelope": (
+            _ODRA_STORAGE_INDEX["finalized_envelope"],
+            proposal_key,
+        ),
+        "action_authorized": (_ODRA_STORAGE_INDEX["action_authorized"], action_id),
     }
 
 
@@ -416,9 +449,9 @@ def _parse_transcripts(
         raise ReadbackValidationError(
             "exactly one block and one contract-identity query are required"
         )
-    if len(dictionary_calls) != 14 or len(transcripts) != 16:
+    if len(dictionary_calls) != 15 or len(transcripts) != 17:
         raise ReadbackValidationError(
-            "readback requires exactly fourteen state queries"
+            "readback requires exactly fifteen state queries"
         )
     try:
         block = _unwrap_block_with_signatures(block_calls[0]["response"])
@@ -452,19 +485,32 @@ def _parse_transcripts(
         )
 
     by_key: dict[str, dict[str, Any]] = {}
-    exact_dictionary = {
-        "ContractNamedKey": {"key": "hash-" + contract_hash, "dictionary_name": "state"}
-    }
     for transcript in dictionary_calls:
         params = transcript["params"]
+        if set(params) != {"state_root_hash", "dictionary_identifier"}:
+            raise ReadbackValidationError(
+                "dictionary query does not use the exact Casper 2.0 field set"
+            )
+        identifier = params.get("dictionary_identifier")
+        if not isinstance(identifier, Mapping) or set(identifier) != {
+            "ContractNamedKey"
+        }:
+            raise ReadbackValidationError(
+                "dictionary query is not one exact ContractNamedKey"
+            )
+        named_key = identifier["ContractNamedKey"]
         if (
-            params.get("state_root_hash") != state_root
-            or params.get("dictionary_identifier") != exact_dictionary
+            not isinstance(named_key, Mapping)
+            or set(named_key)
+            != {"key", "dictionary_name", "dictionary_item_key"}
+            or named_key["key"] != "hash-" + contract_hash
+            or named_key["dictionary_name"] != "state"
+            or params["state_root_hash"] != state_root
         ):
             raise ReadbackValidationError(
                 "dictionary query is not pinned to exact state root/contract"
             )
-        item_key = params.get("dictionary_item_key")
+        item_key = named_key["dictionary_item_key"]
         if not isinstance(item_key, str) or item_key in by_key:
             raise ReadbackValidationError(
                 "dictionary item query key is missing or duplicated"
@@ -487,6 +533,7 @@ def _parse_transcripts(
         "network": network,
         "package_hash": package_hash,
         "contract_hash": contract_hash,
+        "owner": _bytes32(observed["owner"], "owner"),
         "schema_version": _u32(observed["schema_version"], "schema_version"),
         "deployment_domain": _bytes32(
             observed["deployment_domain"], "deployment_domain"
@@ -523,7 +570,8 @@ def _parse_transcripts(
         )
     governance_roles = [facts["proposer"], facts["finalizer"], *facts["signers"]]
     if (
-        any(role == "00" * 32 for role in governance_roles)
+        facts["owner"] == "00" * 32
+        or any(role == "00" * 32 for role in governance_roles)
         or len(set(governance_roles)) != 5
         or facts["threshold"] not in (2, 3)
     ):
@@ -808,6 +856,7 @@ def validate_verified_readback(value: object) -> VerifiedV3Readback:
         "network",
         "package_hash",
         "contract_hash",
+        "owner",
         "schema_version",
         "deployment_domain",
         "casper_chain_name",
@@ -1008,12 +1057,6 @@ def capture_v3_state(
         1,
     )
     transcripts = [block_call, contract_call]
-    exact_dictionary = {
-        "ContractNamedKey": {
-            "key": "hash-" + contract_hash,
-            "dictionary_name": "state",
-        }
-    }
     for sequence, (name, (index, mapping_key)) in enumerate(
         _expected_state_items(proposal_id, action).items(), start=2
     ):
@@ -1026,8 +1069,15 @@ def capture_v3_state(
                 "state_get_dictionary_item",
                 {
                     "state_root_hash": state_root,
-                    "dictionary_identifier": exact_dictionary,
-                    "dictionary_item_key": state_dictionary_key(index, mapping_key),
+                    "dictionary_identifier": {
+                        "ContractNamedKey": {
+                            "key": "hash-" + contract_hash,
+                            "dictionary_name": "state",
+                            "dictionary_item_key": state_dictionary_key(
+                                index, mapping_key
+                            ),
+                        }
+                    },
                 },
                 sequence,
             )
