@@ -38,6 +38,13 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
     dashboard_lock = json.loads(
         (dashboard / "package-lock.json").read_text(encoding="utf-8")
     )
+    x402 = ROOT / "services" / "x402-official"
+    x402_package = json.loads(
+        (x402 / "package.json").read_text(encoding="utf-8")
+    )
+    x402_lock = json.loads(
+        (x402 / "package-lock.json").read_text(encoding="utf-8")
+    )
 
     assert "pillow==12.3.0" in project["tool"]["uv"]["constraint-dependencies"]
     assert "click==8.3.3" in project["tool"]["uv"]["constraint-dependencies"]
@@ -54,18 +61,20 @@ def test_release_locks_pin_the_dependabot_security_floors() -> None:
     ]
     assert [item.get("version") for item in clicks] == ["8.3.3"]
 
-    assert package["overrides"]["brace-expansion"] == "1.1.16"
-    brace = package_lock["packages"]["node_modules/brace-expansion"]
-    assert brace["version"] == "1.1.16"
+    for manifest in (package, dashboard_package, x402_package):
+        assert manifest["overrides"]["glob"] == "13.0.6"
+    for npm_lock in (package_lock, dashboard_lock, x402_lock):
+        packages = npm_lock["packages"]
+        assert packages["node_modules/glob"]["version"] == "13.0.6"
+        assert packages["node_modules/minimatch"]["version"] == "10.2.5"
+        assert packages["node_modules/brace-expansion"]["version"] == "5.0.8"
 
     assert dashboard_package["dependencies"]["next"] == "16.2.11"
     assert dashboard_package["overrides"]["sharp"] == "0.35.3"
+    assert dashboard_package["overrides"]["postcss"] == "8.5.23"
     assert dashboard_lock["packages"]["node_modules/next"]["version"] == "16.2.11"
     assert dashboard_lock["packages"]["node_modules/sharp"]["version"] == "0.35.3"
-    assert (
-        dashboard_lock["packages"]["node_modules/brace-expansion"]["version"]
-        == "1.1.16"
-    )
+    assert dashboard_lock["packages"]["node_modules/postcss"]["version"] == "8.5.23"
 
 
 def test_security_register_records_current_python_dependency_posture() -> None:
