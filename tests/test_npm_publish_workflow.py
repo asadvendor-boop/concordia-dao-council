@@ -62,3 +62,20 @@ def test_verifier_publish_workflow_preflights_the_exact_public_contract() -> Non
     assert "typeof m.verifyRegistry" not in source
     assert source.count("./node_modules/.bin/concordia-verify --help") == 2
     assert 'npm install --ignore-scripts "$tarball"' in source
+
+
+def test_verifier_publish_workflow_installs_python_fixture_runtime_before_tests() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    setup_uv = source.index("- name: Install pinned uv")
+    package_tests = source.index(
+        "- name: Install, test, lint, audit, and inspect package"
+    )
+
+    assert setup_uv < package_tests
+    assert (
+        "uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
+        in source
+    )
+    assert "version: 0.10.12" in source
+    assert "uv python install 3.12.11" in source
