@@ -64,33 +64,43 @@ def treasury_v3_proof(
         for name, private in _role_private_keys().items()
     }
     role_indexes = {
-        4: "proposer",
-        5: "finalizer",
-        6: "signer_a",
-        7: "signer_b",
-        8: "signer_c",
+        5: "proposer",
+        6: "finalizer",
+        7: "signer_a",
+        8: "signer_b",
+        9: "signer_c",
     }
     replacements = {
-        state_dictionary_key(11, old_proposal_key): state_dictionary_key(
-            11, new_proposal_key
-        ),
         state_dictionary_key(12, old_proposal_key): state_dictionary_key(
             12, new_proposal_key
         ),
-        state_dictionary_key(14, old_proposal_key): state_dictionary_key(
-            14, new_proposal_key
+        state_dictionary_key(13, old_proposal_key): state_dictionary_key(
+            13, new_proposal_key
         ),
         state_dictionary_key(15, old_proposal_key): state_dictionary_key(
             15, new_proposal_key
         ),
-        state_dictionary_key(16, bytes.fromhex(ids["action"])): (
-            state_dictionary_key(16, bytes.fromhex(str(prepared["action_id"])))
+        state_dictionary_key(16, old_proposal_key): state_dictionary_key(
+            16, new_proposal_key
+        ),
+        state_dictionary_key(17, bytes.fromhex(ids["action"])): (
+            state_dictionary_key(17, bytes.fromhex(str(prepared["action_id"])))
         ),
     }
     for transcript in transcripts:
         params = transcript["params"]
-        item_key = params.get("dictionary_item_key")
-        if item_key == state_dictionary_key(2):
+        identifier = params.get("dictionary_identifier")
+        named_key = (
+            identifier.get("ContractNamedKey")
+            if isinstance(identifier, dict)
+            else None
+        )
+        item_key = (
+            named_key.get("dictionary_item_key")
+            if isinstance(named_key, dict)
+            else None
+        )
+        if item_key == state_dictionary_key(3):
             transcript["response"]["result"]["stored_value"] = _cl_bytes(
                 bytes.fromhex(str(header["deployment_domain"]))
             )
@@ -100,10 +110,10 @@ def treasury_v3_proof(
                     bytes.fromhex(role_accounts[role])
                 )
         if item_key in replacements:
-            params["dictionary_item_key"] = replacements[item_key]
+            named_key["dictionary_item_key"] = replacements[item_key]
         if item_key in (
-            state_dictionary_key(11, old_proposal_key),
-            state_dictionary_key(15, old_proposal_key),
+            state_dictionary_key(12, old_proposal_key),
+            state_dictionary_key(16, old_proposal_key),
         ):
             transcript["response"]["result"]["stored_value"] = _cl_bytes(
                 bytes.fromhex(str(prepared["envelope_hash"]))
