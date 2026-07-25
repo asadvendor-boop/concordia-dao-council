@@ -88,3 +88,20 @@ def test_verifier_publish_workflow_primes_exact_offline_runtime_dependency() -> 
     package_tests = source.index("npm test")
 
     assert cache_prime < package_tests
+
+
+def test_verify_step_reads_json_temp_files_as_json() -> None:
+    """Node's require() treats an extensionless file as CommonJS.
+
+    The post-publish verification step reads registry and attestation JSON via
+    require(), so the temp files must carry a .json suffix. Without it the
+    step fails with `SyntaxError: Unexpected token ':'` AFTER a successful
+    publish, reporting the run red while the package is actually live.
+    """
+
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'registry_json="$(mktemp --suffix=.json)"' in source
+    assert 'attestation_json="$(mktemp --suffix=.json)"' in source
+    assert 'registry_json="$(mktemp)"' not in source
+    assert 'attestation_json="$(mktemp)"' not in source
