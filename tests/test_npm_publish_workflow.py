@@ -79,3 +79,12 @@ def test_verifier_publish_workflow_installs_python_fixture_runtime_before_tests(
     )
     assert "version: 0.10.12" in source
     assert "uv python install 3.12.11" in source
+
+
+def test_verifier_publish_workflow_primes_exact_offline_runtime_dependency() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    cache_prime = source.index("npm cache add '@noble/hashes@1.8.0'")
+    package_tests = source.index("npm test")
+
+    assert cache_prime < package_tests
