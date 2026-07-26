@@ -34,7 +34,11 @@ Concordia DAO Council is intended as a policy-governed execution firewall for Ca
 - Bypass multisig approval.
 - Execute altered parameters.
 - Ignore a Constitution violation.
-- Claim CSPR.cloud, MCP, or Odra paths are production-deep unless configured and proven; official x402 is excluded.
+- Claim CSPR.cloud, MCP, or Odra paths are production-deep unless configured and proven.
+- Promote Casper-native x402 v2 beyond its implemented Testnet challenge,
+  payment-intent, native-transfer verification, and replay-protection evidence.
+  No external facilitator/provider, official facilitator settlement, escrow,
+  refunds, WCSPR settlement, or marketplace is claimed.
 
 ## Final Proof Artifacts
 
@@ -52,5 +56,8 @@ Concordia DAO Council is intended as a policy-governed execution firewall for Ca
 ## 30/60/90-Day Roadmap
 
 - 30 days: Casper Testnet pilot with receipt contract, policy templates, and CSPR.cloud status reads.
-- 60 days: Odra contract upgrade, proposal registry, and richer query endpoints.
-- 90 days: DAO pilot, agent reputation scoring, RWA policy templates, and production wallet policy.
+- 60 days: Odra contract upgrade, proposal registry, richer query endpoints,
+  and independent x402 quote, fulfillment, replay, finality, and
+  protected-resource-release tests.
+- 90 days: DAO pilot, agent reputation scoring, RWA policy templates, production
+  wallet policy, and a separately gated governed x402 Testnet pilot.

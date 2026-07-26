@@ -33,4 +33,8 @@ Before publishing Concordia DAO Council, complete this list.
 - [ ] Run `make smoke`.
 - [ ] Confirm no legacy model/vendor branding remains.
 - [ ] Confirm no private key, `.env`, database, local cache, or dependency directory is committed.
-- [ ] Confirm optional CSPR.cloud, MCP, and Odra areas are scoped accurately, and that official x402 is explicitly excluded.
+- [ ] Confirm optional CSPR.cloud, MCP, and Odra areas are scoped accurately.
+- [ ] Confirm Casper-native x402 v2 is described only by its implemented Testnet
+  challenge, payment-intent, native-transfer verification, and replay-protection
+  evidence; do not claim an external facilitator/provider, official facilitator
+  settlement, escrow, refunds, WCSPR settlement, or a marketplace.
