@@ -56,6 +56,9 @@ The proof layers must not be conflated:
 
 ## Excluded architectures
 
-Governance v3 is excluded from V1.5. Official x402 is not shipped. Mainnet has
-not been executed. Compatibility code retained by the verifier is not connected
-to the V1 runtime and is not a public product surface.
+Governance v3 is excluded from V1.5. Casper-native x402 v2 implements an HTTP
+402 payment request, payment intent, and native-transfer verification on
+Testnet; a later official facilitator service and successful external-provider
+settlement are not shipped or claimed. Mainnet has not been executed.
+Compatibility code retained by the verifier is not connected to the V1 runtime
+and is not a public product surface.

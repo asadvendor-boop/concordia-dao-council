@@ -26,8 +26,12 @@ Shipped in the V1.5 source and recorded evidence:
 
 Release boundaries are explicit:
 
-- **Official x402 is not shipped.** SafePay Lite is not an official x402
-  facilitator, escrow, refund contract, or marketplace.
+- **Casper-native x402 v2 is implemented.** The V1 gateway exposes an HTTP 402
+  payment request, payment intent, and native-transfer verification on Casper
+  Testnet. V1.5 does not ship a later official facilitator service or claim
+  successful external-provider settlement. SafePay Lite remains recorded
+  native-CSPR evidence, not a facilitator, escrow, refund contract, or
+  marketplace.
 - **Mainnet has not been executed.** All cited deploys are Casper Testnet
   evidence.
 - **Governance v3 is excluded from V1.5.** V2/V3 names retained by the npm

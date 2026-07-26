@@ -55,8 +55,10 @@ if (result.status !== "verified") {
 - `room_identity_v1`
 - `snapshot`
 
-These are schema/API identifiers. They do not claim that official x402,
-Mainnet, or governance v3 shipped in Concordia V1.5.
+These are schema/API identifiers. They do not upgrade Casper-native x402 v2
+payment-request, payment-intent, and native-transfer-verification support into
+a claim that a later official facilitator service, successful external-provider
+settlement, Mainnet, or governance v3 shipped in Concordia V1.5.
 
 ## Network behavior
 

@@ -20,10 +20,13 @@ unavailable, not as success.
 
 ## Explicit boundary
 
-!!! warning "Not official x402"
-    Official x402 is not shipped. SafePay Lite is not an official facilitator,
-    escrow contract, refund contract, marketplace, WCSPR settlement claim, or
-    promise of a live external provider.
+!!! warning "Implemented payment boundary"
+    Casper-native x402 v2 implements an HTTP 402 payment request, payment
+    intent, and native-transfer verification on Casper Testnet. V1.5 does not
+    ship a later official facilitator service or claim successful
+    external-provider settlement. SafePay Lite remains recorded native-CSPR
+    evidence, not an escrow contract, refund contract, marketplace, WCSPR
+    settlement claim, or promise of a live external provider.
 
 The npm verifier retains `safepay_v2` and
 `official_x402_settlement_v1` compatibility parsers. Without independently

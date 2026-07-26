@@ -51,7 +51,10 @@ and transcript consistency. It does not by itself prove canonical-chain
 membership. Live RPC corroboration can increase observation strength but does
 not prove independent administration merely because hostnames differ.
 
-Official x402 is not shipped. Mainnet has not been executed. Governance v3 is
-excluded from V1.5. Historical compatibility adapters remain fail-closed.
+Casper-native x402 v2 implements an HTTP 402 payment request, payment intent,
+and native-transfer verification on Testnet. A later official facilitator
+service and successful external-provider settlement are not shipped or claimed.
+Mainnet has not been executed. Governance v3 is excluded from V1.5. Historical
+compatibility adapters remain fail-closed.
 
 See [Verifier SDK / CLI](verifier-cli.md) for the package boundary.

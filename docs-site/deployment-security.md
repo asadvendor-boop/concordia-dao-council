@@ -37,7 +37,10 @@ the repository security policy.
 - Approval tokens are single-use and hash-bound.
 - Paths, JSON, remote URLs, response sizes, and timeouts are bounded.
 - Missing or contradictory evidence fails closed.
-- Official x402 is not shipped.
+- Casper-native x402 v2 implements an HTTP 402 payment request, payment intent,
+  and native-transfer verification on Testnet. A later official facilitator
+  service and successful external-provider settlement are not shipped or
+  claimed.
 - Governance v3 is excluded from V1.5.
 
 Report vulnerabilities privately through the repository Security tab.

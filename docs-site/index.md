@@ -24,9 +24,11 @@ Start with the [90-second judge path](judge-walkthrough.md), then inspect the
 ## Scope is intentionally narrow
 
 !!! warning "V1.5 boundary"
-    Official x402 is not shipped. Mainnet has not been executed. Governance v3
-    is excluded from V1.5. SafePay Lite is a recorded Testnet native-CSPR proof,
-    not a live official-x402 service.
+    Casper-native x402 v2 is implemented as an HTTP 402 payment request,
+    payment intent, and native-transfer verification on Testnet. A later
+    official facilitator service and successful external-provider settlement
+    are not shipped or claimed in V1.5. SafePay Lite remains recorded Testnet
+    native-CSPR evidence.
 
 The npm verifier retains historical V2/V3 parser and refusal compatibility.
 That compatibility does not promote those paths into the V1.5 product.

@@ -21,6 +21,9 @@ non-success outcome.
 
 ## Release boundary
 
-Official x402 is not shipped. Mainnet has not been executed. Governance v3 is
-excluded from V1.5. SafePay Lite is recorded native-CSPR evidence, not an
-additional live policy or settlement system.
+Casper-native x402 v2 implements an HTTP 402 payment request, payment intent,
+and native-transfer verification on Testnet; a later official facilitator
+service and successful external-provider settlement are not shipped or claimed.
+Mainnet has not been executed. Governance v3 is excluded from V1.5. SafePay
+Lite remains recorded native-CSPR evidence, not an additional live policy or
+settlement system.

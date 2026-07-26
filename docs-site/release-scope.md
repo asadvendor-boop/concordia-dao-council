@@ -15,12 +15,15 @@ This page is the claim boundary for Concordia V1.5.
 
 ## Excluded
 
-- **Official x402 is not shipped.**
+- **Casper-native x402 v2 is implemented** as an HTTP 402 payment request,
+  payment intent, and native-transfer verification on Testnet.
+- **A later official facilitator service and successful external-provider
+  settlement are not shipped or claimed.**
 - **Mainnet has not been executed.**
 - **Governance v3 is excluded from V1.5.**
 - No seven-upgrade V2 product claim is made.
-- No live external SafePay provider, escrow, refund, marketplace, WCSPR, or
-  official-facilitator claim is made.
+- SafePay Lite remains recorded native-CSPR evidence; no live external SafePay
+  provider, escrow, refund, marketplace, or WCSPR claim is made.
 
 Historical V2/V3 files retained for npm compatibility are fixtures and parser
 assets. They remain off public product promotion and do not alter the V1

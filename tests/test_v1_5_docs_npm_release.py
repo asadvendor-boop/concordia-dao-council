@@ -106,7 +106,24 @@ def test_public_release_copy_is_v1_first_and_explicit_about_exclusions() -> None
     assert CANONICAL_RECEIPT in combined
     assert QUORUM_ACCEPTANCE in combined
     assert SAFEPAY_PAYMENT in combined
-    assert "official x402 is not shipped" in lowered
+    corrected_copy = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs-site" / "index.md",
+            ROOT / "docs-site" / "release-scope.md",
+            ROOT / "docs-site" / "safepay-lite.md",
+            ROOT / "docs-site" / "proof-verification.md",
+        )
+    ).lower()
+    assert "casper-native x402 v2" in corrected_copy
+    assert "http 402" in corrected_copy
+    assert "payment intent" in corrected_copy
+    assert "native-transfer verification" in corrected_copy
+    assert "official facilitator service" in corrected_copy
+    assert "successful external-provider settlement" in corrected_copy
+    assert "recorded native-cspr" in corrected_copy
+    assert "official x402 is not shipped" not in corrected_copy
     assert "mainnet has not been executed" in lowered
     assert "governance v3 is excluded" in lowered
     assert "recorded native-cspr" in lowered

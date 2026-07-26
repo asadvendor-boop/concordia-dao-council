@@ -43,8 +43,11 @@ Open the [SafePay Lite record](https://concordiadao.xyz/safepay-lite/DAO-PROP-6C
 and compare its recorded native-CSPR payment with
 [CSPR.live](https://testnet.cspr.live/deploy/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c).
 
-Official x402 is not shipped. The record does not prove an official
-facilitator, escrow, refunds, or a live payment marketplace.
+Casper-native x402 v2 implements an HTTP 402 payment request, payment intent,
+and native-transfer verification on Casper Testnet. V1.5 does not claim a
+later official facilitator service or successful external-provider settlement.
+The SafePay Lite record does not prove a facilitator, escrow, refunds, or a
+live payment marketplace.
 
 ## 6. Stop conditions
 
