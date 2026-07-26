@@ -1,0 +1,131 @@
+{
+  "canonical_hex": null,
+  "canonical_length": null,
+  "description": "valid_before must be strictly greater than valid_after.",
+  "expected_error": {
+    "code": 16,
+    "name": "InvalidActionField"
+  },
+  "failed_fields": [
+    "valid_after",
+    "valid_before"
+  ],
+  "hashes": {},
+  "kind": "official_x402_settlement_v1",
+  "typed_input": {
+    "body": [
+      {
+        "name": "x402_version",
+        "type": "u32",
+        "value": "2"
+      },
+      {
+        "name": "scheme",
+        "type": "String",
+        "value": "exact"
+      },
+      {
+        "name": "caip2_network",
+        "type": "String",
+        "value": "casper:casper-test"
+      },
+      {
+        "name": "wcspr_package",
+        "type": "Bytes32",
+        "value": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e"
+      },
+      {
+        "name": "wcspr_contract",
+        "type": "Bytes32",
+        "value": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+      },
+      {
+        "name": "token_name",
+        "type": "String",
+        "value": "Wrapped CSPR"
+      },
+      {
+        "name": "token_symbol",
+        "type": "String",
+        "value": "WCSPR"
+      },
+      {
+        "name": "eip712_domain_version",
+        "type": "String",
+        "value": "1"
+      },
+      {
+        "name": "token_decimals",
+        "type": "u8",
+        "value": "9"
+      },
+      {
+        "name": "payer",
+        "type": "AccountHash",
+        "value": "5e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c"
+      },
+      {
+        "name": "payee",
+        "type": "AccountHash",
+        "value": "5252525252525252525252525252525252525252525252525252525252525252"
+      },
+      {
+        "name": "value",
+        "type": "U256",
+        "value": "25000000000"
+      },
+      {
+        "name": "resource_url_hash",
+        "type": "Bytes32",
+        "value": "20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798"
+      },
+      {
+        "name": "report_hash",
+        "type": "Bytes32",
+        "value": "f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3"
+      },
+      {
+        "name": "payment_requirements_hash",
+        "type": "Bytes32",
+        "value": "422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c"
+      },
+      {
+        "name": "signed_payment_payload_hash",
+        "type": "Bytes32",
+        "value": "8bb3fe8a722af268a02bff79c1fbd71b83197565b83b2e20809646e9bafd4733"
+      },
+      {
+        "name": "eip712_auth_nonce",
+        "type": "Bytes32",
+        "value": "5656565656565656565656565656565656565656565656565656565656565656"
+      },
+      {
+        "name": "valid_after",
+        "type": "u64",
+        "value": "1784754000"
+      },
+      {
+        "name": "valid_before",
+        "type": "u64",
+        "value": "1784754000"
+      },
+      {
+        "name": "action_nonce",
+        "type": "Bytes32",
+        "value": "5757575757575757575757575757575757575757575757575757575757575757"
+      },
+      {
+        "name": "settlement_target",
+        "type": "String",
+        "value": "cspr-cloud-facilitator"
+      },
+      {
+        "name": "settlement_version",
+        "type": "u32",
+        "value": "1"
+      }
+    ]
+  },
+  "valid": false,
+  "vector_id": "GV-X4-03"
+}

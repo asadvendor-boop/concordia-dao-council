@@ -1,0 +1,87 @@
+{
+  "casper_contract_schema_version": 1,
+  "toolchain": "rustc 1.98.0-nightly (df6ee909e 2026-06-28)",
+  "authors": [],
+  "repository": null,
+  "homepage": null,
+  "contract_name": "TreasuryPolicy",
+  "contract_version": "0.1.0",
+  "types": [],
+  "errors": [],
+  "entry_points": [
+    {
+      "name": "validate_allocation",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [
+        {
+          "name": "requested_bps",
+          "description": null,
+          "ty": "U32",
+          "optional": false
+        },
+        {
+          "name": "high_risk",
+          "description": null,
+          "ty": "Bool",
+          "optional": false
+        }
+      ],
+      "return_ty": "Bool",
+      "is_contract_context": true,
+      "access": "public"
+    },
+    {
+      "name": "current_caps",
+      "description": "",
+      "is_mutable": false,
+      "arguments": [],
+      "return_ty": "String",
+      "is_contract_context": true,
+      "access": "public"
+    }
+  ],
+  "events": [],
+  "call": {
+    "wasm_file_name": "TreasuryPolicy.wasm",
+    "description": "",
+    "arguments": [
+      {
+        "name": "odra_cfg_package_hash_key_name",
+        "description": "The arg name for the package hash key name.",
+        "ty": "String",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_allow_key_override",
+        "description": "If true and the key specified in odra_cfg_package_hash_key_name already exists, it will be overwritten.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgradable",
+        "description": "The arg name for the contract upgradeability setting.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "odra_cfg_is_upgrade",
+        "description": "The arg name for telling the installer that the contract is being upgraded.",
+        "ty": "Bool",
+        "optional": false
+      },
+      {
+        "name": "max_single_allocation_bps",
+        "description": null,
+        "ty": "U32",
+        "optional": false
+      },
+      {
+        "name": "max_high_risk_allocation_bps",
+        "description": null,
+        "ty": "U32",
+        "optional": false
+      }
+    ]
+  }
+}

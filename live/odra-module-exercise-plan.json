@@ -1,0 +1,208 @@
+{
+  "canonical_live_proof": {
+    "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+    "entry_point": "store_governance_receipt",
+    "install_deploy_hash": "d319157b2638ed8fa7c1dfc639be16e1455530cd568c3cde35bb40c1bd20ba32",
+    "module_exercised": "GovernanceReceipt.store_governance_receipt",
+    "package_hash": "hash-992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a",
+    "proposal_id": "DAO-PROP-6CB25C",
+    "quorum_revision_status": "implemented_and_local_tests_passed_not_yet_testnet_exercised",
+    "receipt_deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852"
+  },
+  "card_index_alignment": {
+    "consistency_check": "GovernanceReceipt.final_card_hash must equal CardIndexLedger.card_root[DAO-PROP-6CB25C:6]",
+    "receipt_final_card_root": {
+      "card_root_hex": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622",
+      "card_type": "Verdict",
+      "label": "receipt_final_card_hash",
+      "sequence": 6
+    },
+    "session_terminal_card_root": {
+      "card_root_hex": "64c62e5345ef09f1eece5f790b0a980c8790d10cc45a0dd6053a5f9b83fe2fdd",
+      "card_type": "GovernanceSummary",
+      "label": "session_terminal_card_root",
+      "sequence": 12
+    }
+  },
+  "constitution_caps": {
+    "max_high_risk_allocation_bps": 300,
+    "max_single_allocation_bps": 800
+  },
+  "generated_at": "2026-07-01T05:52:23.681375+00:00",
+  "honesty_boundary": "This file is the spend-free topology plan that preceded the live supplemental topology genesis. The canonical live proof uses the deployed Odra GovernanceReceipt receipt path shown in live_proof. The live supplemental topology genesis exercises CouncilRegistry through a representative register_agent call, TreasuryPolicy through validate_allocation, and CardIndexLedger through seal_card_root in artifacts/live/odra-topology-genesis-proof.json.",
+  "local_quorum_tests": {
+    "command": "cd contracts/odra-governance-receipt && cargo +nightly test",
+    "last_known_result": "passed_locally",
+    "required_tests": [
+      "quorum_blocks_until_two_distinct_signers_approve",
+      "quorum_rejects_non_signers_and_duplicate_approvals"
+    ]
+  },
+  "manifest_status": "quorum_enabled_migration_package",
+  "modules": [
+    {
+      "calls": [
+        {
+          "args": {
+            "agent_id": "Locke",
+            "public_key_hex": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1"
+          },
+          "entry_point": "register_agent"
+        },
+        {
+          "args": {
+            "agent_id": "Locke"
+          },
+          "entry_point": "get_agent_key",
+          "expected": "registered public key"
+        }
+      ],
+      "module": "CouncilRegistry",
+      "purpose": "Register the council signer/agent credential roots."
+    },
+    {
+      "calls": [
+        {
+          "args": {
+            "card_root_hex": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622",
+            "proposal_id": "DAO-PROP-6CB25C",
+            "sequence": 6
+          },
+          "entry_point": "seal_card_root",
+          "label": "receipt_final_card_hash"
+        },
+        {
+          "args": {
+            "proposal_id": "DAO-PROP-6CB25C",
+            "sequence": 6
+          },
+          "entry_point": "get_card_root",
+          "expected": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622",
+          "label": "receipt_final_card_hash_check"
+        },
+        {
+          "args": {
+            "card_root_hex": "64c62e5345ef09f1eece5f790b0a980c8790d10cc45a0dd6053a5f9b83fe2fdd",
+            "proposal_id": "DAO-PROP-6CB25C",
+            "sequence": 12
+          },
+          "entry_point": "seal_card_root",
+          "label": "session_terminal_card_root"
+        },
+        {
+          "args": {
+            "proposal_id": "DAO-PROP-6CB25C",
+            "sequence": 12
+          },
+          "entry_point": "get_card_root",
+          "expected": "64c62e5345ef09f1eece5f790b0a980c8790d10cc45a0dd6053a5f9b83fe2fdd",
+          "label": "session_terminal_card_root_check"
+        }
+      ],
+      "module": "CardIndexLedger",
+      "purpose": "Seal the tamper-evident card root for the evidence chain."
+    },
+    {
+      "calls": [
+        {
+          "args": {
+            "max_high_risk_allocation_bps": 300,
+            "max_single_allocation_bps": 800
+          },
+          "entry_point": "init"
+        },
+        {
+          "args": {
+            "high_risk": false,
+            "requested_bps": 3000
+          },
+          "entry_point": "validate_allocation",
+          "expected": false
+        },
+        {
+          "args": {
+            "high_risk": false,
+            "requested_bps": 800
+          },
+          "entry_point": "validate_allocation",
+          "expected": true
+        }
+      ],
+      "module": "TreasuryPolicy",
+      "purpose": "Enforce the DAO Constitution allocation cap."
+    },
+    {
+      "calls": [
+        {
+          "args": {
+            "signer_a": "Account 1",
+            "signer_b": "Account 2",
+            "signer_c": "Account 3",
+            "threshold": 2
+          },
+          "entry_point": "configure_quorum"
+        },
+        {
+          "args": {
+            "envelope_hash": "f923ee476084d5e654976896c7daa205f512d956c765cfba71aefa0595034828",
+            "proposal_id": "DAO-PROP-6CB25C"
+          },
+          "entry_point": "propose_envelope"
+        },
+        {
+          "args": {
+            "caller": "signer_a",
+            "proposal_id": "DAO-PROP-6CB25C"
+          },
+          "entry_point": "approve_envelope"
+        },
+        {
+          "args": {
+            "proposal_id": "DAO-PROP-6CB25C"
+          },
+          "entry_point": "quorum_status",
+          "expected": {
+            "approvals": 1,
+            "quorum_met": false,
+            "threshold": 2
+          }
+        },
+        {
+          "args": {
+            "caller": "signer_b",
+            "proposal_id": "DAO-PROP-6CB25C"
+          },
+          "entry_point": "approve_envelope"
+        },
+        {
+          "args": {
+            "proposal_id": "DAO-PROP-6CB25C"
+          },
+          "entry_point": "quorum_status",
+          "expected": {
+            "approvals": 2,
+            "quorum_met": true,
+            "threshold": 2
+          }
+        },
+        {
+          "args": {
+            "approved_allocation_bps": 800,
+            "decision": "APPROVED_WITH_LIMITS",
+            "dissent_hash": "53fb4bc558cf2ee3d70d1a61b2462bdc3da92cd6e2ee24594eabff7f7a2055da",
+            "final_card_hash": "710b406d7b960d03c633e110fb2edda890b12594967b5db9dba533198a25d622",
+            "plan_hash": "603c61df5efc7c911d6c3cbc9063ba3e7b7ac3d580a61e90c89aa0673ef2ac93",
+            "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+            "proposal_id": "DAO-PROP-6CB25C",
+            "risk_score": 61
+          },
+          "entry_point": "store_governance_receipt"
+        }
+      ],
+      "module": "GovernanceReceipt",
+      "purpose": "Require 2-of-3 signer quorum before storing the final receipt."
+    }
+  ],
+  "spends_cspr": false,
+  "status": "dry_run_ready"
+}

@@ -1,0 +1,99 @@
+{
+  "canonical_proof_unchanged": true,
+  "contract_version": 1,
+  "dynamic_evidence_artifact": "artifacts/live/dynamic-evidence-DAO-PROP-VID-001.json",
+  "dynamic_execution_artifact": "artifacts/live/dynamic-proposal-execution-proof-DAO-PROP-VID-001.json",
+  "envelope_hash": "2efbb3d5acbe28840b3c09dfffaf300317fdf81c3b3c5108bd0a7fde2fb3d62f",
+  "live_deploys": {},
+  "package_hash": "hash-1d324e319701e4adcfa9476efcde3d047462d35e79d2cd8c7326c0c384c87d96",
+  "proposal_id": "DAO-PROP-VID-001",
+  "proposal_title": "Move 30% of treasury into high-yield strategy.",
+  "requested_allocation_bps": 3000,
+  "schema": "concordia.planb.quorum-live-run.v1",
+  "scope": "supplemental_planb_recording_run",
+  "status": "prepared",
+  "typed_runtime_args": {
+    "agent_action_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "6c8a6470a0a7353ab19a9664bd8882304978567a86fce07ee571336d93f219e1"
+    },
+    "agent_council_version": {
+      "cl_type": "String",
+      "value": "concordia-dao-council-2026.06"
+    },
+    "approved_allocation_bps": {
+      "cl_type": "U32",
+      "value": 800
+    },
+    "casper_network": {
+      "cl_type": "String",
+      "value": "casper-test"
+    },
+    "decision": {
+      "cl_type": "String",
+      "value": "APPROVED_WITH_LIMITS"
+    },
+    "dissent_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "b66cbbc8fa164ad96bd0bd0254bb166a4651d56c133194b57e1c5e5d01a2ef0f"
+    },
+    "evidence_uri": {
+      "cl_type": "String",
+      "value": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-VID-001"
+    },
+    "final_card_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "bfecdfc12357d14ddce4e51a5af40b4e5f563f119376c12aac5c90cf2d031ec5"
+    },
+    "plan_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "6269aaef446d9e1dabe52161905cb7f47a6d6e59283c2cbc4f14184af6d6179b"
+    },
+    "policy_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+    },
+    "policy_version": {
+      "cl_type": "String",
+      "value": "2026.06.cas-v1"
+    },
+    "proposal_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "f3fc0606f0d9b3d563660fc80910042f4adb4763db660ce5bed3253a3be3103b"
+    },
+    "proposal_id": {
+      "cl_type": "String",
+      "value": "DAO-PROP-VID-001"
+    },
+    "proposal_type": {
+      "cl_type": "String",
+      "value": "DEFI_TREASURY_REALLOCATION"
+    },
+    "risk_level": {
+      "cl_type": "String",
+      "value": "HIGH"
+    },
+    "risk_score": {
+      "cl_type": "U32",
+      "value": 64
+    },
+    "treasury_action": {
+      "cl_type": "String",
+      "value": "rebalance_casper_treasury_sleeve"
+    }
+  },
+  "updated_at": "2026-07-02T10:45:41.330291+00:00",
+  "wallet_approval_url": "https://concordia.47.84.232.193.sslip.io/dashboard/proof?proposal=DAO-PROP-VID-001&quorum_demo=1"
+}

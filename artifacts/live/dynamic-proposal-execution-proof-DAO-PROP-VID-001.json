@@ -1,0 +1,118 @@
+{
+  "approved_allocation_bps": 800,
+  "canonical_proof_unchanged": true,
+  "chain_errors": [],
+  "chain_valid": true,
+  "contract_hash": "",
+  "entry_point": "store_governance_receipt",
+  "final_card_sequence": 7,
+  "generated_at": "2026-07-01T08:00:00+00:00",
+  "message": "Spend-free dynamic execution artifact generated; use --submit-real for one explicit Testnet receipt.",
+  "proposal_id": "DAO-PROP-VID-001",
+  "receipt_request": {
+    "action_hash": "6c8a6470a0a7353ab19a9664bd8882304978567a86fce07ee571336d93f219e1",
+    "agent_council_version": "concordia-dao-council-2026.06",
+    "approved_allocation_bps": "800",
+    "casper_network": "casper-test",
+    "decision": "APPROVED_WITH_LIMITS",
+    "dissent_hash": "b66cbbc8fa164ad96bd0bd0254bb166a4651d56c133194b57e1c5e5d01a2ef0f",
+    "evidence_uri": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-VID-001",
+    "final_card_hash": "bfecdfc12357d14ddce4e51a5af40b4e5f563f119376c12aac5c90cf2d031ec5",
+    "payload_hash": "f3fc0606f0d9b3d563660fc80910042f4adb4763db660ce5bed3253a3be3103b",
+    "plan_hash": "6269aaef446d9e1dabe52161905cb7f47a6d6e59283c2cbc4f14184af6d6179b",
+    "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+    "policy_version": "2026.06.cas-v1",
+    "proposal_id": "DAO-PROP-VID-001",
+    "proposal_type": "DEFI_TREASURY_REALLOCATION",
+    "risk_level": "HIGH",
+    "risk_score": "64",
+    "treasury_action": "rebalance_casper_treasury_sleeve"
+  },
+  "requested_allocation_bps": 3000,
+  "rwa_document_hash": null,
+  "rwa_document_uri": null,
+  "scope": "supplemental_dynamic_run",
+  "status": "ready_for_execution",
+  "typed_runtime_args": {
+    "agent_action_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "6c8a6470a0a7353ab19a9664bd8882304978567a86fce07ee571336d93f219e1"
+    },
+    "agent_council_version": {
+      "cl_type": "String",
+      "value": "concordia-dao-council-2026.06"
+    },
+    "approved_allocation_bps": {
+      "cl_type": "U32",
+      "value": 800
+    },
+    "casper_network": {
+      "cl_type": "String",
+      "value": "casper-test"
+    },
+    "decision": {
+      "cl_type": "String",
+      "value": "APPROVED_WITH_LIMITS"
+    },
+    "dissent_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "b66cbbc8fa164ad96bd0bd0254bb166a4651d56c133194b57e1c5e5d01a2ef0f"
+    },
+    "evidence_uri": {
+      "cl_type": "String",
+      "value": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-VID-001"
+    },
+    "final_card_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "bfecdfc12357d14ddce4e51a5af40b4e5f563f119376c12aac5c90cf2d031ec5"
+    },
+    "plan_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "6269aaef446d9e1dabe52161905cb7f47a6d6e59283c2cbc4f14184af6d6179b"
+    },
+    "policy_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+    },
+    "policy_version": {
+      "cl_type": "String",
+      "value": "2026.06.cas-v1"
+    },
+    "proposal_hash": {
+      "cl_type": {
+        "ByteArray": 32
+      },
+      "value": "f3fc0606f0d9b3d563660fc80910042f4adb4763db660ce5bed3253a3be3103b"
+    },
+    "proposal_id": {
+      "cl_type": "String",
+      "value": "DAO-PROP-VID-001"
+    },
+    "proposal_type": {
+      "cl_type": "String",
+      "value": "DEFI_TREASURY_REALLOCATION"
+    },
+    "risk_level": {
+      "cl_type": "String",
+      "value": "HIGH"
+    },
+    "risk_score": {
+      "cl_type": "U32",
+      "value": 64
+    },
+    "treasury_action": {
+      "cl_type": "String",
+      "value": "rebalance_casper_treasury_sleeve"
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "canonical_entry_order": [
+    "policy_evaluation",
+    "proposal"
+  ],
+  "canonical_hex": "000000010000000200000011706f6c6963795f6576616c756174696f6e026472ba972b8f7c5353028a2c26e4a199bd083b2c36069b706cf06e08b9c920f00000000000000020000000106170706c69636174696f6e2f6a736f6e01000000006a610e810000000870726f706f73616c01e1248a75ec55b8115cb6b88144bb5709fc92d6b9b80a56c7c49d0b2d888ea9f3000000000000001f000000106170706c69636174696f6e2f6a736f6e01000000006a610e80",
+  "canonical_length": 181,
+  "description": "Input entries are canonicalized by ascending raw ASCII artifact_id.",
+  "expected_error": null,
+  "hashes": {
+    "preauth_evidence_root": "85b4cba8ddded2d1232b43064745833cd975fda082660964b9d81573a03c42c9"
+  },
+  "kind": "preauthorization_evidence_manifest_v1",
+  "root_preimage_hex": "434f4e434f524449415f505245415554485f45564944454e43455f563100000000010000000200000011706f6c6963795f6576616c756174696f6e026472ba972b8f7c5353028a2c26e4a199bd083b2c36069b706cf06e08b9c920f00000000000000020000000106170706c69636174696f6e2f6a736f6e01000000006a610e810000000870726f706f73616c01e1248a75ec55b8115cb6b88144bb5709fc92d6b9b80a56c7c49d0b2d888ea9f3000000000000001f000000106170706c69636174696f6e2f6a736f6e01000000006a610e80",
+  "typed_input": {
+    "entries_in_input_order": [
+      [
+        {
+          "name": "artifact_id",
+          "type": "String",
+          "value": "policy_evaluation"
+        },
+        {
+          "name": "artifact_kind",
+          "type": "u8",
+          "value": "2"
+        },
+        {
+          "name": "content_sha256",
+          "type": "Bytes32",
+          "value": "6472ba972b8f7c5353028a2c26e4a199bd083b2c36069b706cf06e08b9c920f0"
+        },
+        {
+          "name": "byte_length",
+          "type": "u64",
+          "value": "32"
+        },
+        {
+          "name": "media_type",
+          "type": "String",
+          "value": "application/json"
+        },
+        {
+          "name": "provenance_class",
+          "type": "u8",
+          "value": "1"
+        },
+        {
+          "name": "captured_at_unix_seconds",
+          "type": "u64",
+          "value": "1784745601"
+        }
+      ],
+      [
+        {
+          "name": "artifact_id",
+          "type": "String",
+          "value": "proposal"
+        },
+        {
+          "name": "artifact_kind",
+          "type": "u8",
+          "value": "1"
+        },
+        {
+          "name": "content_sha256",
+          "type": "Bytes32",
+          "value": "e1248a75ec55b8115cb6b88144bb5709fc92d6b9b80a56c7c49d0b2d888ea9f3"
+        },
+        {
+          "name": "byte_length",
+          "type": "u64",
+          "value": "31"
+        },
+        {
+          "name": "media_type",
+          "type": "String",
+          "value": "application/json"
+        },
+        {
+          "name": "provenance_class",
+          "type": "u8",
+          "value": "1"
+        },
+        {
+          "name": "captured_at_unix_seconds",
+          "type": "u64",
+          "value": "1784745600"
+        }
+      ]
+    ],
+    "version": {
+      "type": "u32",
+      "value": "1"
+    }
+  },
+  "valid": true,
+  "vector_id": "GV-EM-01"
+}

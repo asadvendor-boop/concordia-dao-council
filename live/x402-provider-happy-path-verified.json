@@ -1,0 +1,126 @@
+{
+  "verified_at": "2026-06-30T05:14:51.286120+00:00",
+  "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+  "checks": {
+    "gateway_402": {
+      "status_code": 402,
+      "url": "https://concordia.47.84.232.193.sslip.io/x402/governance-report?proposal_id=DAO-PROP-6CB25C",
+      "headers_used": [],
+      "body": {
+        "error": "payment_required",
+        "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+        "settlement": {
+          "status": "payment_required",
+          "mode": "real",
+          "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+          "network": "casper-testnet"
+        },
+        "message": "Retry with an X-Payment proof for this governance report resource."
+      }
+    },
+    "gateway_paid": {
+      "status_code": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/x402/governance-report?proposal_id=DAO-PROP-6CB25C",
+      "headers_used": [
+        "X-Payment"
+      ],
+      "body": {
+        "status": "paid",
+        "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+        "network": "casper-testnet",
+        "report": {
+          "proposal_id": "DAO-PROP-6CB25C",
+          "council": "Concordia DAO Council",
+          "settlement_layer": "Casper Testnet",
+          "payment_protocol": "x402",
+          "settlement": {
+            "status": "settled",
+            "mode": "real_provider",
+            "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+            "network": "casper-testnet",
+            "attempt": 1,
+            "provider_url": "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report",
+            "provider_response": {
+              "status": "paid",
+              "provider": "concordia-risk-oracle-provider",
+              "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+              "proposal_id": "DAO-PROP-6CB25C",
+              "settlement": {
+                "status": "settled",
+                "mode": "real_casper_transfer",
+                "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+                "network": "casper-testnet",
+                "attempt": 1,
+                "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+                "proof": {
+                  "valid": true,
+                  "status": "settled",
+                  "expected_amount_motes": 2500000000,
+                  "observed_amounts": [
+                    2500000000
+                  ]
+                },
+                "cspr_live_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c"
+              },
+              "risk_report": {
+                "risk_level": "medium-after-policy-cap",
+                "requested_allocation_bps": 3000,
+                "approved_policy_cap_bps": 800,
+                "provider_signal": "external_paid_provider_verified_before_release",
+                "recommendation": "Release specialist report only after Casper payment proof settles."
+              }
+            }
+          }
+        }
+      }
+    },
+    "provider_402": {
+      "status_code": 402,
+      "url": "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report?proposal_id=DAO-PROP-6CB25C",
+      "headers_used": [],
+      "body": {
+        "error": "payment_required",
+        "provider": "concordia-risk-oracle-provider",
+        "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+        "message": "Send a Casper Testnet transfer deploy hash in X-Payment to unlock this risk report."
+      }
+    },
+    "provider_paid": {
+      "status_code": 200,
+      "url": "https://x402-provider.47.84.232.193.sslip.io/x402/risk-report?proposal_id=DAO-PROP-6CB25C",
+      "headers_used": [
+        "X-Payment"
+      ],
+      "body": {
+        "status": "paid",
+        "provider": "concordia-risk-oracle-provider",
+        "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+        "proposal_id": "DAO-PROP-6CB25C",
+        "settlement": {
+          "status": "settled",
+          "mode": "real_casper_transfer",
+          "resource": "concordia-governance-report:DAO-PROP-6CB25C",
+          "network": "casper-testnet",
+          "attempt": 1,
+          "payment_hash": "dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
+          "proof": {
+            "valid": true,
+            "status": "settled",
+            "expected_amount_motes": 2500000000,
+            "observed_amounts": [
+              2500000000
+            ]
+          },
+          "cspr_live_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c"
+        },
+        "risk_report": {
+          "risk_level": "medium-after-policy-cap",
+          "requested_allocation_bps": 3000,
+          "approved_policy_cap_bps": 800,
+          "provider_signal": "external_paid_provider_verified_before_release",
+          "recommendation": "Release specialist report only after Casper payment proof settles."
+        }
+      }
+    }
+  }
+}

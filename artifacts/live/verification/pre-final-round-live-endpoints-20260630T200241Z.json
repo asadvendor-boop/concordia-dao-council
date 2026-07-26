@@ -1,0 +1,57 @@
+{
+  "recorded_at": "2026-06-30T20:03:54.309236+00:00",
+  "results": [
+    {
+      "content_type": "application/json",
+      "sample": "{\"status\":\"ok\",\"service\":\"concordia-gateway\"}",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/health"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"status\":\"ready\",\"service\":\"concordia-gateway\",\"llm\":{\"status\":\"ready\",\"required\":true,\"ready\":true,\"provider\":\"openai-compatible\",\"checks\":{\"api_key_present\":",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/ready"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"archive_type\":\"ConcordiaGovernanceArchive\",\"proposal_id\":\"DAO-PROP-6CB25C\",\"canonical_manifest\":{\"proposal_id\":\"DAO-PROP-6CB25C\",\"product_framing\":\"Concordia ",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"title\":\"Verify Concordia in 90 seconds\",\"positioning\":\"Concordia DAO Council is a policy-governed execution layer for Casper DAOs: specialist agents deliberat",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/judge-walkthrough/DAO-PROP-6CB25C"
+    },
+    {
+      "error": "HTTPError: HTTP Error 404: Not Found",
+      "url": "https://concordia.47.84.232.193.sslip.io/safepay-lite/DAO-PROP-6CB25C"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"status\":\"passed\",\"checked\":[\"README.md\",\"docs/PROOF_PACK.md\",\"docs/COUNCIL_REVIEW_PACKAGE.md\",\"docs/SUBMISSION_PACKET.md\",\"docs/PRE_SUBMISSION_VERIFICATION.md",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/canonical-proof/consistency"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"status\":\"passed\",\"findings\":[]}",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C/redaction-check"
+    },
+    {
+      "content_type": "application/json",
+      "sample": "{\"trace_type\":\"ConcordiaPublicRunTrace\",\"proposal_id\":\"DAO-PROP-6CB25C\",\"generated_at\":\"2026-06-30T20:03:53.949112+00:00\",\"canonical_manifest\":{\"proposal_id\":\"D",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/api/runs/DAO-PROP-6CB25C/trace"
+    },
+    {
+      "content_type": "text/html; charset=utf-8",
+      "sample": "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  <title>Concordia G",
+      "status": 200,
+      "url": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C"
+    }
+  ]
+}

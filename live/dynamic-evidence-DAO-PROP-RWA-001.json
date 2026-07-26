@@ -1,0 +1,511 @@
+{
+  "cards": [
+    {
+      "card_type": "ProposalCard",
+      "data": {
+        "card_type": "ProposalCard",
+        "fingerprint": "22853f13a0dc5756bdf2dd8cec4cae3ea41e0d26721da6af59e392881083be1a",
+        "preliminary_severity": "medium",
+        "previous_card_hash": null,
+        "raw_payload": {
+          "evidence_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json",
+          "proposal_id": "DAO-PROP-RWA-001",
+          "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+          "requested_allocation_bps": 0,
+          "rwa_document": {
+            "asset_class": "invoice_receivables",
+            "debtor": "Sample Investment-Grade Debtor",
+            "debtor_risk_score": 58,
+            "document_set": [
+              {
+                "name": "invoice-register.csv",
+                "rows": 12,
+                "total_face_value_usd": 125000
+              },
+              {
+                "name": "debtor-attestation.pdf",
+                "status": "sample_attested"
+              }
+            ],
+            "face_value_usd": 125000,
+            "issuer": "Concordia Sample Trade Finance SPV",
+            "issuer_reputation_score": 72,
+            "maturity_days": 60,
+            "note": "Sample RWA evidence fixture for Concordia's non-canonical invoice-pool walkthrough.",
+            "proposal_id": "DAO-PROP-RWA-001",
+            "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+            "review_outcome": "ESCALATED_TO_HUMANS"
+          },
+          "rwa_document_hash": "sha256:1dea7193031ad17c45aec10682c180d422891ffeb200dfd0414262fd3babfe3e"
+        },
+        "security_relevant": true,
+        "sequence_number": 1,
+        "signal_id": "signal-DAO-PROP-RWA-001",
+        "source": "rwa_oracle",
+        "timestamp": "2026-07-01 08:00:00+00:00",
+        "title": "Supplemental RWA invoice pool onboarding proof"
+      },
+      "hash": "dfcf3ebde7d7b0194b97953c5c5290436d3494c4f6120bc0976601cda9054729",
+      "published": false,
+      "sequence": 1
+    },
+    {
+      "card_type": "TriageDecision",
+      "data": {
+        "card_type": "TriageDecision",
+        "decision": "route",
+        "noise_score": 0.02,
+        "previous_card_hash": "dfcf3ebde7d7b0194b97953c5c5290436d3494c4f6120bc0976601cda9054729",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "reasoning": "Route dynamic proposal through Concordia DAO Council.",
+        "sequence_number": 2,
+        "signal_id": "signal-DAO-PROP-RWA-001",
+        "suppression_rule_id": null
+      },
+      "hash": "bd099fb1c9d484439c3d978f3cd28576847dfd6329637ca6413c87a42ac4140a",
+      "published": false,
+      "sequence": 2
+    },
+    {
+      "card_type": "Assessment",
+      "data": {
+        "blast_radius": [
+          "rwa-invoice-pool-alpha"
+        ],
+        "card_type": "Assessment",
+        "evidence": {
+          "approved_allocation_bps": 0,
+          "casper_node_status": {
+            "network": "casper-test",
+            "source": "supplemental_dynamic_artifact"
+          },
+          "policy_evaluation": {
+            "allowed_execution_network": "casper-test",
+            "allowed_receipt_entry_point": "store_governance_receipt",
+            "approved_allocation_bps": 800,
+            "dao_name": "Concordia Treasury DAO",
+            "decision": "APPROVED",
+            "dissent_hash": "",
+            "dissent_receipt": null,
+            "human_approval_required": true,
+            "passed": true,
+            "policy_hash": "sha256:cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+            "policy_version": "2026.06.cas-v1",
+            "proposal_hash": "sha256:e8585ac70d865535b5e9018344dd6fffa2956372a3bbf30d1264f2e6897565cc",
+            "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+            "requested_allocation_bps": 0,
+            "risk_level": "LOW",
+            "risk_score": 58,
+            "violated_rules": []
+          },
+          "requested_allocation_bps": 0,
+          "rwa_document_hash": "sha256:1dea7193031ad17c45aec10682c180d422891ffeb200dfd0414262fd3babfe3e",
+          "rwa_document_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json"
+        },
+        "evidence_strength": 0.86,
+        "previous_card_hash": "bd099fb1c9d484439c3d978f3cd28576847dfd6329637ca6413c87a42ac4140a",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "recommended_action": "Escalate invoice-pool onboarding to humans with evidence hash and paid-report context.",
+        "revision": 1,
+        "root_cause_hypothesis": "Invoice pool onboarding requires evidence-hash backed human review.",
+        "sequence_number": 3,
+        "severity": "medium",
+        "state": "assessed"
+      },
+      "hash": "721ece8ffd8da14d7169075a852ba1a558d0a00ffc2b47f40e021d59e2578eb7",
+      "published": false,
+      "sequence": 3
+    },
+    {
+      "card_type": "Verdict",
+      "data": {
+        "agrees_with_diagnosis": true,
+        "card_type": "Verdict",
+        "challenge_request": "Escalate RWA invoice pool onboarding to humans before any eligibility action.",
+        "cross_check_sources": [
+          "DAO Constitution",
+          "RWA evidence hash",
+          "Mercer treasury assessment"
+        ],
+        "decision": "NEEDS_HUMAN",
+        "dissent_hash": null,
+        "dissent_receipt": null,
+        "policy_hash": "sha256:cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+        "policy_version": "2026.06.cas-v1",
+        "previous_card_hash": "721ece8ffd8da14d7169075a852ba1a558d0a00ffc2b47f40e021d59e2578eb7",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "reasoning": "Verity requires human review because RWA onboarding relies on issuer/debtor evidence.",
+        "sequence_number": 4,
+        "suppression_advice": null,
+        "violated_rules": []
+      },
+      "hash": "614aa15911956e355ed6c2330678e326bcdb6b28f2b953ad13b0f28925ab8843",
+      "published": false,
+      "sequence": 4
+    },
+    {
+      "card_type": "ResponsePlan",
+      "data": {
+        "card_type": "ResponsePlan",
+        "envelopes": [
+          {
+            "action_id": "execute_casper_governance_receipt",
+            "fallback_action": "refuse_execution_and_escalate",
+            "parameters": {
+              "agent_council_version": "concordia-dao-council-2026.06",
+              "approved_allocation_bps": 0,
+              "casper_network": "casper-test",
+              "decision": "ESCALATED_TO_HUMANS",
+              "dissent_hash": "",
+              "evidence_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json",
+              "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+              "policy_version": "2026.06.cas-v1",
+              "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+              "risk_level": "MEDIUM",
+              "risk_score": 58,
+              "treasury_action": "record_rwa_invoice_pool_review"
+            },
+            "target": "casper-test",
+            "timeout_seconds": 300
+          }
+        ],
+        "governance_playbook": "rwa-evidence-review",
+        "previous_card_hash": "614aa15911956e355ed6c2330678e326bcdb6b28f2b953ad13b0f28925ab8843",
+        "priority_rank": 1,
+        "proposal_id": "DAO-PROP-RWA-001",
+        "requires_human_approval": true,
+        "revision": 1,
+        "risk_level": "medium",
+        "sequence_number": 5
+      },
+      "hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+      "published": false,
+      "sequence": 5
+    },
+    {
+      "card_type": "StructuredApproval",
+      "data": {
+        "action_hash": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf",
+        "action_id": "execute_casper_governance_receipt",
+        "approval_channel": "gateway_ui",
+        "approval_message_id": "msg-dao-prop-rwa-001",
+        "approver_id": "dynamic-supplemental-quorum",
+        "card_type": "StructuredApproval",
+        "council_session_id": "room-dao-prop-rwa-001",
+        "decision": "APPROVED",
+        "expiry": "2026-07-02 08:00:00+00:00",
+        "nonce": "DYN001",
+        "plan_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+        "plan_revision": 1,
+        "previous_card_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "reason": "Supplemental RWA run escalated with evidence hash before any eligibility decision.",
+        "runbook_version": "1.0",
+        "sequence_number": 6
+      },
+      "hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+      "published": false,
+      "sequence": 6
+    },
+    {
+      "card_type": "CasperExecutionReceipt",
+      "data": {
+        "actions_taken": [
+          {
+            "action_id": "execute_casper_governance_receipt",
+            "contract_hash": "",
+            "entry_point": "store_governance_receipt",
+            "receipt_payload": {
+              "action_hash": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf",
+              "agent_council_version": "concordia-dao-council-2026.06",
+              "approved_allocation_bps": "",
+              "casper_network": "casper-test",
+              "decision": "ESCALATED_TO_HUMANS",
+              "dissent_hash": "",
+              "evidence_uri": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json",
+              "final_card_hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+              "payload_hash": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11",
+              "plan_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+              "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+              "policy_version": "2026.06.cas-v1",
+              "proposal_id": "DAO-PROP-RWA-001",
+              "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+              "risk_level": "MEDIUM",
+              "risk_score": "58",
+              "treasury_action": "record_rwa_invoice_pool_review",
+              "typed_args": {
+                "agent_action_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf"
+                },
+                "agent_council_version": {
+                  "cl_type": "String",
+                  "value": "concordia-dao-council-2026.06"
+                },
+                "approved_allocation_bps": {
+                  "cl_type": "U32",
+                  "value": 0
+                },
+                "casper_network": {
+                  "cl_type": "String",
+                  "value": "casper-test"
+                },
+                "decision": {
+                  "cl_type": "String",
+                  "value": "ESCALATED_TO_HUMANS"
+                },
+                "dissent_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "evidence_uri": {
+                  "cl_type": "String",
+                  "value": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json"
+                },
+                "final_card_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a"
+                },
+                "plan_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc"
+                },
+                "policy_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+                },
+                "policy_version": {
+                  "cl_type": "String",
+                  "value": "2026.06.cas-v1"
+                },
+                "proposal_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11"
+                },
+                "proposal_id": {
+                  "cl_type": "String",
+                  "value": "DAO-PROP-RWA-001"
+                },
+                "proposal_type": {
+                  "cl_type": "String",
+                  "value": "RWA_INVOICE_POOL_ONBOARDING"
+                },
+                "risk_level": {
+                  "cl_type": "String",
+                  "value": "MEDIUM"
+                },
+                "risk_score": {
+                  "cl_type": "U32",
+                  "value": 58
+                },
+                "treasury_action": {
+                  "cl_type": "String",
+                  "value": "record_rwa_invoice_pool_review"
+                }
+              }
+            },
+            "status": "ready_for_execution"
+          }
+        ],
+        "authorization_id": "auth-dao-prop-rwa-001",
+        "authorization_type": "human_approval",
+        "card_type": "CasperExecutionReceipt",
+        "governance_archive": {
+          "approved_allocation_bps": 0,
+          "proposal_id": "DAO-PROP-RWA-001",
+          "requested_allocation_bps": 0,
+          "rwa_document_hash": "sha256:1dea7193031ad17c45aec10682c180d422891ffeb200dfd0414262fd3babfe3e",
+          "scope": "supplemental_dynamic_run"
+        },
+        "previous_card_hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "resolution_summary": "Supplemental RWA proposal sealed; Casper receipt is ready until explicitly submitted.",
+        "sequence_number": 7,
+        "state": "resolved",
+        "timeline": [
+          {
+            "agent": "Rowan",
+            "event": "proposal routed"
+          },
+          {
+            "agent": "Verity",
+            "event": "over-cap allocation challenged"
+          },
+          {
+            "agent": "Alden",
+            "event": "safe mandate generated"
+          },
+          {
+            "agent": "Locke",
+            "event": "typed receipt ready for execution"
+          }
+        ]
+      },
+      "hash": "0c3228d9f7ffcbcdeab438e61062aa5f4b991679e91e63b3114b8cca225d5eae",
+      "published": false,
+      "sequence": 7
+    },
+    {
+      "card_type": "GovernanceSummary",
+      "data": {
+        "action_items": [
+          "Submit the supplemental receipt only after explicit Testnet approval."
+        ],
+        "card_type": "GovernanceSummary",
+        "previous_card_hash": "0c3228d9f7ffcbcdeab438e61062aa5f4b991679e91e63b3114b8cca225d5eae",
+        "proposal_id": "DAO-PROP-RWA-001",
+        "root_cause": "RWA onboarding needs issuer/debtor evidence before eligibility.",
+        "sequence_number": 8,
+        "timeline_summary": "RWA invoice pool proposal progressed through route, evidence review, human escalation, mandate, approval, and receipt packaging.",
+        "what_worked": [
+          "Evidence hash bound the RWA document packet.",
+          "Typed Casper runtime args were generated from sealed cards.",
+          "Canonical reviewer proof remained unchanged."
+        ]
+      },
+      "hash": "96657ecdfce0a4d8636f75464be348e419e24433fd7a48747f9e5853b73e708d",
+      "published": false,
+      "sequence": 8
+    }
+  ],
+  "casper_receipt": {
+    "api_proof_url": "https://api.testnet.cspr.live/deploys/3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+    "approved_allocation_bps": "",
+    "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+    "decision": "ESCALATED_TO_HUMANS",
+    "deploy_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+    "dissent_hash": "",
+    "entry_point": "store_governance_receipt",
+    "explorer_url": "https://testnet.cspr.live/deploy/3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+    "final_card_hash": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a",
+    "plan_hash": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc",
+    "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+    "proposal_hash": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11",
+    "risk_score": "58",
+    "status": "processed",
+    "transaction_hash": "3803a5bb561a84a8c103e3c4e8eea99b3a1c893c63644c56ed38daa1986825cc",
+    "typed_args": {
+      "agent_action_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "d8c89309da99ca69821f653c814c9c524b862f83d3c35aaa7261bc922a4c0ddf"
+      },
+      "agent_council_version": {
+        "cl_type": "String",
+        "value": "concordia-dao-council-2026.06"
+      },
+      "approved_allocation_bps": {
+        "cl_type": "U32",
+        "value": 0
+      },
+      "casper_network": {
+        "cl_type": "String",
+        "value": "casper-test"
+      },
+      "decision": {
+        "cl_type": "String",
+        "value": "ESCALATED_TO_HUMANS"
+      },
+      "dissent_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "evidence_uri": {
+        "cl_type": "String",
+        "value": "https://concordia.47.84.232.193.sslip.io/api/rwa-artifacts/sample-invoice-pool-DAO-PROP-RWA-001.json"
+      },
+      "final_card_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "b5c55c195263e9f098210246883a2386ea3f120da6e882904deffc6de977601a"
+      },
+      "plan_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "1db2eaafaf37275f4351c6ab8aef1757a5c92b402f9a61aae116262c5bcf2fcc"
+      },
+      "policy_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+      },
+      "policy_version": {
+        "cl_type": "String",
+        "value": "2026.06.cas-v1"
+      },
+      "proposal_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "0a3b9c473c6ce9ef4c6530efbf014b1c531b15b521965a5380eed081d819bc11"
+      },
+      "proposal_id": {
+        "cl_type": "String",
+        "value": "DAO-PROP-RWA-001"
+      },
+      "proposal_type": {
+        "cl_type": "String",
+        "value": "RWA_INVOICE_POOL_ONBOARDING"
+      },
+      "risk_level": {
+        "cl_type": "String",
+        "value": "MEDIUM"
+      },
+      "risk_score": {
+        "cl_type": "U32",
+        "value": 58
+      },
+      "treasury_action": {
+        "cl_type": "String",
+        "value": "record_rwa_invoice_pool_review"
+      }
+    }
+  },
+  "chain_errors": [],
+  "chain_valid": true,
+  "collaboration": {
+    "execution_conflict_control": {
+      "exact_match": true,
+      "executed_actions": [
+        "execute_casper_governance_receipt"
+      ],
+      "planned_actions": [
+        "execute_casper_governance_receipt"
+      ]
+    },
+    "human_decision_count": 1,
+    "role_sequence": [
+      "concordia_core",
+      "rowan",
+      "mercer",
+      "verity",
+      "alden",
+      "multisig_holder",
+      "locke",
+      "wells"
+    ]
+  },
+  "proposal_family": "rwa_invoice_pool_onboarding",
+  "proposal_id": "DAO-PROP-RWA-001",
+  "signal_service": "supplemental_dynamic_generator",
+  "state": "RESOLVED",
+  "total_cards": 8
+}

@@ -1,0 +1,10 @@
+claim,status,evidence
+Approved receipt anchored on Casper Testnet,verified,https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852
+Blocked tamper attempt,verified,payload hash does not match approved multisig envelope (interactive_adversarial_replay)
+DAO Constitution cap enforced,verified,30.00% request reduced to 8.00% cap
+Exact action envelope matched,verified,planned action list equals executed action list
+SafePay Lite specialist report verified,verified,dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c
+DAO Mandate binds Locke execution,verified,18d78ee42ec946052044fd706b1609d3b9c9c9c746ea16db42b68591757e7272
+Machine-verifiable invariants passed,passed,"cap, quorum, tamper, replay, duplicate proof, and policy hash checks"
+2-of-3 Odra quorum receipt executed,verified,https://testnet.cspr.live/deploy/9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928
+Auxiliary Odra topology modules exercised on Testnet,live_complete,"CouncilRegistry representative register_agent call, TreasuryPolicy validation call, and CardIndexLedger seal_card_root call are recorded in artifacts/live/odra-topology-genesis-proof.json"

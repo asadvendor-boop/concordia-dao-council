@@ -1,0 +1,53 @@
+{
+  "canonical_hex": "000000010000000f6e61746976652d7472616e73666572000000087472616e7366657200000003000000067461726765740900424242424242424242424242424242424242424242424242424242424242424200000006616d6f756e740600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ba43b74000000000269640e01211ef030c0bc32f3",
+  "canonical_length": 174,
+  "description": "Native transfer arguments preserve target ABI order.",
+  "expected_error": null,
+  "hashes": {
+    "execution_argument_root": "f5516e8f473cabb114be225570eee4b2357d9b94acaed5fed810dc4d32767244"
+  },
+  "kind": "execution_argument_manifest_v1",
+  "related_action_id": "adb7e7a923b960ece3d0f122cefa0b052b750f71ec99fcaf67c20f339e14c9e1",
+  "related_authorization_vector": "GV-NT-01",
+  "related_transfer_id": "2386608944735597299",
+  "root_preimage_hex": "434f4e434f524449415f455845435f415247535f563100000000010000000f6e61746976652d7472616e73666572000000087472616e7366657200000003000000067461726765740900424242424242424242424242424242424242424242424242424242424242424200000006616d6f756e740600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ba43b74000000000269640e01211ef030c0bc32f3",
+  "typed_input": {
+    "args_in_abi_order": [
+      {
+        "name": "target",
+        "type": "Key",
+        "value": {
+          "value": "4242424242424242424242424242424242424242424242424242424242424242",
+          "variant": "Account"
+        }
+      },
+      {
+        "name": "amount",
+        "type": "U512",
+        "value": "50000000000"
+      },
+      {
+        "name": "id",
+        "type": "Option<u64>",
+        "value": {
+          "value": "2386608944735597299",
+          "variant": "Some"
+        }
+      }
+    ],
+    "entry_point": {
+      "type": "String",
+      "value": "transfer"
+    },
+    "target": {
+      "type": "String",
+      "value": "native-transfer"
+    },
+    "version": {
+      "type": "u32",
+      "value": "1"
+    }
+  },
+  "valid": true,
+  "vector_id": "GV-EA-01"
+}

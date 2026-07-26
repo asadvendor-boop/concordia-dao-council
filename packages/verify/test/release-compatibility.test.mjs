@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import * as verifier from "../dist/index.js";
+
+const V_0_1_1_PUBLIC_API = Object.freeze([
+  "CasperLiveError",
+  "DOMAINS",
+  "EVIDENCE_SCHEMA",
+  "EXIT_CODES",
+  "EncodingError",
+  "FROZEN_VECTOR_DIRECTORY_URL",
+  "FROZEN_WCSPR",
+  "HEADER_SCHEMA",
+  "NATIVE_CORE_NAMES",
+  "NATIVE_SCHEMA",
+  "StrictJsonError",
+  "TYPE_TAGS",
+  "X402_CORE_NAMES",
+  "X402_SCHEMA",
+  "accountHashFromPublicKey",
+  "actionId",
+  "asString",
+  "asciiBytes",
+  "blake2b256",
+  "canonicalRuntimeArgumentsBytes",
+  "canonicalTranscriptJson",
+  "concatBytes",
+  "corroborateCasperBundleObservations",
+  "corroborateCasperTestnetBundle",
+  "encodeCanonicalValue",
+  "encodeEnvelopeHeader",
+  "encodeEvidenceManifest",
+  "encodeExecutionArguments",
+  "encodeMetadataManifest",
+  "encodeNativeTransfer",
+  "encodeOfficialX402Settlement",
+  "encodeRecord",
+  "encodeTypedFields",
+  "fieldsToRecord",
+  "fixedUnsigned",
+  "getRawProofBundle",
+  "hexBytes",
+  "isRecord",
+  "lengthPrefixed",
+  "modeFailure",
+  "parseJsonStrict",
+  "parseUnsigned",
+  "runtimeArgumentMap",
+  "sha256",
+  "sha256CanonicalTranscript",
+  "toHex",
+  "transferId",
+  "validateHeader",
+  "validateNativeBody",
+  "validateX402Body",
+  "verifyAccountAbsenceAtBlock",
+  "verifyAccountBalanceAtBlock",
+  "verifyCardChainArtifact",
+  "verifyCorroboratedNativeTransfer",
+  "verifyExactEnvelopeV3Artifact",
+  "verifyFinalizedNativeTransfer",
+  "verifyGoldenVector",
+  "verifyHistoricalOdraReceiptArtifact",
+  "verifyLive",
+  "verifyLocal",
+  "verifyNativeEnvelopeMaterialV3",
+  "verifyNativeTreasuryExecutionArtifact",
+  "verifyNoDuplicateNativeTransfer",
+  "verifyOfficialX402ArtifactEnvelope",
+  "verifyPostTransferBalance",
+  "verifyProofRegistry",
+  "verifyProposal",
+  "verifyRuntimeArgumentPairs",
+  "verifySafePayV2ArtifactEnvelope",
+  "verifySignedDeployJson",
+  "verifySignedNativeTransferDeploy",
+  "verifyUrl",
+  "verifyV3ReadbackArtifact",
+  "withMode",
+]);
+
+test("0.1.2 keeps every 0.1.1 public API export", () => {
+  const current = new Set(Object.keys(verifier));
+  const missing = V_0_1_1_PUBLIC_API.filter((name) => !current.has(name));
+  assert.deepEqual(missing, []);
+});
+
+test("0.1.2 retains distinct fail-closed outcomes", () => {
+  assert.deepEqual(verifier.EXIT_CODES, {
+    VERIFIED: 0,
+    INVALID: 2,
+    UNAVAILABLE: 3,
+    UNKNOWN: 4,
+    USAGE: 64,
+  });
+});

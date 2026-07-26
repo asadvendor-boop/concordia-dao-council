@@ -1,0 +1,74 @@
+{
+  "base": "https://concordia.47.84.232.193.sslip.io",
+  "checks": {
+    "/api/runs/DAO-PROP-6CB25C/trace": {
+      "redaction": "applied",
+      "status_code": 200,
+      "trace_type": "ConcordiaPublicRunTrace"
+    },
+    "/canonical-proof/consistency": {
+      "findings": 0,
+      "status": "passed",
+      "status_code": 200
+    },
+    "/integrations/status": {
+      "odra": {
+        "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+        "contracts": [
+          "CouncilRegistry",
+          "CardIndexLedger",
+          "TreasuryPolicy",
+          "GovernanceReceipt"
+        ],
+        "honesty_note": "The canonical reviewer proof uses the deployed Odra GovernanceReceipt contract. The supplemental topology genesis independently exercised CouncilRegistry through a representative register_agent call, TreasuryPolicy through validate_allocation, and CardIndexLedger through seal_card_root on Casper Testnet; these prove the auxiliary modules can execute, but they do not replace the canonical e926... reviewer receipt or claim a fully productized four-contract DAO suite.",
+        "install_deploy_hash": "d319157b2638ed8fa7c1dfc639be16e1455530cd568c3cde35bb40c1bd20ba32",
+        "manifest": "contracts/odra-governance-receipt/migration.manifest.json",
+        "package_hash": "hash-992b3a457eedf67f1b50c29f7971199b757d9576dcbaa51e0d52fda3a0fa4c4a",
+        "receipt_deploy_hash": "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
+        "status": "live_odra_receipt_quorum_and_topology_genesis_processed",
+        "supplemental_auxiliary_modules": {
+          "CardIndexLedger": {
+            "call_deploy_hash": "02c94f29588eb00c71136feab2ea6dcfe3c91180ee552b942af2a48536f430a9",
+            "entry_point": "seal_card_root",
+            "install_deploy_hash": "9356ce22ecbd420c9c71443da2c7dae298251ffe9df81dfadedf144df9b9b14e"
+          },
+          "CouncilRegistry": {
+            "call_deploy_hash": "eba1f45e3cf2b712f70aec18d71b5315db8c3be2f317b94c4b60acb8a2369774",
+            "entry_point": "register_agent",
+            "install_deploy_hash": "9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0"
+          },
+          "TreasuryPolicy": {
+            "call_deploy_hash": "0b7f58c4e7fc9338839f0a2ceb22cfcb06c2a084f193498830ab254d84776daf",
+            "entry_point": "validate_allocation",
+            "install_deploy_hash": "308f95b18f16c953c954bfb8a3e2613cea566f2106866fe144ac40549cd6f51b"
+          }
+        },
+        "topology_genesis_proof": "artifacts/live/odra-topology-genesis-proof.json",
+        "verifier": "scripts/verify_odra_migration.py",
+        "wasm_build": "RUSTFLAGS='-C link-arg=--allow-undefined' cargo +nightly build --target wasm32-unknown-unknown --release --bin concordia_odra_governance_receipt_build_contract"
+      },
+      "status_code": 200
+    },
+    "/judge-walkthrough/DAO-PROP-6CB25C": {
+      "status_code": 200
+    },
+    "/proof-pack/DAO-PROP-6CB25C": {
+      "checks": {
+        "invariants": "passed",
+        "safepay": "verified",
+        "topology": "live_complete"
+      },
+      "status_code": 200
+    },
+    "/proof-pack/DAO-PROP-6CB25C/redaction-check": {
+      "findings": 0,
+      "status": "passed",
+      "status_code": 200
+    },
+    "/safepay-lite/DAO-PROP-6CB25C": {
+      "status": "verified",
+      "status_code": 200
+    }
+  },
+  "status": "passed"
+}

@@ -1,0 +1,4 @@
+# Preserve byte-exact archived live evidence while keeping source diffs strict.
+artifacts/live/** -whitespace
+live/** -whitespace
+*.pdf binary

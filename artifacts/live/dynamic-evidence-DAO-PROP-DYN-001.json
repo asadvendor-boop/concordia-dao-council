@@ -1,0 +1,516 @@
+{
+  "cards": [
+    {
+      "card_type": "ProposalCard",
+      "data": {
+        "card_type": "ProposalCard",
+        "fingerprint": "e453d73b2e4c349e4f88acda7ff725879b51d69000784aa5fd1219284d0edc72",
+        "preliminary_severity": "high",
+        "previous_card_hash": null,
+        "raw_payload": {
+          "evidence_uri": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001",
+          "proposal_id": "DAO-PROP-DYN-001",
+          "proposal_type": "DEFI_TREASURY_REALLOCATION",
+          "requested_allocation_bps": 1200
+        },
+        "security_relevant": true,
+        "sequence_number": 1,
+        "signal_id": "signal-DAO-PROP-DYN-001",
+        "source": "treasury_metrics",
+        "timestamp": "2026-07-01 08:00:00+00:00",
+        "title": "Supplemental dynamic treasury allocation proof"
+      },
+      "hash": "38b50dc7a92215e3a567ebfe4b47e1396104a274f8ed447acc9e9b58831e3389",
+      "published": false,
+      "sequence": 1
+    },
+    {
+      "card_type": "TriageDecision",
+      "data": {
+        "card_type": "TriageDecision",
+        "decision": "route",
+        "noise_score": 0.02,
+        "previous_card_hash": "38b50dc7a92215e3a567ebfe4b47e1396104a274f8ed447acc9e9b58831e3389",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "reasoning": "Route dynamic proposal through Concordia DAO Council.",
+        "sequence_number": 2,
+        "signal_id": "signal-DAO-PROP-DYN-001",
+        "suppression_rule_id": null
+      },
+      "hash": "f5f5137e78edff1e40f2b9e1c67f451eb95ed2100a9709e6fc1c1bb7a4d8bf3c",
+      "published": false,
+      "sequence": 2
+    },
+    {
+      "card_type": "Assessment",
+      "data": {
+        "blast_radius": [
+          "casper-liquidity-strategy-alpha"
+        ],
+        "card_type": "Assessment",
+        "evidence": {
+          "approved_allocation_bps": 800,
+          "casper_node_status": {
+            "network": "casper-test",
+            "source": "supplemental_dynamic_artifact"
+          },
+          "policy_evaluation": {
+            "allowed_execution_network": "casper-test",
+            "allowed_receipt_entry_point": "store_governance_receipt",
+            "approved_allocation_bps": 800,
+            "dao_name": "Concordia Treasury DAO",
+            "decision": "APPROVED_WITH_LIMITS",
+            "dissent_hash": "sha256:a2bf34689b6d49b2b0692d0f5909ee23ef38f229e3193515f9884b08f3903cc0",
+            "dissent_receipt": {
+              "challenged_plan_hash": "sha256:83486fc924434f2a8c87babdb82ad866c86a6e09d746527792e68645a88e13e3",
+              "created_at": "2026-07-01T05:11:43.970192+00:00",
+              "dissent_type": "MAX_SINGLE_ALLOCATION_BPS",
+              "dissenting_agent": "Verity",
+              "policy_hash": "sha256:cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+              "policy_version": "2026.06.cas-v1",
+              "proposal_hash": "sha256:84b43589e31bbe57abd2dbeaf25856a9f5b9db931eb1a860032803bf9a73b020",
+              "proposal_id": "DAO-PROP-DYN-001",
+              "reason_hash": "sha256:dd2b2003c8b6f51507f0b5dac4b80cb9b45a22424928231fb7ceb8eaa4455bf4",
+              "severity": "HIGH",
+              "violated_rules": [
+                {
+                  "allowed": 800,
+                  "message": "Requested allocation 1200 bps exceeds 800 bps DAO cap.",
+                  "observed": 1200,
+                  "rule_id": "MAX_SINGLE_ALLOCATION_BPS",
+                  "severity": "HIGH"
+                }
+              ]
+            },
+            "human_approval_required": true,
+            "passed": false,
+            "policy_hash": "sha256:cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+            "policy_version": "2026.06.cas-v1",
+            "proposal_hash": "sha256:84b43589e31bbe57abd2dbeaf25856a9f5b9db931eb1a860032803bf9a73b020",
+            "proposal_type": "DEFI_TREASURY_REALLOCATION",
+            "requested_allocation_bps": 1200,
+            "risk_level": "HIGH",
+            "risk_score": 64,
+            "violated_rules": [
+              {
+                "allowed": 800,
+                "message": "Requested allocation 1200 bps exceeds 800 bps DAO cap.",
+                "observed": 1200,
+                "rule_id": "MAX_SINGLE_ALLOCATION_BPS",
+                "severity": "HIGH"
+              }
+            ]
+          },
+          "requested_allocation_bps": 1200
+        },
+        "evidence_strength": 0.86,
+        "previous_card_hash": "f5f5137e78edff1e40f2b9e1c67f451eb95ed2100a9709e6fc1c1bb7a4d8bf3c",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "recommended_action": "Revise from 1200 bps to 800 bps and require quorum approval.",
+        "revision": 1,
+        "root_cause_hypothesis": "Supplemental run requests more than the DAO allocation cap.",
+        "sequence_number": 3,
+        "severity": "high",
+        "state": "assessed"
+      },
+      "hash": "6808431896bb4aa94180c74ba28a8e240618c95af16611479fdb0d06bc626c77",
+      "published": false,
+      "sequence": 3
+    },
+    {
+      "card_type": "Verdict",
+      "data": {
+        "agrees_with_diagnosis": true,
+        "card_type": "Verdict",
+        "challenge_request": "Cap allocation to 800 bps before Locke can execute.",
+        "cross_check_sources": [
+          "DAO Constitution",
+          "Mercer treasury assessment"
+        ],
+        "decision": "CHALLENGE",
+        "dissent_hash": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74",
+        "dissent_receipt": {
+          "approved_allocation_bps": 800,
+          "dissenting_agent": "Verity",
+          "proposal_id": "DAO-PROP-DYN-001",
+          "reason": "Requested allocation exceeds DAO Constitution cap.",
+          "requested_allocation_bps": 1200
+        },
+        "policy_hash": "sha256:cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+        "policy_version": "2026.06.cas-v1",
+        "previous_card_hash": "6808431896bb4aa94180c74ba28a8e240618c95af16611479fdb0d06bc626c77",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "reasoning": "Verity challenges the over-cap allocation and preserves dissent before execution.",
+        "sequence_number": 4,
+        "suppression_advice": null,
+        "violated_rules": []
+      },
+      "hash": "d2d679d055e56d815fac6035033d9221216dfc4a3f5086ac1a8d189e1365c6da",
+      "published": false,
+      "sequence": 4
+    },
+    {
+      "card_type": "ResponsePlan",
+      "data": {
+        "card_type": "ResponsePlan",
+        "envelopes": [
+          {
+            "action_id": "execute_casper_governance_receipt",
+            "fallback_action": "refuse_execution_and_escalate",
+            "parameters": {
+              "agent_council_version": "concordia-dao-council-2026.06",
+              "approved_allocation_bps": 800,
+              "casper_network": "casper-test",
+              "decision": "APPROVED_WITH_LIMITS",
+              "dissent_hash": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74",
+              "evidence_uri": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001",
+              "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+              "policy_version": "2026.06.cas-v1",
+              "proposal_type": "DEFI_TREASURY_REALLOCATION",
+              "risk_level": "HIGH",
+              "risk_score": 64,
+              "treasury_action": "rebalance_casper_treasury_sleeve"
+            },
+            "target": "casper-test",
+            "timeout_seconds": 300
+          }
+        ],
+        "previous_card_hash": "d2d679d055e56d815fac6035033d9221216dfc4a3f5086ac1a8d189e1365c6da",
+        "priority_rank": 1,
+        "proposal_id": "DAO-PROP-DYN-001",
+        "requires_human_approval": true,
+        "revision": 1,
+        "risk_level": "high",
+        "governance_playbook": "treasury-cap-exceeded",
+        "sequence_number": 5
+      },
+      "hash": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab",
+      "published": false,
+      "sequence": 5
+    },
+    {
+      "card_type": "StructuredApproval",
+      "data": {
+        "action_hash": "5d4dd26f46b27cb547260e898ddc9f9a1decacfc124513e010cd733d734130d7",
+        "action_id": "execute_casper_governance_receipt",
+        "approval_channel": "gateway_ui",
+        "approver_id": "dynamic-supplemental-quorum",
+        "card_type": "StructuredApproval",
+        "decision": "APPROVED",
+        "expiry": "2026-07-02 08:00:00+00:00",
+        "council_session_id": "council-session-dao-prop-dyn-001",
+        "nonce": "DYN001",
+        "plan_hash": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab",
+        "plan_revision": 1,
+        "previous_card_hash": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "reason": "Supplemental dynamic run approved only after policy cap enforcement.",
+        "approval_message_id": "msg-dao-prop-dyn-001",
+        "runbook_version": "1.0",
+        "sequence_number": 6
+      },
+      "hash": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443",
+      "published": false,
+      "sequence": 6
+    },
+    {
+      "card_type": "CasperExecutionReceipt",
+      "data": {
+        "actions_taken": [
+          {
+            "action_id": "execute_casper_governance_receipt",
+            "contract_hash": "",
+            "entry_point": "store_governance_receipt",
+            "receipt_payload": {
+              "action_hash": "5d4dd26f46b27cb547260e898ddc9f9a1decacfc124513e010cd733d734130d7",
+              "agent_council_version": "concordia-dao-council-2026.06",
+              "approved_allocation_bps": "800",
+              "casper_network": "casper-test",
+              "decision": "APPROVED_WITH_LIMITS",
+              "dissent_hash": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74",
+              "evidence_uri": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001",
+              "final_card_hash": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443",
+              "payload_hash": "d9f4f3f0b49c3039772808c3941d890ddf28128b1fd7a8557ac7aee949e6d71f",
+              "plan_hash": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab",
+              "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+              "policy_version": "2026.06.cas-v1",
+              "proposal_id": "DAO-PROP-DYN-001",
+              "proposal_type": "DEFI_TREASURY_REALLOCATION",
+              "risk_level": "HIGH",
+              "risk_score": "64",
+              "treasury_action": "rebalance_casper_treasury_sleeve",
+              "typed_args": {
+                "agent_action_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "5d4dd26f46b27cb547260e898ddc9f9a1decacfc124513e010cd733d734130d7"
+                },
+                "agent_council_version": {
+                  "cl_type": "String",
+                  "value": "concordia-dao-council-2026.06"
+                },
+                "approved_allocation_bps": {
+                  "cl_type": "U32",
+                  "value": 800
+                },
+                "casper_network": {
+                  "cl_type": "String",
+                  "value": "casper-test"
+                },
+                "decision": {
+                  "cl_type": "String",
+                  "value": "APPROVED_WITH_LIMITS"
+                },
+                "dissent_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74"
+                },
+                "evidence_uri": {
+                  "cl_type": "String",
+                  "value": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001"
+                },
+                "final_card_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443"
+                },
+                "plan_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab"
+                },
+                "policy_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+                },
+                "policy_version": {
+                  "cl_type": "String",
+                  "value": "2026.06.cas-v1"
+                },
+                "proposal_hash": {
+                  "cl_type": {
+                    "ByteArray": 32
+                  },
+                  "value": "d9f4f3f0b49c3039772808c3941d890ddf28128b1fd7a8557ac7aee949e6d71f"
+                },
+                "proposal_id": {
+                  "cl_type": "String",
+                  "value": "DAO-PROP-DYN-001"
+                },
+                "proposal_type": {
+                  "cl_type": "String",
+                  "value": "DEFI_TREASURY_REALLOCATION"
+                },
+                "risk_level": {
+                  "cl_type": "String",
+                  "value": "HIGH"
+                },
+                "risk_score": {
+                  "cl_type": "U32",
+                  "value": 64
+                },
+                "treasury_action": {
+                  "cl_type": "String",
+                  "value": "rebalance_casper_treasury_sleeve"
+                }
+              }
+            },
+            "status": "ready_for_execution"
+          }
+        ],
+        "authorization_id": "auth-dao-prop-dyn-001",
+        "authorization_type": "human_approval",
+        "card_type": "CasperExecutionReceipt",
+        "governance_archive": {
+          "approved_allocation_bps": 800,
+          "proposal_id": "DAO-PROP-DYN-001",
+          "requested_allocation_bps": 1200,
+          "scope": "supplemental_dynamic_run"
+        },
+        "previous_card_hash": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "resolution_summary": "Supplemental dynamic proposal sealed; Casper receipt is ready until explicitly submitted.",
+        "sequence_number": 7,
+        "state": "resolved",
+        "timeline": [
+          {
+            "agent": "Rowan",
+            "event": "proposal routed"
+          },
+          {
+            "agent": "Verity",
+            "event": "over-cap allocation challenged"
+          },
+          {
+            "agent": "Alden",
+            "event": "safe mandate generated"
+          },
+          {
+            "agent": "Locke",
+            "event": "typed receipt ready for execution"
+          }
+        ]
+      },
+      "hash": "27f297e739e75082e895b9ae5bc327597caf03655c37239756cfa0194634ffc7",
+      "published": false,
+      "sequence": 7
+    },
+    {
+      "card_type": "GovernanceSummary",
+      "data": {
+        "action_items": [
+          "Submit the supplemental receipt only after explicit Testnet approval."
+        ],
+        "card_type": "GovernanceSummary",
+        "previous_card_hash": "27f297e739e75082e895b9ae5bc327597caf03655c37239756cfa0194634ffc7",
+        "proposal_id": "DAO-PROP-DYN-001",
+        "root_cause": "Requested allocation exceeded the DAO Constitution cap.",
+        "sequence_number": 8,
+        "timeline_summary": "Dynamic proposal progressed through route, assessment, dissent, mandate, approval, and receipt packaging.",
+        "what_worked": [
+          "Policy cap reduced the requested allocation.",
+          "Typed Casper runtime args were generated from sealed cards.",
+          "Canonical reviewer proof remained unchanged."
+        ]
+      },
+      "hash": "72fc58d57cc7e91ab95d580579421eddfa3901bae617f763303561e70040173b",
+      "published": false,
+      "sequence": 8
+    }
+  ],
+  "casper_receipt": {
+    "api_proof_url": "https://api.testnet.cspr.live/deploys/c1e6ce9ce5f152139f523dd382d9566110db88d2740c62be59a5864fb8816575",
+    "approved_allocation_bps": "800",
+    "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
+    "decision": "APPROVED_WITH_LIMITS",
+    "deploy_hash": "c1e6ce9ce5f152139f523dd382d9566110db88d2740c62be59a5864fb8816575",
+    "dissent_hash": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74",
+    "entry_point": "store_governance_receipt",
+    "explorer_url": "https://testnet.cspr.live/deploy/c1e6ce9ce5f152139f523dd382d9566110db88d2740c62be59a5864fb8816575",
+    "final_card_hash": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443",
+    "plan_hash": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab",
+    "policy_hash": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6",
+    "proposal_hash": "d9f4f3f0b49c3039772808c3941d890ddf28128b1fd7a8557ac7aee949e6d71f",
+    "risk_score": "64",
+    "status": "processed",
+    "transaction_hash": "c1e6ce9ce5f152139f523dd382d9566110db88d2740c62be59a5864fb8816575",
+    "typed_args": {
+      "agent_action_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "5d4dd26f46b27cb547260e898ddc9f9a1decacfc124513e010cd733d734130d7"
+      },
+      "agent_council_version": {
+        "cl_type": "String",
+        "value": "concordia-dao-council-2026.06"
+      },
+      "approved_allocation_bps": {
+        "cl_type": "U32",
+        "value": 800
+      },
+      "casper_network": {
+        "cl_type": "String",
+        "value": "casper-test"
+      },
+      "decision": {
+        "cl_type": "String",
+        "value": "APPROVED_WITH_LIMITS"
+      },
+      "dissent_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "779a41a11c4039a925b5bacadf21d6081c148d90019fa0365ce84ec310019e74"
+      },
+      "evidence_uri": {
+        "cl_type": "String",
+        "value": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-001"
+      },
+      "final_card_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "a77fedc202425b3598cbe61d3adbb4e7cd0f8f803ebbd180c3bbb0aa6c5da443"
+      },
+      "plan_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "3228c9e68b22c97dad31087f2e456f1e4596eadf16cfd903f8fe7fc04434ddab"
+      },
+      "policy_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "cae4a845c1edabba79ec77a2266c455e2d2492793bc707fb92639a6e4239f1a6"
+      },
+      "policy_version": {
+        "cl_type": "String",
+        "value": "2026.06.cas-v1"
+      },
+      "proposal_hash": {
+        "cl_type": {
+          "ByteArray": 32
+        },
+        "value": "d9f4f3f0b49c3039772808c3941d890ddf28128b1fd7a8557ac7aee949e6d71f"
+      },
+      "proposal_id": {
+        "cl_type": "String",
+        "value": "DAO-PROP-DYN-001"
+      },
+      "proposal_type": {
+        "cl_type": "String",
+        "value": "DEFI_TREASURY_REALLOCATION"
+      },
+      "risk_level": {
+        "cl_type": "String",
+        "value": "HIGH"
+      },
+      "risk_score": {
+        "cl_type": "U32",
+        "value": 64
+      },
+      "treasury_action": {
+        "cl_type": "String",
+        "value": "rebalance_casper_treasury_sleeve"
+      }
+    }
+  },
+  "chain_errors": [],
+  "chain_valid": true,
+  "collaboration": {
+    "execution_conflict_control": {
+      "exact_match": true,
+      "executed_actions": [
+        "execute_casper_governance_receipt"
+      ],
+      "planned_actions": [
+        "execute_casper_governance_receipt"
+      ]
+    },
+    "human_decision_count": 1,
+    "role_sequence": [
+      "concordia_core",
+      "rowan",
+      "mercer",
+      "verity",
+      "alden",
+      "multisig_holder",
+      "locke",
+      "wells"
+    ]
+  },
+  "proposal_family": "defi_treasury_reallocation",
+  "proposal_id": "DAO-PROP-DYN-001",
+  "signal_service": "supplemental_dynamic_generator",
+  "state": "RESOLVED",
+  "total_cards": 8
+}

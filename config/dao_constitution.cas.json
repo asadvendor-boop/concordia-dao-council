@@ -1,0 +1,16 @@
+{
+  "dao_name": "Concordia Treasury DAO",
+  "policy_version": "2026.06.cas-v1",
+  "max_single_allocation_bps": 800,
+  "max_high_risk_allocation_bps": 300,
+  "requires_risk_challenge_above_bps": 1000,
+  "requires_rwa_evidence_hash": true,
+  "requires_multisig_for_execution": true,
+  "allowed_execution_network": "casper-test",
+  "allowed_receipt_entry_point": "store_governance_receipt",
+  "risk_thresholds": {
+    "low": 35,
+    "medium": 65,
+    "high": 85
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "checked": [
+    "artifacts/live/casper-final-receipt-proof.json",
+    "artifacts/live/public-evidence-reconciled.json",
+    "artifacts/live/public-runsummary-reconciled.json",
+    "artifacts/live/live-proof-pack-current.json",
+    "artifacts/live/judge-walkthrough-current.json",
+    "artifacts/live/public-trace-current.json",
+    "artifacts/live/certificate-current.html",
+    "artifacts/live/certificate-current.pdf",
+    "artifacts/live/exports/cards.csv",
+    "artifacts/live/exports/outcomes.csv",
+    "artifacts/live/exports/proof_table.csv",
+    "artifacts/live/exports/reputation.csv",
+    "artifacts/live/exports/casper_receipts.csv",
+    "artifacts/live/exports/x402_settlements.csv",
+    "artifacts/live/x402-provider-happy-path-verified.json",
+    "artifacts/live/x402-final-payment-proof.json",
+    "artifacts/live/odra-quorum-exercise-plan.json",
+    "artifacts/live/odra-topology-genesis-proof.json",
+    "artifacts/live/odra-topology-councilregistry-proof.json",
+    "artifacts/live/odra-topology-treasurypolicy-v3-proof.json",
+    "artifacts/live/odra-topology-cardindexledger-v3-proof.json"
+  ],
+  "findings": [],
+  "status": "passed"
+}

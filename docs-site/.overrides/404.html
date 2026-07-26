@@ -1,0 +1,17 @@
+{% extends "main.html" %}
+
+{% block content %}
+  <h1>404 &mdash; Page not found</h1>
+  <p>
+    That page isn&rsquo;t here. It may have moved, or the link may be out of
+    date.
+  </p>
+  <p>
+    Head to the
+    <a href="{{ config.site_url }}">documentation home</a>, verify the live proof
+    in the
+    <a href="{{ config.site_url }}judge-walkthrough/">Judge Quickstart</a>, or
+    browse the
+    <a href="{{ config.site_url }}links/">public receipts and links</a>.
+  </p>
+{% endblock %}

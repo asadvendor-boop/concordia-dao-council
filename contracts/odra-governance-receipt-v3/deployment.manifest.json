@@ -1,0 +1,56 @@
+{
+  "schema_id": "concordia.v3-deployment-manifest.v1",
+  "status": "built_uninstalled",
+  "network": "casper-test",
+  "package_key_name": "concordia_governance_receipt_v3",
+  "contract_name": "GovernanceReceiptV3",
+  "contract_version": null,
+  "package_hash": null,
+  "contract_hash": null,
+  "install_deploy_hash": null,
+  "install_block_hash": null,
+  "install_block_height": null,
+  "install_state_root_hash": null,
+  "locked_install": {
+    "odra_cfg_allow_key_override": false,
+    "odra_cfg_is_upgradable": false,
+    "odra_cfg_is_upgrade": false
+  },
+  "toolchain": {
+    "cargo_odra": "0.1.7",
+    "odra": "2.8.2",
+    "rustc": "1.86.0-nightly (854f22563 2025-01-31)"
+  },
+  "build": {
+    "command": "cargo --locked odra build -c GovernanceReceiptV3",
+    "schema_command": "cargo --locked odra schema -c GovernanceReceiptV3",
+    "wasm_path": "wasm/GovernanceReceiptV3.wasm",
+    "wasm_sha256": "6605611e9649e513fe343e176d5427b317c5214c41fef340fcbb76180baa5564",
+    "wasm_size_bytes": 405099,
+    "schema_path": "resources/casper_contract_schemas/governance_receiptv3_schema.json",
+    "schema_sha256": "a2a0ff6722731688e14dcf52612e75e95f79b78688f1f23587795d9592eff999"
+  },
+  "source": {
+    "lib_rs_sha256": "7c3447a64cde4043992a20678e0eede0d9d27513916d69ea4d71b4487cd698ae",
+    "encoding_rs_sha256": "d3032adc8bc602216c2c54a6ddf7500112d583f45ad2d03db1acebe919062229",
+    "cargo_lock_sha256": "ec91d86526c54cde44954583c27124a5186f100b0f712420e76cdf0de9c4b187"
+  },
+  "historical_isolation": {
+    "tracked_file_count": 18,
+    "pre_post_diff": "empty",
+    "manifest_sha256": "b062b94287c468ec0c3606ff80302700b062d8fe76fa9e0d1adb5da9ba7077a5"
+  },
+  "abi": {
+    "entry_point_count": 20,
+    "mutable_entry_point_count": 4,
+    "query_entry_point_count": 16,
+    "event_count": 4,
+    "error_count": 16
+  },
+  "deployment_domain": null,
+  "installation_nonce": null,
+  "roles": null,
+  "source_commit": null,
+  "deployment_commit": null,
+  "note": "Live package, exact contract and install facts are populated only from finalized Testnet RPC evidence."
+}

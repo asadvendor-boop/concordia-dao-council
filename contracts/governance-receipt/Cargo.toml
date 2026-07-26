@@ -1,0 +1,19 @@
+[package]
+name = "concordia-governance-receipt"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/main.rs"
+
+[dependencies]
+casper-contract = "5.1.1"
+casper-types = "6.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"

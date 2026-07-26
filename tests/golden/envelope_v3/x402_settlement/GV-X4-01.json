@@ -1,0 +1,358 @@
+{
+  "action_core_field_order": [
+    "x402_version",
+    "scheme",
+    "caip2_network",
+    "wcspr_package",
+    "wcspr_contract",
+    "token_name",
+    "token_symbol",
+    "eip712_domain_version",
+    "token_decimals",
+    "payer",
+    "payee",
+    "value",
+    "resource_url_hash",
+    "report_hash",
+    "payment_requirements_hash",
+    "signed_payment_payload_hash",
+    "eip712_auth_nonce",
+    "valid_after",
+    "valid_before",
+    "settlement_target",
+    "settlement_version"
+  ],
+  "action_core_hex": "00000002000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a0000000c5772617070656420435350520000000557435350520000000131095e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c525252525252525252525252525252525252525252525252525252525252525200000000000000000000000000000000000000000000000000000005d21dba0020fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c5e8d4237514cf04a2e2652822ef7d77d5841c658d2a271b4cdb581b4017480d85656565656565656565656565656565656565656565656565656565656565656000000006a612140000000006a612f5000000016637370722d636c6f75642d666163696c697461746f7200000001",
+  "body_field_order": [
+    "x402_version",
+    "scheme",
+    "caip2_network",
+    "wcspr_package",
+    "wcspr_contract",
+    "token_name",
+    "token_symbol",
+    "eip712_domain_version",
+    "token_decimals",
+    "payer",
+    "payee",
+    "value",
+    "resource_url_hash",
+    "report_hash",
+    "payment_requirements_hash",
+    "signed_payment_payload_hash",
+    "eip712_auth_nonce",
+    "valid_after",
+    "valid_before",
+    "action_nonce",
+    "settlement_target",
+    "settlement_version"
+  ],
+  "canonical_hex": "00000002000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a0000000c5772617070656420435350520000000557435350520000000131095e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c525252525252525252525252525252525252525252525252525252525252525200000000000000000000000000000000000000000000000000000005d21dba0020fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c5e8d4237514cf04a2e2652822ef7d77d5841c658d2a271b4cdb581b4017480d85656565656565656565656565656565656565656565656565656565656565656000000006a612140000000006a612f50575757575757575757575757575757575757575757575757575757575757575700000016637370722d636c6f75642d666163696c697461746f7200000001",
+  "canonical_length": 464,
+  "contract_encoding_valid": true,
+  "description": "Baseline WCSPR envelope with live Testnet contract parameters and deterministic encoding identities.",
+  "envelope_preimage_hex": "434f4e434f524449415f474f5645524e414e43455f454e56454c4f50455f5633000000000340804e79504df011ccbe7326898a9d7e489e01b445f483a199467584ddfb57260000000b6361737065722d746573740000001044414f2d50524f502d56332d5834303260606060606060606060606060606060606060606060606060606060606060600100000000000000000200000001047da89a2ea2f286e2fe84267f74e864d351f523adbe17eeb34a1b1641aed3733131313131313131313131313131313131313131313131313131313131313131323232323232323232323232323232323232323232323232323232323232323233333333333333333333333333333333333333333333333333333333333333333434343434343434343434343434343434343434343434343434343434343434353535353535353535353535353535353535353535353535353535353535353536363636363636363636363636363636363636363636363636363636363636363737373737373737373737373737373737373737373737373737373737373737383838383838383838383838383838383838383838383838383838383838383800000002000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a0000000c5772617070656420435350520000000557435350520000000131095e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c525252525252525252525252525252525252525252525252525252525252525200000000000000000000000000000000000000000000000000000005d21dba0020fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c5e8d4237514cf04a2e2652822ef7d77d5841c658d2a271b4cdb581b4017480d85656565656565656565656565656565656565656565656565656565656565656000000006a612140000000006a612f50575757575757575757575757575757575757575757575757575757575757575700000016637370722d636c6f75642d666163696c697461746f7200000001",
+  "expected_error": null,
+  "hashes": {
+    "action_id": "047da89a2ea2f286e2fe84267f74e864d351f523adbe17eeb34a1b1641aed373",
+    "envelope_hash": "3902fc5ae46d5f337b18ad4e7acfa7c05b6b8c0b52d3a3c72aaf5d5286ae450d"
+  },
+  "header_canonical_hex": "0000000340804e79504df011ccbe7326898a9d7e489e01b445f483a199467584ddfb57260000000b6361737065722d746573740000001044414f2d50524f502d56332d5834303260606060606060606060606060606060606060606060606060606060606060600100000000000000000200000001047da89a2ea2f286e2fe84267f74e864d351f523adbe17eeb34a1b1641aed37331313131313131313131313131313131313131313131313131313131313131313232323232323232323232323232323232323232323232323232323232323232333333333333333333333333333333333333333333333333333333333333333334343434343434343434343434343434343434343434343434343434343434343535353535353535353535353535353535353535353535353535353535353535363636363636363636363636363636363636363636363636363636363636363637373737373737373737373737373737373737373737373737373737373737373838383838383838383838383838383838383838383838383838383838383838",
+  "kind": "official_x402_settlement_v1",
+  "live_or_facilitator_success_claimed": false,
+  "typed_input": {
+    "body": [
+      {
+        "name": "x402_version",
+        "type": "u32",
+        "value": "2"
+      },
+      {
+        "name": "scheme",
+        "type": "String",
+        "value": "exact"
+      },
+      {
+        "name": "caip2_network",
+        "type": "String",
+        "value": "casper:casper-test"
+      },
+      {
+        "name": "wcspr_package",
+        "type": "Bytes32",
+        "value": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e"
+      },
+      {
+        "name": "wcspr_contract",
+        "type": "Bytes32",
+        "value": "032706aeae170fafb6403ce3bec58062f1c4288710838fe1df98ce4ff6c35f4a"
+      },
+      {
+        "name": "token_name",
+        "type": "String",
+        "value": "Wrapped CSPR"
+      },
+      {
+        "name": "token_symbol",
+        "type": "String",
+        "value": "WCSPR"
+      },
+      {
+        "name": "eip712_domain_version",
+        "type": "String",
+        "value": "1"
+      },
+      {
+        "name": "token_decimals",
+        "type": "u8",
+        "value": "9"
+      },
+      {
+        "name": "payer",
+        "type": "AccountHash",
+        "value": "5e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c"
+      },
+      {
+        "name": "payee",
+        "type": "AccountHash",
+        "value": "5252525252525252525252525252525252525252525252525252525252525252"
+      },
+      {
+        "name": "value",
+        "type": "U256",
+        "value": "25000000000"
+      },
+      {
+        "name": "resource_url_hash",
+        "type": "Bytes32",
+        "value": "20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798"
+      },
+      {
+        "name": "report_hash",
+        "type": "Bytes32",
+        "value": "f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3"
+      },
+      {
+        "name": "payment_requirements_hash",
+        "type": "Bytes32",
+        "value": "422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c"
+      },
+      {
+        "name": "signed_payment_payload_hash",
+        "type": "Bytes32",
+        "value": "5e8d4237514cf04a2e2652822ef7d77d5841c658d2a271b4cdb581b4017480d8"
+      },
+      {
+        "name": "eip712_auth_nonce",
+        "type": "Bytes32",
+        "value": "5656565656565656565656565656565656565656565656565656565656565656"
+      },
+      {
+        "name": "valid_after",
+        "type": "u64",
+        "value": "1784750400"
+      },
+      {
+        "name": "valid_before",
+        "type": "u64",
+        "value": "1784754000"
+      },
+      {
+        "name": "action_nonce",
+        "type": "Bytes32",
+        "value": "5757575757575757575757575757575757575757575757575757575757575757"
+      },
+      {
+        "name": "settlement_target",
+        "type": "String",
+        "value": "cspr-cloud-facilitator"
+      },
+      {
+        "name": "settlement_version",
+        "type": "u32",
+        "value": "1"
+      }
+    ],
+    "header": [
+      {
+        "name": "schema_version",
+        "type": "u32",
+        "value": "3"
+      },
+      {
+        "name": "deployment_domain",
+        "type": "Bytes32",
+        "value": "40804e79504df011ccbe7326898a9d7e489e01b445f483a199467584ddfb5726"
+      },
+      {
+        "name": "casper_chain_name",
+        "type": "String",
+        "value": "casper-test"
+      },
+      {
+        "name": "proposal_id",
+        "type": "String",
+        "value": "DAO-PROP-V3-X402"
+      },
+      {
+        "name": "proposal_nonce",
+        "type": "Bytes32",
+        "value": "6060606060606060606060606060606060606060606060606060606060606060"
+      },
+      {
+        "name": "decision_code",
+        "type": "u8",
+        "value": "1"
+      },
+      {
+        "name": "requested_allocation_bps",
+        "type": "u32",
+        "value": "0"
+      },
+      {
+        "name": "approved_allocation_bps",
+        "type": "u32",
+        "value": "0"
+      },
+      {
+        "name": "action_kind",
+        "type": "u8",
+        "value": "2"
+      },
+      {
+        "name": "action_version",
+        "type": "u32",
+        "value": "1"
+      },
+      {
+        "name": "action_id",
+        "type": "Bytes32",
+        "value": "047da89a2ea2f286e2fe84267f74e864d351f523adbe17eeb34a1b1641aed373"
+      },
+      {
+        "name": "proposal_hash",
+        "type": "Bytes32",
+        "value": "3131313131313131313131313131313131313131313131313131313131313131"
+      },
+      {
+        "name": "policy_hash",
+        "type": "Bytes32",
+        "value": "3232323232323232323232323232323232323232323232323232323232323232"
+      },
+      {
+        "name": "plan_hash",
+        "type": "Bytes32",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "name": "final_card_hash",
+        "type": "Bytes32",
+        "value": "3434343434343434343434343434343434343434343434343434343434343434"
+      },
+      {
+        "name": "dissent_hash",
+        "type": "Bytes32",
+        "value": "3535353535353535353535353535353535353535353535353535353535353535"
+      },
+      {
+        "name": "agent_action_hash",
+        "type": "Bytes32",
+        "value": "3636363636363636363636363636363636363636363636363636363636363636"
+      },
+      {
+        "name": "preauth_evidence_root",
+        "type": "Bytes32",
+        "value": "3737373737373737373737373737373737373737373737373737373737373737"
+      },
+      {
+        "name": "authorized_metadata_root",
+        "type": "Bytes32",
+        "value": "3838383838383838383838383838383838383838383838383838383838383838"
+      }
+    ]
+  },
+  "valid": true,
+  "vector_id": "GV-X4-01",
+  "x402_binding_projection": {
+    "facilitator_signature_validity": "not_asserted_by_this_dependency_free_vector; WP5 must verify a real deterministic EIP-712 fixture with the pinned SDK",
+    "hashes": {
+      "payment_requirements_hash": "422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c",
+      "report_hash": "f9f447a0d14fe8494c1d2a2cc6bfa72c395e118b6f91728d0022f853a3492aa3",
+      "resource_url_hash": "20fc9888adc9639d9f0df5515e8f00cfc6692abec50dd1e7786602fbb8861798",
+      "signed_payment_payload_hash": "5e8d4237514cf04a2e2652822ef7d77d5841c658d2a271b4cdb581b4017480d8"
+    },
+    "payment_payload": {
+      "accepted": {
+        "amount": "25000000000",
+        "asset": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
+        "extra": {
+          "decimals": "9",
+          "name": "Wrapped CSPR",
+          "symbol": "WCSPR",
+          "version": "1"
+        },
+        "maxTimeoutSeconds": 300,
+        "network": "casper:casper-test",
+        "payTo": "005252525252525252525252525252525252525252525252525252525252525252",
+        "scheme": "exact"
+      },
+      "extensions": {},
+      "payload": {
+        "authorization": {
+          "from": "005e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c",
+          "nonce": "5656565656565656565656565656565656565656565656565656565656565656",
+          "to": "005252525252525252525252525252525252525252525252525252525252525252",
+          "validAfter": "1784750400",
+          "validBefore": "1784754000",
+          "value": "25000000000"
+        },
+        "publicKey": "015151515151515151515151515151515151515151515151515151515151515151",
+        "signature": "01abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+      },
+      "resource": {
+        "description": "Concordia governed specialist risk report",
+        "mimeType": "application/json",
+        "url": "https://x402.concordiadao.xyz/reports/DAO-PROP-V3-X402"
+      },
+      "x402Version": 2
+    },
+    "payment_requirements": {
+      "amount": "25000000000",
+      "asset": "3d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e",
+      "extra": {
+        "decimals": "9",
+        "name": "Wrapped CSPR",
+        "symbol": "WCSPR",
+        "version": "1"
+      },
+      "maxTimeoutSeconds": 300,
+      "network": "casper:casper-test",
+      "payTo": "005252525252525252525252525252525252525252525252525252525252525252",
+      "scheme": "exact"
+    },
+    "preimages": {
+      "payment_requirements_hash": "434f4e434f524449415f5041594d454e545f524551554952454d454e54535f563100000000056578616374000000126361737065723a6361737065722d746573743d80df21ba4ee4d66a2a1f60c32570dd5685e4b279f6538162a5fd1314847c1e00000000000000000000000000000000000000000000000000000005d21dba0052525252525252525252525252525252525252525252525252525252525252520000012c0000000c577261707065642043535052000000013109000000055743535052",
+      "report_hash": "434f4e434f524449415f583430325f5245504f52545f563100000000287b227269736b5f6c6576656c223a226d656469756d2d61667465722d706f6c6963792d636170227d",
+      "resource_url_hash": "434f4e434f524449415f5245534f555243455f55524c5f5631000000003668747470733a2f2f783430322e636f6e636f7264696164616f2e78797a2f7265706f7274732f44414f2d50524f502d56332d58343032",
+      "signed_payment_payload_hash": "434f4e434f524449415f5349474e45445f5041594d454e545f5041594c4f41445f563100000000020000003668747470733a2f2f783430322e636f6e636f7264696164616f2e78797a2f7265706f7274732f44414f2d50524f502d56332d5834303200000029436f6e636f7264696120676f7665726e6564207370656369616c697374207269736b207265706f7274000000106170706c69636174696f6e2f6a736f6e422f2b989183feec6407630c5296b36ed83c5d743b4d21d179dbc39495f5369c0000004101abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab0151515151515151515151515151515151515151515151515151515151515151515e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c525252525252525252525252525252525252525252525252525252525252525200000000000000000000000000000000000000000000000000000005d21dba00000000006a612140000000006a612f50565656565656565656565656565656565656565656565656565656565656565600000000"
+    },
+    "public_key_account_binding": {
+      "account_hash_preimage_hex": "65643235353139005151515151515151515151515151515151515151515151515151515151515151",
+      "canonical_public_key_hex": "015151515151515151515151515151515151515151515151515151515151515151",
+      "derivation": "BLAKE2b-256(algorithm_name_ascii || 0x00 || raw_public_key_bytes_without_tag)",
+      "derived_account_hash": "5e4de9c4290a76042658e8e0d127d3e0d4ba7b99a11ad17da88d0bed2e15ec5c",
+      "equals_typed_payer": true
+    },
+    "report": {
+      "exact_bytes_hex": "7b227269736b5f6c6576656c223a226d656469756d2d61667465722d706f6c6963792d636170227d",
+      "exact_bytes_utf8": "{\"risk_level\":\"medium-after-policy-cap\"}",
+      "media_type": "application/json"
+    },
+    "resource": {
+      "description": "Concordia governed specialist risk report",
+      "mimeType": "application/json",
+      "url": "https://x402.concordiadao.xyz/reports/DAO-PROP-V3-X402"
+    },
+    "validation_scope": "typed_contract_encoding_and_subordinate_hashes_only"
+  }
+}

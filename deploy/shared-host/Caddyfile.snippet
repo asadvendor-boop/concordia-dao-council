@@ -1,0 +1,107 @@
+{$CONCORDIA_HOSTNAME} {
+	encode zstd gzip
+
+	handle /health {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /ready* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /stats* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /proposals* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /evidence* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /room-messages* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /agent-status {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /agent-skills* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /integrations/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /suppression-rules {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /api/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /approve* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /x402/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /casper/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /cspr-click/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /demo/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /judge-walkthrough/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /technical-jury-note {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /certificate/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /canonical-proof/* {
+		reverse_proxy concordia-gateway:8000
+	}
+
+	handle /traces* {
+		reverse_proxy concordia-jaeger:16686
+	}
+
+	handle {
+		reverse_proxy concordia-dashboard:3000
+	}
+}
+
+{$X402_PROVIDER_HOSTNAME} {
+	encode zstd gzip
+
+	handle /health {
+		reverse_proxy concordia-x402-provider:8000
+	}
+
+	handle /x402/* {
+		reverse_proxy concordia-x402-provider:8000
+	}
+
+	handle {
+		respond "Concordia x402 Risk Oracle Provider" 200
+	}
+}

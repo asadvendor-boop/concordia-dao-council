@@ -1,0 +1,24 @@
+{
+  "proposal_id": "DAO-PROP-RWA-001",
+  "proposal_type": "RWA_INVOICE_POOL_ONBOARDING",
+  "asset_class": "invoice_receivables",
+  "issuer": "Concordia Sample Trade Finance SPV",
+  "debtor": "Sample Investment-Grade Debtor",
+  "face_value_usd": 125000,
+  "maturity_days": 60,
+  "debtor_risk_score": 58,
+  "issuer_reputation_score": 72,
+  "document_set": [
+    {
+      "name": "invoice-register.csv",
+      "rows": 12,
+      "total_face_value_usd": 125000
+    },
+    {
+      "name": "debtor-attestation.pdf",
+      "status": "sample_attested"
+    }
+  ],
+  "review_outcome": "ESCALATED_TO_HUMANS",
+  "note": "Sample RWA evidence fixture for Concordia's non-canonical invoice-pool walkthrough."
+}

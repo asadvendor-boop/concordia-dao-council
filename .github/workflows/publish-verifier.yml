@@ -1,0 +1,150 @@
+name: Publish verifier to npm
+
+# Every supported release needs npm provenance, so publication must happen on a
+# GitHub-hosted runner. It is never triggered by a push, pull request, or
+# release event: Asad must authorize the exact commit and version manually.
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character release commit already merged to main
+        required: true
+        type: string
+      version:
+        description: Exact package version expected in packages/verify/package.json
+        required: true
+        default: 0.1.2
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-verifier-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, publish, and verify exact tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the authorized commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node runtime and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install pinned npm CLI with trusted-publishing support
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.18.0
+          test "$(npm --version)" = "11.18.0"
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: 0.10.12
+          enable-cache: true
+
+      - name: Set up Python fixture runtime
+        shell: bash
+        run: uv python install 3.12.11
+
+      - name: Bind release inputs to main and package metadata
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          expected_commit="$COMMIT_SHA"
+          expected_version="$PACKAGE_VERSION"
+          [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$expected_commit"
+          actual_version="$(node -p "require('./packages/verify/package.json').version")"
+          test "$actual_version" = "$expected_version"
+          test "$(node -p "require('./packages/verify/package.json').name")" = '@concordia-dao/verify'
+          test "$(node -p "require('./packages/verify/package.json').repository.url")" = 'git+https://github.com/asadvendor-boop/concordia-dao-council.git'
+          git diff --exit-code
+
+      - name: Install, test, lint, audit, and inspect package
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm cache add '@noble/hashes@1.8.0'
+          npm test
+          npm run lint
+          npm audit --audit-level=high
+          node scripts/check-package-files.mjs
+
+      - name: Build the exact publication tarball
+        id: pack
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run clean
+          npm run build
+          npm pack --json > npm-pack.json
+          tarball="$(node -e "const fs=require('node:fs'); const x=JSON.parse(fs.readFileSync('npm-pack.json','utf8')); if(x.length!==1) process.exit(1); process.stdout.write(x[0].filename)")"
+          test -f "$tarball"
+          tar --list --file "$tarball" | LC_ALL=C sort > npm-tarball-files.txt
+          sha256sum "$tarball" > npm-tarball-sha256.txt
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact tarball in a clean consumer before publication
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          tarball="$(realpath "packages/verify/$TARBALL")"
+          test -f "$tarball"
+          node scripts/verify_verifier_consumer.mjs "$tarball"
+
+      - name: Publish exact tarball with registry provenance
+        working-directory: packages/verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm publish "$TARBALL" --provenance --access public
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+
+      - name: Verify registry copy, clean install, CLI, and signatures
+        shell: bash
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Single shared implementation, also used by verify-published-release.yml,
+          # so publication and re-verification can never drift apart.
+          for attempt in $(seq 1 12); do
+            if node scripts/verify_published_release.mjs "$PACKAGE_VERSION" "$COMMIT_SHA"; then
+              exit 0
+            fi
+            test "$attempt" -lt 12
+            sleep 5
+          done
+          exit 1

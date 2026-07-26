@@ -1,0 +1,71 @@
+name: Verify published verifier release
+
+# Read-only re-verification of an ALREADY-PUBLISHED release.
+#
+# Publication and verification are deliberately separated: this workflow has no
+# NPM_TOKEN, no id-token:write and no packages:write, so it can prove a release
+# but cannot create, deprecate or alter one. It calls the same checked-in
+# verifier the publish workflow uses, so the two cannot drift apart.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published package version to verify
+        required: true
+        default: 0.1.2
+        type: string
+      commit_sha:
+        description: Exact 40-character commit the release must be bound to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-published-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify published release is provenance-bound
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up pinned Node runtime and npm registry
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.22.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Install pinned npm CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.18.0
+          test "$(npm --version)" = "11.18.0"
+
+      - name: Reject inputs that are not an exact version and commit
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Verify the published release
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/verify_published_release.mjs "$PACKAGE_VERSION" "$COMMIT_SHA"

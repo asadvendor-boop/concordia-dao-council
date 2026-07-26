@@ -1,0 +1,6 @@
+{
+  "error": "LiveExerciseError: TreasuryPolicy install deploy e046881a46b433b52d507399340a56322ce9cbbb560223a78517ed6ca3243478 failed on-chain: User error: 64658",
+  "generated_at": "2026-07-01T06:23:19.052489+00:00",
+  "schema": "concordia.live-odra-module-exercise.v1",
+  "status": "failed"
+}

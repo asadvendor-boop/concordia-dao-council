@@ -1,0 +1,88 @@
+{
+  "chrome_signer": "02033c3b4d6eddae1be00f87e635aebe26a1cb5125ec8d09be1e95297208c5754ce1",
+  "generated_at": "2026-07-01T06:22:11.889148+00:00",
+  "install_upgradable": true,
+  "modules": {
+    "CouncilRegistry": {
+      "install_deploy_hash": "9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0",
+      "install_finality": {
+        "attempt": 2,
+        "block_hash": "97bdcbd57ec63795b578d30e18fb1ceaea4978f21db8fe75ea9ce16c2fe6b995",
+        "block_height": 8358402,
+        "deploy_hash": "9e57604ccc22a3fc3b7ec554916d85ae4679e06feac3eb59449721dcdc17e5f0",
+        "error_message": null,
+        "hash_kind": "deploy",
+        "rpc_method": "info_get_deploy",
+        "status": "finalized",
+        "success": true
+      },
+      "install_upgradable": true,
+      "module": "CouncilRegistry",
+      "package_hash": "hash-d498116d3544cba543470562ac844b1b33108f7980d0203c2bbe3e204fc97aa6",
+      "package_key_name": "concordia_topology_20260701_v2_councilregistry_package_hash",
+      "wasm": {
+        "path": "/app/contracts/odra-governance-receipt/wasm/CouncilRegistry.wasm",
+        "size_bytes": 196768
+      }
+    }
+  },
+  "node_address": "https://node.testnet.casper.network",
+  "proposal_id": "DAO-PROP-6CB25C",
+  "quorum": {
+    "status": "skipped_governance_receipt_not_requested",
+    "steps": {},
+    "threshold": 2
+  },
+  "requested_modules": [
+    "CouncilRegistry"
+  ],
+  "schema": "concordia.live-odra-module-exercise.v1",
+  "server_signer": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151",
+  "standalone_calls": {
+    "CouncilRegistry": {
+      "entry_point": "register_agent",
+      "result": {
+        "acceptance_passed": true,
+        "call_target": "package",
+        "contract_hash": "hash-d498116d3544cba543470562ac844b1b33108f7980d0203c2bbe3e204fc97aa6",
+        "contract_version": 1,
+        "deploy_hash": "EBA1F45E3CF2B712F70aEc18d71b5315DB8C3be2f317B94c4b60Acb8A2369774",
+        "duration_seconds": 7.11,
+        "entry_point": "register_agent",
+        "expected_failure": false,
+        "finality": {
+          "attempt": 2,
+          "block_hash": "93ac3b220713d8351154e7ed9073a5c8fe2874d0c559458e808cae6a2695a10b",
+          "block_height": 8358403,
+          "deploy_hash": "EBA1F45E3CF2B712F70aEc18d71b5315DB8C3be2f317B94c4b60Acb8A2369774",
+          "error_message": null,
+          "hash_kind": "deploy",
+          "rpc_method": "info_get_deploy",
+          "status": "finalized",
+          "success": true
+        },
+        "rpc_response": {
+          "id": "concordia-odra-1782886946108",
+          "jsonrpc": "2.0",
+          "result": {
+            "api_version": "2.0.0",
+            "deploy_hash": "eba1f45e3cf2b712f70aec18d71b5315db8c3be2f317b94c4b60acb8a2369774"
+          }
+        },
+        "status": "success",
+        "typed_runtime_args": {
+          "agent_id": {
+            "cl_type": "String",
+            "value": "Locke"
+          },
+          "public_key_hex": {
+            "cl_type": "String",
+            "value": "019aeeb6276a9bfe8534a1b51cc7c1e0b72b63cd307566f08d91223bee9e610151"
+          }
+        }
+      }
+    }
+  },
+  "status": "module_calls_complete",
+  "web_signer": "0203389c4766d3b122107f67c7f898f6f9a842c4419f8215b03d048393823a97c18e"
+}

@@ -1,0 +1,322 @@
+{
+  "authorities": {
+    "archive_origin_for_security_files": "d3d91d6e8ddf48ee153c8e2e7de19094cf14e8f4",
+    "frozen_public_main": "258cf352c7d8b99cdc691f8754ae9f87c651a073",
+    "npm_source": "b2cf53859b188de0bd250ea338b76fff575dee67",
+    "v1_truth_and_security": "b79b42c974daa6ba4b8d904573f6c321ecef1a98"
+  },
+  "baseline_validation": {
+    "diagnose_fix_rerun_evidence": [
+      "uv add initial sync failed on an architecture-mismatched blake3 wheel; partial .venv isolated and manifests/locks regenerated with uv add --no-sync plus uv lock --check",
+      "initial secret scan entropy findings were triaged; the final structured detector run has zero findings",
+      "initial repository audit basic-auth matches were proven as reserved-domain negative fixtures; scanner narrowed and rerun passed"
+    ],
+    "full_archive_test_observation": {
+      "classification": "pre-existing archive presentation-contract mismatch explicitly delegated to Lane 2; not caused by baseline security/runtime composition",
+      "log_sha256": "f0d13eebb81a2017feb7867a9d5662857ae071752826867783e0e3f2d96a1355",
+      "result": "114 passed, 3 failed"
+    },
+    "lock_regeneration_log_sha256": "63b51f3f359ebab6f6d40824e5f5ff7df0bd3c4916997d3c071474cb38966fd3",
+    "python_dependency_audit": {
+      "dependency_path_sha256": "0206e823c5cb63c056b4dd240624073380df4e780813937e354524291a883269",
+      "report_sha256": "51a4e326605b29256a738dc0a5613743501c37074539ba6498bbdfc633e13687",
+      "security_register": "V1 .github/SECURITY.md Dismissed Findings Register; medium/low advisories inherit the same upstream cap.",
+      "status": "documented-upstream-exceptions-only",
+      "vulnerable_packages": [
+        "cryptography==42.0.8 via pycspr==1.2.0",
+        "ecdsa==0.18.0 via pycspr==1.2.0"
+      ]
+    },
+    "required_gates": {
+      "clean_repository_audit": {
+        "report_sha256": "4b1786d60a490bba1a196162846f90e9a939631c140a6b19a72f1c9444710553",
+        "scanned_files": 469,
+        "status": "pass",
+        "violations": 0
+      },
+      "dashboard_npm_audit": {
+        "critical": 0,
+        "high": 0,
+        "low": 3,
+        "report_sha256": "4950b0d29c716d00b1fdf2bc1081924e5bedf44b78fbd6a424b3685d2631075d",
+        "status": "pass"
+      },
+      "focused_security_and_runtime_tests": {
+        "log_sha256": "ef0e7ef49e71fa999842be0cb8d22ec1058d3a384ed5c0a2ec6efb8f434975ac",
+        "passed": 5,
+        "status": "pass"
+      },
+      "independent_secret_scan": {
+        "findings": 0,
+        "report_sha256": "30dab09b9353b48838cffa7afb08ba6752d36c6d287570d6050c63e676586682",
+        "status": "pass",
+        "triage_sha256": "606b917d6c334ac8c9bfa264d96e9c95627cd5cfa23c24f54b9930be31a81d26"
+      },
+      "runtime_build_layer_exact": true,
+      "verifier_clean_room_build": {
+        "build_log_sha256": "55bf8eaebc5a23d037840eae5ca512edd8c0e7bdfe576dee8e3f5c7c92a2f718",
+        "dist_files": 133,
+        "pack_files": 136,
+        "pack_report_sha256": "0de060003f000da0fb58fc48a32692cc26e879144f7c96c10fe861188bb76809",
+        "status": "pass"
+      }
+    }
+  },
+  "cleanliness_normalization": {
+    "archived_live_evidence_bytes_preserved": true,
+    "evidence_sha256": "8132022772ee8d85348e0b06ae893a6e21eecf6f380ba8d0666a8c656b2cc1e8",
+    "gitattributes_rules": [
+      "artifacts/live/** -whitespace",
+      "live/** -whitespace",
+      "*.pdf binary"
+    ],
+    "reason": "Initial-root git diff --check exposed archive whitespace; source was normalized while byte-exact live evidence was exempted narrowly.",
+    "source_files_normalized": 9
+  },
+  "history_recovery": {
+    "advertised_head_tag_parity_lines": 21,
+    "offline_bundle_named_refs": 37,
+    "offline_bundle_sha256": "d0ea794f881b32d0e1f268614e560b51fba1b56e82df3575b02756c4012c816a",
+    "private_repository": "asadvendor-boop/concordia-dao-council-history-private",
+    "visibility": "private"
+  },
+  "lane_2_required_followup": [
+    {
+      "archive_dashboard_git_blob": "cc6bdbee90109344b936cbabd4c465dfa8137dd9",
+      "archive_test_git_blob": "91884696ebffe62a7e07b202ac448da97b3422e8",
+      "diagnosis": "The VM archive dashboard and test files are both preserved byte-for-byte, but the test asserts presentation strings absent from the archive, V1 authority, and frozen main.",
+      "path": "dashboard/app/_components/ConcordiaApp.js",
+      "required_resolution": "Implement the approved V1.5 presentation overlay and make these contracts pass without changing backend/runtime scope.",
+      "tests": [
+        "tests/test_dashboard_contract.py::test_overview_surfaces_council_personas_without_fake_dropdown_affordance",
+        "tests/test_dashboard_contract.py::test_overview_uses_judge_first_cta_hierarchy_and_canonical_kpi",
+        "tests/test_dashboard_contract.py::test_frontend_defaults_proof_surfaces_to_canonical_and_suppressed_is_evidence_only"
+      ]
+    }
+  ],
+  "lane_3_required_followup": [
+    {
+      "change": "prevent manual non-main deployment from publishing",
+      "path": ".github/workflows/docs-pages.yml"
+    },
+    {
+      "change": "require release commit to equal the exact public main tip",
+      "path": ".github/workflows/publish-verifier.yml"
+    },
+    {
+      "change": "resolve the pinned external Python fixture closure before verifier exact-proof tests and npm publication",
+      "path": "packages/verify"
+    },
+    {
+      "change": "align public V1.5 documentation identity and navigation without unsupported V2/V3 backend claims",
+      "path": "mkdocs.yml and docs-site/"
+    }
+  ],
+  "release": "Concordia V1.5 clean baseline",
+  "release_infrastructure": {
+    "codeql": {
+      "mode": "GitHub default setup",
+      "repository_workflow_file": null
+    },
+    "dependabot_security_alerts": {
+      "mode": "repository settings",
+      "repository_file": null
+    },
+    "included_paths": [
+      ".github/CODE_OF_CONDUCT.md",
+      ".github/CONTRIBUTING.md",
+      ".github/SECURITY.md",
+      ".github/ISSUE_TEMPLATE/",
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      ".github/workflows/ci.yml",
+      ".github/workflows/docs-pages.yml",
+      ".github/workflows/publish-verifier.yml",
+      ".github/workflows/verify-published-release.yml",
+      "mkdocs.yml",
+      "docs-site/",
+      "docs/requirements-docs.txt",
+      "scripts/write_docs_release_identity.py",
+      "scripts/verify_published_release.mjs",
+      "packages/verify/"
+    ],
+    "required_overlay_additions_from_lane_3_mapping": [
+      "docs/requirements-docs.txt",
+      "scripts/write_docs_release_identity.py"
+    ],
+    "security_register_source": {
+      "commit": "b79b42c974daa6ba4b8d904573f6c321ecef1a98",
+      "git_object": "89c2cd447f8a6bb55a817349c942f126b3830325",
+      "object_type": "blob",
+      "path": ".github/SECURITY.md"
+    },
+    "source_commit": "258cf352c7d8b99cdc691f8754ae9f87c651a073"
+  },
+  "runtime_build_layer": {
+    "files": {
+      "Dockerfile": "b19a3d611e13addd7dc03de328c1949d22a54ab7fed001521a0bab3799268366",
+      "dashboard/Dockerfile": "1e5ab0e9bb790ba9fc57acf4574bb1b0c88e0adb1715fc83e399f46d2c2f3709",
+      "deploy/shared-host/compose.prod.yml": "0a5e8a17773d9d3f856e6a14de818d94af0fd241b172184787e98847e791606d"
+    },
+    "forbidden_compose_services": [
+      "caddy",
+      "x402-official",
+      "mainnet",
+      "governance-v3"
+    ],
+    "source": "approved VM V1 source archive; one compatible set"
+  },
+  "runtime_limitation": {
+    "backend_exact_oci_archives_available": false,
+    "binding_scope": "gateway, simulator, agents, recorder, and x402-provider are excluded from every rebuild, recreate, restart, and Compose operation",
+    "dashboard_cutover_requirement": "independently tested dashboard rollback image and exact before/after confinement remain mandatory",
+    "status": "user-approved non-blocking limitation"
+  },
+  "schema_version": 1,
+  "security_carryforward": {
+    "dashboard_package_json_sha256": "d5e5c8957f6f95d61b26e41085e0a4cc0728eb4b4855e426880b01d595247257",
+    "dashboard_package_lock_sha256": "2aa40fe502d386a0fc36d76f615a36b1c2e88585c3f1d8cd8bac8f95133e6ce1",
+    "dependency_constraints": {
+      "dashboard_lock": {
+        "glob": "13.0.6",
+        "next": "16.2.11",
+        "postcss": "8.5.23",
+        "sharp": "0.35.3"
+      },
+      "dashboard_manifest": {
+        "next": "16.2.11",
+        "overrides": {
+          "glob": "13.0.6",
+          "postcss": "8.5.23",
+          "sharp": "0.35.3"
+        }
+      },
+      "manifest_dependencies": [
+        "click==8.3.3",
+        "pillow==12.3.0",
+        "starlette>=1.3.1",
+        "langsmith>=0.8.18"
+      ],
+      "uv_resolved": {
+        "click": "8.3.3",
+        "langsmith": "0.10.10",
+        "pillow": "12.3.0",
+        "starlette": "1.3.1"
+      }
+    },
+    "locks_regenerated_from_manifests": true,
+    "pyproject_sha256": "03187b1238f0ae3e62861e94b880b5a662633a7aa6017642109f51fa59852470",
+    "resolution": {
+      "blob_equality": {
+        "archive": {
+          "gateway": "998849cddf72b3f90b6bb980f67e243b2467a6bf",
+          "proof_runtime": "4965cf3ed6f4bd58e5ed544ee1279bb81558b218"
+        },
+        "authority": {
+          "gateway": "11057e8133daff0dafda6c71ae8b5e397f79773e",
+          "proof_runtime": "27b968074f6093295829b75882b3ad3e168ab5ae"
+        },
+        "candidate": {
+          "gateway": "11057e8133daff0dafda6c71ae8b5e397f79773e",
+          "proof_runtime": "27b968074f6093295829b75882b3ad3e168ab5ae"
+        },
+        "exact_match": true
+      },
+      "final_sha256": {
+        "gateway": "8e9905343c46a8a956ef9dea2ce1f1b2cec4a56b153a1af992c5b22d08779180",
+        "proof_runtime": "a869ef3789c4ea08b1eac4e5dfa5cc46850db56e6bc77f47239aa3af225f2aa6"
+      },
+      "prior_partial_state": {
+        "gateway_sha256": "f7eb3bbf67872cbff8ea98629bfb5b5c0993d9bdb5ff5d4580bc607d2fedb3ae",
+        "proof_runtime_sha256": "beb993391867b523a0b5862d7dc987d65a3aaeb564cfbcd0a18bea97a0a36c19",
+        "recorded_state": "5d511c8 applied; f572bce conflict because archive preceded prerequisite path helper"
+      },
+      "required_commit_ancestry": [
+        "9ecebac4a05f49c47713ca51f0c2e21787818d76",
+        "5d511c8fd5de3cf58843b9cbc8afe25a00403691",
+        "f572bce75bfd5158d1e423fefdf8a075933ac998",
+        "9042f401ac0e3bbac9990985b691d419b1ef91d5",
+        "0974db1ba189e26c3460f2df960cca16f6fc09cf"
+      ],
+      "resolution": {
+        "archive_origin_commit": "d3d91d6e8ddf48ee153c8e2e7de19094cf14e8f4",
+        "method": "restore partial proof_runtime to verified archive blob, then apply exact cumulative two-file diff from archive origin to mapped V1 authority",
+        "patch_path": "/Users/asad.ali/Documents/Concordia/operator-scratch/v1_5_integrator/evidence/security-patches/archive-to-b79-security.patch",
+        "patch_sha256": "c7fbf4f8a536265ba7cbf7ecfac68ab1192dd23e3c2ce9af2fe541c58f02e2d3",
+        "v1_authority_commit": "b79b42c974daa6ba4b8d904573f6c321ecef1a98"
+      },
+      "resolved_at": "2026-07-26T01:38:43Z",
+      "schema_version": 1
+    },
+    "uv_lock_sha256": "908d8c773ea65fb5a28e1efc0962ab7136c1ba3bb960c7f0080a5084d5e141b5"
+  },
+  "source_backup": {
+    "database_backup_sha256": "d894d79a0884eb94771f62b8629e60e6e503fa2a7957f2fb5798c576d5c73736",
+    "database_integrity": "ok (immutable read-only verification)",
+    "excluded_zips": [
+      {
+        "path": "src/concordia-dao-council-council-review-20260630T151815Z.zip",
+        "size": 7208367
+      },
+      {
+        "path": "src/concordia-dao-council-final-clean-20260702T081000Z.zip",
+        "size": 7384464
+      },
+      {
+        "path": "src/concordia-dao-council-council-review-20260630T155748Z.zip",
+        "size": 7209576
+      },
+      {
+        "path": "src/concordia-dao-council-final-clean-20260702T080000Z.zip",
+        "size": 7384491
+      },
+      {
+        "path": "src/concordia-dao-council-council-review-20260630T140830Z.zip",
+        "size": 7497333
+      },
+      {
+        "path": "src/concordia-dao-council-final-round-hardening-20260701T0545Z.zip",
+        "size": 7316310
+      },
+      {
+        "path": "src/concordia-dao-council-council-review-20260630T163540Z.zip",
+        "size": 7209787
+      },
+      {
+        "path": "src/concordia-dao-council-final-round-hardening-20260701T0610Z.zip",
+        "size": 7319669
+      },
+      {
+        "path": "src/concordia-dao-council-final-dynamic-review-20260701.zip",
+        "size": 7307792
+      },
+      {
+        "path": "src/concordia-dao-council-final-clean-20260702T073158Z.zip",
+        "size": 21379749
+      }
+    ],
+    "filter_summary": {
+      "event": "summary",
+      "excluded_by_reason": {
+        "cache_dependency_or_build_output": 35738,
+        "ds_store": 3,
+        "environment_file": 1,
+        "zip": 10
+      },
+      "included_bytes": 18428616,
+      "included_members": 413,
+      "unsafe_members": 0,
+      "zip_members": 10
+    },
+    "sanitized_file_manifest_sha256": "63622477aeb771e4ea795c91d66f873b6a857946d8abc95ad0cf24f4913daf30",
+    "sanitized_stream_sha256": "8a9905c870ba05cdf96131e9e7a649e4f64c8a7cacd1a420f99c1c016ee73a4c",
+    "sha256": "42b527b5bd7a6c37ae6d703c92ce7308e5a7343108759d498d410bd871fcfc22",
+    "size": 978474044,
+    "vm_path": "/opt/backups/concordia/pre-v3-sprint-20260722T155122Z/concordia-src.tgz"
+  },
+  "verifier_capability": {
+    "included_assets_exact": true,
+    "manifest": "handoff/BASELINE_CAPABILITY_DEPENDENCIES.json",
+    "manifest_sha256": "5161eedf9a12c7a98f4e508da1cbdfd81f2d391abc50aedd08190743dc49bc61",
+    "python_fixture_closure_explicitly_delegated": true
+  }
+}

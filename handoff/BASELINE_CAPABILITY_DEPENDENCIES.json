@@ -1,0 +1,907 @@
+{
+  "delegated_python_fixture_closure": {
+    "evidence_sha256": "40da235240fedaa6b7137e0d826e994213fd460db9f12e76e7f4f19e8db0a324",
+    "owner": "Lane 3 publication/package hardening",
+    "required_resolution": "Before verifier exact-proof tests or npm publication, import this exact closure or replace it with package-local frozen fixtures and remove the external imports with equivalent tests.",
+    "source_commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+    "stable_source_files": [
+      {
+        "git_blob": "6eec805c78d028c54c88605576bb79703fa641ac",
+        "local_imports": [
+          "shared/envelope_v3.py"
+        ],
+        "path": "scripts/derive_deployment_domain_v3.py",
+        "sha256": "64c1ff2cb078a9d75b1aeda367da4e27bcf077af5ab81ecedac0595438637d9c"
+      },
+      {
+        "git_blob": "5c57b3c07adf07c95690f957ce1aff96ebe6ec29",
+        "local_imports": [
+          "scripts/derive_deployment_domain_v3.py",
+          "shared/casper_rpc_transport.py",
+          "shared/casper_signer_file.py",
+          "shared/exact_casper_deploy_json.py"
+        ],
+        "path": "scripts/install_governance_receipt_v3.py",
+        "sha256": "f39973ccefdd4d17cae53392bcc881fb547161f319ce32329058541d2e0d79ba"
+      },
+      {
+        "git_blob": "e284516150d9a48a9c2a13b9923bbf4fc0ac1010",
+        "local_imports": [
+          "shared/actions_v3.py",
+          "shared/envelope_v3.py"
+        ],
+        "path": "scripts/prepare_v3_envelope.py",
+        "sha256": "cb9e213ba3eb02b3be9eccece89956fdef26e38cec5ce9f2cd3cfd0e09505f57"
+      },
+      {
+        "git_blob": "8d8bc6f971f291dcbc3c9a8e28b0341b0f49b0ef",
+        "local_imports": [
+          "shared/atomic_private_file.py",
+          "shared/casper_rpc_transport.py"
+        ],
+        "path": "scripts/read_v3_state.py",
+        "sha256": "100614e86e4f69ddd10bc9b7603cfddb7a3518d3e4082c25fbb509e2f83ed6e3"
+      },
+      {
+        "git_blob": "6cb364f0776678abddaa5267fa1010b0d200ce23",
+        "local_imports": [
+          "scripts/install_governance_receipt_v3.py",
+          "scripts/prepare_v3_envelope.py",
+          "scripts/read_v3_state.py",
+          "shared/casper_rpc_transport.py",
+          "shared/casper_signer_file.py",
+          "shared/exact_casper_deploy_json.py"
+        ],
+        "path": "scripts/run_v3_live_proof.py",
+        "sha256": "a29acc3f7a591156fa7b6c3ca342a4e3432c3475f8a222cc42628bf8c065c285"
+      },
+      {
+        "git_blob": "cfcfbc90a4c60383606625e8e06e6eb981f7ca43",
+        "local_imports": [
+          "scripts/derive_deployment_domain_v3.py",
+          "scripts/install_governance_receipt_v3.py",
+          "scripts/prepare_v3_envelope.py",
+          "scripts/read_v3_state.py",
+          "shared/bound_command.py",
+          "shared/exact_casper_deploy_json.py"
+        ],
+        "path": "scripts/verify_v3_proof.py",
+        "sha256": "cc895087ba104079e3a67e573bf1d24d8a864efa9df93b70e96a2892d908dad6"
+      },
+      {
+        "git_blob": "24ed1dfbdbdaeba9895c0d3abd450e9ab62dc179",
+        "local_imports": [
+          "shared/envelope_v3.py"
+        ],
+        "path": "shared/actions_v3.py",
+        "sha256": "7c51d5bbf893deee72aace8c39c4bce545ffa8faa8b0692a93d977f02e32854a"
+      },
+      {
+        "git_blob": "73dbf039a0004ab5c1190f16aa93afa94609cb0a",
+        "local_imports": [],
+        "path": "shared/atomic_private_file.py",
+        "sha256": "c276f4e6c152f7d7ae289a8745e44fc3b4aecdb8c9b4ee47ded180fcac72f026"
+      },
+      {
+        "git_blob": "820420bad51470c9cde2ddda9fcf37a6825fa5ab",
+        "local_imports": [
+          "shared/release_gate_contract.py"
+        ],
+        "path": "shared/bound_command.py",
+        "sha256": "14237477bd3162f7582af7ab2f187e300f1b909b32cf26b6e26988836207b42f"
+      },
+      {
+        "git_blob": "11f11cfa4b6b7080be0597ce4dab5f7b182438b1",
+        "local_imports": [
+          "shared/secure_secret_file.py"
+        ],
+        "path": "shared/casper_rpc_transport.py",
+        "sha256": "44acaaedbd91f30f8e75d64c83d21bf6a47846480d3542be095244d7e9338a2a"
+      },
+      {
+        "git_blob": "bfc743b9be9c071037d62f82a78492cec81b4195",
+        "local_imports": [
+          "shared/secure_secret_file.py"
+        ],
+        "path": "shared/casper_signer_file.py",
+        "sha256": "a6ce7775439dc22daf51ea1cf0eb984c38dc223912786bb6726e813540667476"
+      },
+      {
+        "git_blob": "a9893d0f3cf196a33f4b35495ef064345753fb98",
+        "local_imports": [],
+        "path": "shared/envelope_v3.py",
+        "sha256": "58b86ce7046bc9d5c62934f02a9ca83abd4ea3b835d7ef28b9110186667ac430"
+      },
+      {
+        "git_blob": "efc5cdce366391cc498ca3ab5b974f52ca4169d4",
+        "local_imports": [],
+        "path": "shared/exact_casper_deploy_json.py",
+        "sha256": "40b02a8d98bc517d4ebed64d5fe1a045b1d5903c131f3ca591615511ca44091e"
+      },
+      {
+        "git_blob": "bfdd2bf13e137edb8e354dd7044c3e57b684fd03",
+        "local_imports": [],
+        "path": "shared/release_gate_contract.py",
+        "sha256": "c51efc01c3f1c0d294b93bd4218b4446ab03db51075216baefe8d7177e7e5b08"
+      },
+      {
+        "git_blob": "a9e8ceec9ce25df681a327ef4c45f0ea225b1eeb",
+        "local_imports": [],
+        "path": "shared/secure_secret_file.py",
+        "sha256": "a426b3712dc2fa6d05f4ac15f68686eab39918a86d6bcb5fb7eb41aee9ca02f9"
+      },
+      {
+        "git_blob": "b90d19f44f9782c754e6bdcc81cc55abb3840d71",
+        "local_imports": [
+          "scripts/install_governance_receipt_v3.py",
+          "scripts/prepare_v3_envelope.py",
+          "scripts/read_v3_state.py",
+          "scripts/run_v3_live_proof.py",
+          "scripts/verify_v3_proof.py",
+          "shared/exact_casper_deploy_json.py"
+        ],
+        "path": "tests/test_clvalue_roundtrip.py",
+        "sha256": "6eaf69fdea485e7fdfe5e51be4ce5d0523f87ce5b2ae132e2c31963723cb733a"
+      }
+    ],
+    "status": "explicitly delegated before baseline barrier",
+    "third_party_import_roots": [
+      "cryptography",
+      "pycspr",
+      "pytest"
+    ]
+  },
+  "included_assets_exact": true,
+  "included_frozen_assets": [
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 53,
+      "files": [
+        {
+          "git_blob": "fe0563d82d64e52c7ee5ad5646464041992a7d34",
+          "mode": "100644",
+          "path": "packages/verify/.gitignore",
+          "sha256": "7676731eb5a856c5aa09bf81096f20b9708e116aa6e860db91563a7ecf416a26",
+          "size": 51
+        },
+        {
+          "git_blob": "1c8c6f4494c266a2cd3da8b68354eac3e7654999",
+          "mode": "100644",
+          "path": "packages/verify/LICENSE",
+          "sha256": "ebf368f3be19ec689b4953b23e0246dcbf2dc64ecf4576e5b29e3ca2d2ef2d17",
+          "size": 1065
+        },
+        {
+          "git_blob": "1fbcbaccd354bd48d1a1ec67e5ba08b176469e21",
+          "mode": "100644",
+          "path": "packages/verify/README.md",
+          "sha256": "d48d330cc03bf3c0c4101fd72c74394db2132c0eb1d7bf71f248989721b74ebc",
+          "size": 10830
+        },
+        {
+          "git_blob": "b369db696f673224edb7b4febd00f06e3b578d38",
+          "mode": "100644",
+          "path": "packages/verify/package-lock.json",
+          "sha256": "8f27069be0086ae390ae6fc192278eefc76bd7649c00cc2e2c28d1bbd2138a2d",
+          "size": 2094
+        },
+        {
+          "git_blob": "7018bc869b51ff87744bc6b5b4101519ec100789",
+          "mode": "100644",
+          "path": "packages/verify/package.json",
+          "sha256": "af7fd437295dadf7748654e7d21df775efd6c3037a60ce0af0b66fce33ef839b",
+          "size": 1621
+        },
+        {
+          "git_blob": "35ff0f857f4973de0b2a321d5ea7edd8c737011b",
+          "mode": "100644",
+          "path": "packages/verify/scripts/check-package-files.mjs",
+          "sha256": "fc06671ce730dc46b8961032e76a05aa8560757d0867dba88e8291731facdb82",
+          "size": 1208
+        },
+        {
+          "git_blob": "98b245a2c688af3823b639f22ebbc2bf756be493",
+          "mode": "100644",
+          "path": "packages/verify/scripts/copy-vectors.mjs",
+          "sha256": "2dc4784352fab5191ff2165c76a8c82e4d8c5ffb4239547b44840acf8889ff94",
+          "size": 1878
+        },
+        {
+          "git_blob": "3fc963e4862c4777c1f4e4ea934e5dd589f9a95b",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/card-chain.ts",
+          "sha256": "669ac65b5de99e9d6ad3ed5a84bb849974b992835195b133f6de90cd74f89bf0",
+          "size": 8697
+        },
+        {
+          "git_blob": "9791d6ba6886bcd8bbe4b59026d266b7c65192ce",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/casper-deploy-json.ts",
+          "sha256": "7f68abdfa702ec8c7b04e02a2a5bf26e312f17106b6261353277d28a50a3d0c4",
+          "size": 22137
+        },
+        {
+          "git_blob": "60a7f2507125ff61c022f976e1af666ed3299cc3",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/casper-state.ts",
+          "sha256": "0da6a66c9bc0d63cbb2334219bae1a4217d6c3d5502a4c4bfdba18cf4774bf05",
+          "size": 25546
+        },
+        {
+          "git_blob": "83b8828e00c4b5009f779f850b9aa866ae02a4ad",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/exact-envelope-v3.ts",
+          "sha256": "c343cf72f2d54997cce32335c0ba155c9dde4a97b0fd215d7032dff7484df482",
+          "size": 63953
+        },
+        {
+          "git_blob": "0b443dceb9e13316f6562a395605f4a81ae4ffde",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/historical-odra.ts",
+          "sha256": "19b6e7c6ce998f1dca37ee29e7fd33e51ed91577fc3f7f006ea761dc5952be39",
+          "size": 32600
+        },
+        {
+          "git_blob": "6f7a044b3e082d3ada7560a1e2c6e771f15e7596",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/multi-node-finality.ts",
+          "sha256": "f7fd4aa74236c3ebdd61a658440c7ba8854987f6393f17465261c3684445885f",
+          "size": 12522
+        },
+        {
+          "git_blob": "efda5a5d1fe81372d3e9c9cf65e41349e3bde8fa",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/native-deploy.ts",
+          "sha256": "382e3d77a5acf95f97bffca0b1274184bbe9cd45f6a56070b1e1be812e6f09cb",
+          "size": 12583
+        },
+        {
+          "git_blob": "e70d13b1cf16d06166e8709f02fc35d218a4f401",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/native-finality.ts",
+          "sha256": "940cd99ed5374a2e2de3dc35fe4cb3fef86b999c217ab6a903d46d2512fa1ced",
+          "size": 13946
+        },
+        {
+          "git_blob": "bc02156dd0d6af4d0bfc081fcc3e3dc0a76e1366",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/native-transfer-scan.ts",
+          "sha256": "bb929441f9743adfe436781992203ce830206a4d0901e2f1adacb3cbeb9b73e2",
+          "size": 15349
+        },
+        {
+          "git_blob": "da1f32aa1665f708f0432c4c5f0ade8cbb85d928",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/native-treasury.ts",
+          "sha256": "cb42bec85c4b28cb999bd85b22ea7f6583671f6d0e9092e25df2c9c84b5e8516",
+          "size": 28336
+        },
+        {
+          "git_blob": "ab3df2d36093dce3da94a07baf666c865fb52529",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/payment-envelope.ts",
+          "sha256": "39cef7d637015bc0ceb05aed3a5a746849ff3610af84341bc0e21340f6e013c5",
+          "size": 12183
+        },
+        {
+          "git_blob": "76df05661dd80bdeed04fe3c235a02ce31f1036c",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/post-transfer.ts",
+          "sha256": "e43b8f4d899eb9af9babfc3a275cb31361874e7be6e4cb19e273546f6fba1712",
+          "size": 9270
+        },
+        {
+          "git_blob": "e6c9402c75dfcc715e3cb7eb5a41ff7ffdccb144",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/v3-readback.ts",
+          "sha256": "7c374de357e6ee438eea51dcdc7251687794a41c7e4fb4d4fb1761cae8428eb2",
+          "size": 20475
+        },
+        {
+          "git_blob": "f39041f722118a15312d4d16683f30335ca7b272",
+          "mode": "100644",
+          "path": "packages/verify/src/adapters/v3.ts",
+          "sha256": "9b8a65c00a34cbdb6aaff2e53608f7fa923d35a45c83433d5600a05ed42e3d1a",
+          "size": 3258
+        },
+        {
+          "git_blob": "01ca56162da61617716e32af0efb1658044ec7d1",
+          "mode": "100644",
+          "path": "packages/verify/src/cli.ts",
+          "sha256": "2efc2b5946239261005193306a420a58673573673f64c845bfa79cc91d2328b6",
+          "size": 3062
+        },
+        {
+          "git_blob": "fb14afd71f96621f0774f3e03b19682abb928047",
+          "mode": "100644",
+          "path": "packages/verify/src/encoders.ts",
+          "sha256": "2121dba1ae220c45af133c123c90cc3f7c589a02f99dd955b8945992a9d022e5",
+          "size": 25252
+        },
+        {
+          "git_blob": "0cb5dc19140ace4fa7df9c9b33234efc44545670",
+          "mode": "100644",
+          "path": "packages/verify/src/golden.ts",
+          "sha256": "da2368ddf7c1fb84d32483b38215b062c2e702012368f7e3335f27b17096a7ca",
+          "size": 19377
+        },
+        {
+          "git_blob": "5de940eb103745a9788daf7cb0f50c273ab2638c",
+          "mode": "100644",
+          "path": "packages/verify/src/index.ts",
+          "sha256": "6797051f26a3d9c726000bb8dc3030b83116e29750c3a89b1ff5566fdeb3bbea",
+          "size": 1092
+        },
+        {
+          "git_blob": "1e1290437694394f9efbc955dd203c2819bef485",
+          "mode": "100644",
+          "path": "packages/verify/src/json.ts",
+          "sha256": "5e8458bc89ff3223ed33caa7b6812581408f859f5dff26adaf2f3d1809cbb605",
+          "size": 5012
+        },
+        {
+          "git_blob": "6cbdfb9aefb44d0782ea9ecb2c1deb9f8b04e942",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/casper-live.ts",
+          "sha256": "d6bc75fb98a76394f952cea6e631a355cb5e805fa75de87502bec358b9635092",
+          "size": 26268
+        },
+        {
+          "git_blob": "5ec7ddae8ab58ca76359443b0b38c2879bd40a17",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/common.ts",
+          "sha256": "5e9bbd6b10312ece57fa4b3b2e98583059c5aef1a287bd9d451d0c0d11e1ddbf",
+          "size": 1292
+        },
+        {
+          "git_blob": "3d65409ade025cb3c3bf4720678903cdb2a3c51a",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/live.ts",
+          "sha256": "e5c9e7f53090932c9ba42e2e39b0f48bfd67eeffbab0469604f1d194a6cdfb00",
+          "size": 8230
+        },
+        {
+          "git_blob": "d21c7e4a78df4294955f663a28a2514ea7b96971",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/local.ts",
+          "sha256": "040394cbd0544b99d69fe0272ee4bd73bef79339404d56b0957b2a81284bea8f",
+          "size": 8042
+        },
+        {
+          "git_blob": "b38044431204bee6b449f55d5cc25e7181eac325",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/proposal.ts",
+          "sha256": "e1681821ed863e51656dda9021644a0240f84929067df24acb15a3328285828f",
+          "size": 898
+        },
+        {
+          "git_blob": "e0b9555dcc9c8d159d7cee03163d2f39a908b92d",
+          "mode": "100644",
+          "path": "packages/verify/src/modes/url.ts",
+          "sha256": "ade5dbedb9c9a98a4a7c56086172c32ea565b6abb06299ded4831fa818eafd74",
+          "size": 19586
+        },
+        {
+          "git_blob": "44fd0fc6617474c5c6f3201e824a23f8dac911c1",
+          "mode": "100644",
+          "path": "packages/verify/src/registry.ts",
+          "sha256": "43ca9cbae0ad4e68351f83802aeed77bd86cc5d49b0e1376fb21a0a61ecf5393",
+          "size": 43649
+        },
+        {
+          "git_blob": "adbc6c90a8f5b9206b59e85a2693519df1cb38d0",
+          "mode": "100644",
+          "path": "packages/verify/test/RED_EVIDENCE.md",
+          "sha256": "4fb495454d89e164dac2a8dce56917836eb2d76e14e3b69e2a760ae73882d5bc",
+          "size": 1141
+        },
+        {
+          "git_blob": "f92cc33e17718ca53e77ded14e77a9a7ea23f3d2",
+          "mode": "100644",
+          "path": "packages/verify/test/boolean-guard.test.mjs",
+          "sha256": "6d6be42c46dfd595dea200bcc01eb6bcad1bf5040397a4b7ebc822372ee0cc98",
+          "size": 14003
+        },
+        {
+          "git_blob": "f132a6b2c8505f3ccb7db672109c1c12eee27f37",
+          "mode": "100644",
+          "path": "packages/verify/test/card-chain-adapter.test.mjs",
+          "sha256": "d04ba0d66f5ce686436b45621d0eae6603e7b4de2e7d8889425566429f4b6ad5",
+          "size": 7021
+        },
+        {
+          "git_blob": "7955594b3dfaefeff36cb27b0476408f3a6baf77",
+          "mode": "100644",
+          "path": "packages/verify/test/casper-live.test.mjs",
+          "sha256": "b3890b8c59de7789f3d67f8164eb8fc4806429534ca5011bf70b9790e09b3a14",
+          "size": 15828
+        },
+        {
+          "git_blob": "169172274f9ef90b72ceaa580fb9a16bc6a5d2fc",
+          "mode": "100644",
+          "path": "packages/verify/test/cli.test.mjs",
+          "sha256": "b1da0ea59f59d3905f058ad5422fba8eda29c36ee12f19ff8517151417358439",
+          "size": 15774
+        },
+        {
+          "git_blob": "25a23e7c57b5ae6e162c64d9a47aa4b04c1c92b0",
+          "mode": "100644",
+          "path": "packages/verify/test/exact-v3-adapter.test.mjs",
+          "sha256": "3d6e694d5cd3e43e0208685b3f378787bc08c33fb92906bec0f2788d87e3b66d",
+          "size": 16005
+        },
+        {
+          "git_blob": "f0851929b23d0e7c45403ef1928f9a9242930dd2",
+          "mode": "100644",
+          "path": "packages/verify/test/fixtures/native-treasury-core.json",
+          "sha256": "f7190551d494ac23619a96c2170d5eb79f17cf82e8d622fe86b964f556f64eff",
+          "size": 5500
+        },
+        {
+          "git_blob": "0f01009541102dfbcd518211cd62e56ee6bec370",
+          "mode": "100644",
+          "path": "packages/verify/test/golden.test.mjs",
+          "sha256": "7c502d20ce19969e99650d5d943a25b05f5bb65a0ebcee49a204092d91d9306d",
+          "size": 4322
+        },
+        {
+          "git_blob": "87d7fea326717bfa992fb4cabbf0caaba30ec1d8",
+          "mode": "100644",
+          "path": "packages/verify/test/helpers/exact-v3-proof-fixtures.mjs",
+          "sha256": "7a5b8e6e4345bdb3f53ac32aec15a62073a1e29c847d165b56acf46c924e0a85",
+          "size": 4969
+        },
+        {
+          "git_blob": "718ac536ecb6e6081f497a7404df03b155380a07",
+          "mode": "100644",
+          "path": "packages/verify/test/helpers/historical-odra-artifact.mjs",
+          "sha256": "13e98a0a3317f9c16fe7febf5e7bc9969561958ec51c5de6a86b76e2bff3c459",
+          "size": 12735
+        },
+        {
+          "git_blob": "0faa83bf4e33816d8c8413758d6d870619949ee6",
+          "mode": "100644",
+          "path": "packages/verify/test/helpers/native-treasury-artifact.mjs",
+          "sha256": "4e6dbe5d3c5b22e18ba484302031ffaf7f3a9f24ddac94ef3bc9304ea0e58d31",
+          "size": 13389
+        },
+        {
+          "git_blob": "387c00fb68a710434d21205166d62df7986b894b",
+          "mode": "100644",
+          "path": "packages/verify/test/historical-odra-adapter.test.mjs",
+          "sha256": "d7d1d156cc446aefe702a495e6590425ee65c492df0888ca0f8b6334d17a1875",
+          "size": 13530
+        },
+        {
+          "git_blob": "8c90dd6a86e7295a785f1a454a6a30e1dd2da38a",
+          "mode": "100644",
+          "path": "packages/verify/test/io-hardening.test.mjs",
+          "sha256": "09a7289b22ac965d4064719932b38c3d020c961af12cc371cf7f072102467888",
+          "size": 27632
+        },
+        {
+          "git_blob": "fbf20e7b2c6a75c05c53a5b41d84ec7edcd29434",
+          "mode": "100644",
+          "path": "packages/verify/test/native-adapters.test.mjs",
+          "sha256": "775e9eb252a803642ad50a9a6d54720d5c1b3521dde7de443695a1d7b955adb4",
+          "size": 19215
+        },
+        {
+          "git_blob": "501c0ac2f7ded3233d4581faa3aadf04a91c220b",
+          "mode": "100644",
+          "path": "packages/verify/test/native-treasury-adapter.test.mjs",
+          "sha256": "72b55f4f4627866bc19527259f328515b10d1551632731365644c8b9703d2fde",
+          "size": 7544
+        },
+        {
+          "git_blob": "9093b417e49a4355d7a174c98e0546e05a83c48e",
+          "mode": "100644",
+          "path": "packages/verify/test/payment-envelope-contract.test.mjs",
+          "sha256": "6561af48a6e8c0a4c104983b622dec6cf417eeac79202b8959c52815fecbecdb",
+          "size": 17225
+        },
+        {
+          "git_blob": "68f13a0f23c1a2addc49780249d219e6ab05ff5c",
+          "mode": "100644",
+          "path": "packages/verify/test/registry-adapters.test.mjs",
+          "sha256": "3d4cd090f07dd8a9381e3b22d020b3f9d65bbe30740172e42e2289d1eb5b9b5f",
+          "size": 17322
+        },
+        {
+          "git_blob": "814f665ab21b95acfe9204159feb8677b49f71ea",
+          "mode": "100644",
+          "path": "packages/verify/test/semantic-parity.test.mjs",
+          "sha256": "7bb7ae849d72cfe85fa1dd74a581e839041be8410ae8d321234b88822725133e",
+          "size": 3910
+        },
+        {
+          "git_blob": "da4c7fa583a30e9994366bc41fcd90f5c4366803",
+          "mode": "100644",
+          "path": "packages/verify/test/state-proof-adapters.test.mjs",
+          "sha256": "e4d0f1e28bd0c1689867812acaaa50ef4c025b7830712ea85667e6ef2ae5c429",
+          "size": 22301
+        },
+        {
+          "git_blob": "3de766ce66a14bbc28bc6f737c901a5aeba1dd5d",
+          "mode": "100644",
+          "path": "packages/verify/tsconfig.json",
+          "sha256": "c37e29d30c868aaa83ab80cb8024e22fbcafca40ca4af90197be53f60af4e57c",
+          "size": 531
+        }
+      ],
+      "git_object": "cc8396159f48b655309ee6f95877baedf875926f",
+      "object_type": "tree",
+      "path": "packages/verify"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 21,
+      "files": [
+        {
+          "git_blob": "19da0a582b93941d6d7391764e0729a81def5b79",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/evidence_manifest/GV-EM-01.json",
+          "sha256": "b5f7a3b8bfe04512aa354bef1d15c26b8098332ec4f00cd21134a5dd45bcd2b7",
+          "size": 3106
+        },
+        {
+          "git_blob": "a69f97e231b411b83f4cfcb3f581ad8be351d054",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/evidence_manifest/GV-EM-02.json",
+          "sha256": "42c1fb2806cb1c0089b763052d7e46493beee2d1163e70cfa614d3c78a2db572",
+          "size": 2179
+        },
+        {
+          "git_blob": "35ae02a1013f9fe47513de4ba63fe3a92a12961c",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/exec_args/GV-EA-01.json",
+          "sha256": "8636260483cba1ea64dce51a42bd5a31ed68af155a645b1962f8f7b56dd79f46",
+          "size": 2069
+        },
+        {
+          "git_blob": "cb8e4d84dd093d1c173f08b77fde2d49a669d7e7",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/exec_args/GV-EA-02.json",
+          "sha256": "9ca7a117d6ac3e56aa2862cc3110fd8e540c6142c4642acadf13e17d7bcfdab0",
+          "size": 5202
+        },
+        {
+          "git_blob": "bf91f3b448c7ceb0c6a67e64b2acdf70f49f1c1a",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/exec_args/GV-EA-03.json",
+          "sha256": "a60b6cde7069a3ab800d58edc54d26094fdc00335a920595fe3453029e98b82a",
+          "size": 2326
+        },
+        {
+          "git_blob": "2d27f22bd585c488b64394222cdc4854ae831aa0",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/header/GV-HDR-01.json",
+          "sha256": "6fc8c9aed358e3038fe76f0ef29b75713fe09deba005b8058675894b392f6f81",
+          "size": 4816
+        },
+        {
+          "git_blob": "d33d5627b530d021ae3a1bfd2197fe8d792bdd19",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/header/GV-HDR-02.json",
+          "sha256": "a5fad35029084bbb3eaa9b59f28606ea8398c3dd3508f86278c31c091a10281d",
+          "size": 4262
+        },
+        {
+          "git_blob": "89c7f2eea8ed6d878c4f655ad6872e6da8c90b20",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/header/GV-HDR-03.json",
+          "sha256": "8e30f53ff02061aee3935aa672a8204f244a5e355d852342749938efdb159451",
+          "size": 4449
+        },
+        {
+          "git_blob": "ae4be7d4df91f7c98a77148182f61f7ddad8ce09",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/header/GV-HDR-04.json",
+          "sha256": "fc6321e076314fd80b876329ba080e6b8210bd65c3a6a667c42cd49dc248b9aa",
+          "size": 2977
+        },
+        {
+          "git_blob": "ef7a1b0ec3c6158243db8bd91b4081432e22846a",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/header/GV-HDR-05.json",
+          "sha256": "fd619814fe8d6d137a093086c39d808ae76de050f65712d8f1552fec5d85634c",
+          "size": 2993
+        },
+        {
+          "git_blob": "cb453e69d4ef834b72402a2c2601273f1b19b167",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/metadata_manifest/GV-MM-01.json",
+          "sha256": "7a8607c15cd1d954cd60ba68bd12df2b280a8e1e6045f20e2cfb1d429ed97169",
+          "size": 1642
+        },
+        {
+          "git_blob": "2bba9e22a75770bb34f7017eb1f2886ecb75c4e3",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/metadata_manifest/GV-MM-02.json",
+          "sha256": "2ae3b9c937595198c378cbde2d1be90d8ab1b3799e09ba106da76a534ec0d2c6",
+          "size": 660
+        },
+        {
+          "git_blob": "f85ccd92ebf0bf5eb22c4e77ccf4af60a6f52904",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/native_transfer/GV-NT-01.json",
+          "sha256": "d8af9624f08f3e96889bd945c14897105f2f7b1f147bbdabcc8b94d5a793deea",
+          "size": 8154
+        },
+        {
+          "git_blob": "fbab4623868e8ce68e3bd187115f5548375e7cea",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/native_transfer/GV-NT-02.json",
+          "sha256": "300a8002fe03a89523023bcdf9ad83211a95889806ea5a400708bd3284675b36",
+          "size": 6612
+        },
+        {
+          "git_blob": "e4a11c95d4e9b71cb427b0e30756acfa6898e37b",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/native_transfer/GV-NT-03.json",
+          "sha256": "79cf0f53ab519bcdc0a2f8ac91bb3e67f167efa32951fb5556ca5b524e896121",
+          "size": 7515
+        },
+        {
+          "git_blob": "7490bf55c87890e6085e3c98ad9b1af57eb248af",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/native_transfer/GV-NT-04.json",
+          "sha256": "f8fbbe649ff0328cbc2b6ed3e599bf502c15139951d96bd57ec0021d304b43ea",
+          "size": 12850
+        },
+        {
+          "git_blob": "a5fa3ddb88a668bd8363a32c50e8448266e21996",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/native_transfer/GV-NT-05.json",
+          "sha256": "b26001b6f0f8dc213401ff6b6d3c46809babb3d9c81d6f58e568aa1b0c66d9a0",
+          "size": 12799
+        },
+        {
+          "git_blob": "06db2108d955431ad64599dbce84d0b5837be5dd",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/x402_settlement/GV-X4-01.json",
+          "sha256": "f5da083845bcfc3b1177c689e072e03be5e2038a9407ef1a8b544b4b41f4145b",
+          "size": 16852
+        },
+        {
+          "git_blob": "d422c09dc339ee20e9cfaa1cd31cdee4785e7024",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/x402_settlement/GV-X4-02.json",
+          "sha256": "952424db7598885fc947f08eb3834daa483f4b4fc4947ddaea2d5669fac02d8b",
+          "size": 7206
+        },
+        {
+          "git_blob": "dbaf824ec44d4bb4d703789cab67ce4e313a40d0",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/x402_settlement/GV-X4-03.json",
+          "sha256": "74d7d147c688e547a972614a6596f1d001061e9041ef6c49cbb177be0296a191",
+          "size": 3277
+        },
+        {
+          "git_blob": "043157a19befdfb838d187db3fa1028894a97157",
+          "mode": "100644",
+          "path": "tests/golden/envelope_v3/x402_settlement/GV-X4-04.json",
+          "sha256": "05a221657cc61ce9fa23ccaa151745b9b5fb9fb33280b29f72bb79a2e3df85e9",
+          "size": 8392
+        }
+      ],
+      "git_object": "4e725d08a4d66e39682a06e011285788915d912d",
+      "object_type": "tree",
+      "path": "tests/golden/envelope_v3"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 1,
+      "files": [
+        {
+          "git_blob": "256e3e6526974eae9aacad255381c0d1722e5080",
+          "mode": "100644",
+          "path": "tests/golden/treasury_snapshot/validator_parity.json",
+          "sha256": "1fdf907be694bda7985dc02034436329118dee1ad8be7ebe6915d4c6d46dfa1d",
+          "size": 2356
+        }
+      ],
+      "git_object": "256e3e6526974eae9aacad255381c0d1722e5080",
+      "object_type": "blob",
+      "path": "tests/golden/treasury_snapshot/validator_parity.json"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 18,
+      "files": [
+        {
+          "git_blob": "40f2d43d3a2298f645de6e488091c20c148c17ea",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/.gitignore",
+          "sha256": "b315553838c756a1deb88f179f7e1f576a22eb9e4424f2c0ca16ca5042a30c72",
+          "size": 610
+        },
+        {
+          "git_blob": "060df4e52331ac0323c3ce999ed3729f154a8e1d",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/Cargo.lock",
+          "sha256": "ec91d86526c54cde44954583c27124a5186f100b0f712420e76cdf0de9c4b187",
+          "size": 65248
+        },
+        {
+          "git_blob": "231dbc20dc3b78cad964b46cc2c98a42d054babc",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/Cargo.toml",
+          "sha256": "cdca4c63d818f99007cdc938912c8cc56fb1d1c0d94a60fd660be14ef8fe7dfc",
+          "size": 880
+        },
+        {
+          "git_blob": "a555b669c1fa1996ffe9eeedb247eaddca954f4e",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/Odra.toml",
+          "sha256": "5341a381ec5ca872a17ebcf8b12f74b80a9ea59cd796ed531a5e59cff7919884",
+          "size": 80
+        },
+        {
+          "git_blob": "f1c5908b4491b31d6e2c057cc673f26562978e0d",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/README.md",
+          "sha256": "8412cf28ac2e1b26704f45eef3f2fb24c887973a89226557679800da9f56280e",
+          "size": 8612
+        },
+        {
+          "git_blob": "41aa21d1de6eb84fe815c3cba94eb55f31afcba5",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/bin/build_contract.rs",
+          "sha256": "f93b4d3feb5079f39c8757f1df6c6cd221371d4eca8b3d937c37a5803b9fe6db",
+          "size": 215
+        },
+        {
+          "git_blob": "e084448f5a555d7280a685a24de6c12532b1b87f",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/bin/build_schema.rs",
+          "sha256": "6915800b6b7cda1d519fcbaa36485540cc302d6da0980fc7e19be1d55aff5949",
+          "size": 607
+        },
+        {
+          "git_blob": "f0281700aab4eba7cb0145e647ea275c4d98ee94",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/build.rs",
+          "sha256": "aaa24f800673d99ec4dba9e7790cc58d7ba01b81bd1519d09af02b2ae85a700f",
+          "size": 39
+        },
+        {
+          "git_blob": "98f0f23fc8fb938b87611c6e9500020bd6878cc9",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/deployment.manifest.json",
+          "sha256": "8e0bb06f94e392827c3596ec7da8326efc44f66c71ab1777656cea0d8eca8554",
+          "size": 2072
+        },
+        {
+          "git_blob": "748373685df225a02f42fe80a8d7bc1e44407ec4",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/resources/casper_contract_schemas/governance_receiptv3_schema.json",
+          "sha256": "a2a0ff6722731688e14dcf52612e75e95f79b78688f1f23587795d9592eff999",
+          "size": 24596
+        },
+        {
+          "git_blob": "4e356451f0b78901b7457497d4c0851ff0351e54",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/resources/legacy/governance_receiptv3_schema.json",
+          "sha256": "58285de204b713b7c5b3f4c0a9bae88dc22b067eb042232bfa974617ca41c416",
+          "size": 23924
+        },
+        {
+          "git_blob": "8d3decf4d99baa83bd545908586e716ad9b74bea",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/rust-toolchain.toml",
+          "sha256": "94e28afa9b020d08d089e44b09199cd06368842906f655c7308b8a6bc122e07c",
+          "size": 115
+        },
+        {
+          "git_blob": "905f49fe2928f7fd07dccda13783d090f22b800c",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/src/encoding.rs",
+          "sha256": "d3032adc8bc602216c2c54a6ddf7500112d583f45ad2d03db1acebe919062229",
+          "size": 17865
+        },
+        {
+          "git_blob": "0dd047a0eb84658971d5e693282a98d1b15526a8",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/src/lib.rs",
+          "sha256": "7c3447a64cde4043992a20678e0eede0d9d27513916d69ea4d71b4487cd698ae",
+          "size": 27202
+        },
+        {
+          "git_blob": "c746ec6c56c1f0cdf5d4ca023f63baddac4b35e6",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/tests/adversarial.rs",
+          "sha256": "3a9827077b096fc31e5f45f06dff8dc9c101751d0a1499d73af78454385bae0c",
+          "size": 41155
+        },
+        {
+          "git_blob": "96db2153e2d2247ae70d3b476684ae9f4fe29e09",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/tests/deployment.rs",
+          "sha256": "6ba9741d84d885bbf1900b830dbaed2a7e7df3503bd31e37c3ca16595d79900a",
+          "size": 2370
+        },
+        {
+          "git_blob": "fb44f342e97f76dc8ad290b3f293718718e4cd7a",
+          "mode": "100644",
+          "path": "contracts/odra-governance-receipt-v3/tests/encoding.rs",
+          "sha256": "45cee01591abbccdf5dee67c786fd87a0fce6abc6ba8b77d74a14591932dd5dd",
+          "size": 8453
+        },
+        {
+          "git_blob": "fb8a74f6f6527c3e88aa2d61183e7a41b17bdfbf",
+          "mode": "100755",
+          "path": "contracts/odra-governance-receipt-v3/wasm/GovernanceReceiptV3.wasm",
+          "sha256": "6605611e9649e513fe343e176d5427b317c5214c41fef340fcbb76180baa5564",
+          "size": 405099
+        }
+      ],
+      "git_object": "e12b230cd0f95503058ee38e757a142894217480",
+      "object_type": "tree",
+      "path": "contracts/odra-governance-receipt-v3"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 1,
+      "files": [
+        {
+          "git_blob": "53865c5b84ff15e0eb2d29a1d2ff4839c92134ad",
+          "mode": "100755",
+          "path": "contracts/odra-governance-receipt/wasm/GovernanceReceipt.wasm",
+          "sha256": "07e8ee2744063e0ed8c38fc9dda262a6291984ccc8ad7e6e9ccc3c2928c22c13",
+          "size": 221385
+        }
+      ],
+      "git_object": "53865c5b84ff15e0eb2d29a1d2ff4839c92134ad",
+      "object_type": "blob",
+      "path": "contracts/odra-governance-receipt/wasm/GovernanceReceipt.wasm"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 1,
+      "files": [
+        {
+          "git_blob": "e622741bafb4031fba3138fa59ab7a314e4f98c9",
+          "mode": "100644",
+          "path": "handoff/HISTORICAL_ODRA_SHA256.txt",
+          "sha256": "b062b94287c468ec0c3606ff80302700b062d8fe76fa9e0d1adb5da9ba7077a5",
+          "size": 2414
+        }
+      ],
+      "git_object": "e622741bafb4031fba3138fa59ab7a314e4f98c9",
+      "object_type": "blob",
+      "path": "handoff/HISTORICAL_ODRA_SHA256.txt"
+    },
+    {
+      "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+      "exact_blob_match": true,
+      "file_count": 1,
+      "files": [
+        {
+          "git_blob": "7472fa95133a4789f6255c8c7e8040703f5a8ac4",
+          "mode": "100644",
+          "path": "handoff/HISTORICAL_ODRA_RECEIPTS_V1.json",
+          "sha256": "3c73db58180d19e3d91e360d650c6765023487e3c5b11b3a266d40e85dc26e4d",
+          "size": 4486
+        }
+      ],
+      "git_object": "7472fa95133a4789f6255c8c7e8040703f5a8ac4",
+      "object_type": "blob",
+      "path": "handoff/HISTORICAL_ODRA_RECEIPTS_V1.json"
+    }
+  ],
+  "package": {
+    "commit": "b2cf53859b188de0bd250ea338b76fff575dee67",
+    "git_object": "cc8396159f48b655309ee6f95877baedf875926f",
+    "object_type": "tree",
+    "path": "packages/verify"
+  },
+  "prohibited_interpretation": "The included V3-named assets are verifier compatibility inputs only; they do not authorize copying V3 backend services, deployment tooling, or live mutation paths.",
+  "schema_version": 1
+}

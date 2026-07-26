@@ -1,0 +1,44 @@
+# Concordia Submission Assets Status
+
+Generated: 2026-07-01
+
+This file separates verified engineering proof from publication assets that must be supplied after the public repo and demo video are created.
+
+## Ready Technical Assets
+
+| Asset | Status | Evidence |
+|---|---|---|
+| Live app | Ready | https://concordiadao.xyz/dashboard/judge |
+| Canonical reviewer receipt | Ready | `e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852` |
+| Supplemental dynamic lifecycle proof | Ready | `DAO-PROP-DYN-002` -> `68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0` |
+| Supplemental quorum proof | Ready | `9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928` |
+| Supplemental Odra topology genesis | Ready | CouncilRegistry representative `register_agent`, TreasuryPolicy `validate_allocation`, and CardIndexLedger `seal_card_root` install/call hashes in `artifacts/live/odra-topology-genesis-proof.json` |
+| Browser wallet receipt | Ready | `56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf` |
+| SafePay Lite recorded native-CSPR proof | Ready | `dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c` |
+| IPFS archive | Ready | `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq` |
+| Proof pack | Ready | `artifacts/live/live-proof-pack-current.json` |
+| Verifier script | Ready | `scripts/verify_concordia_receipt.py` |
+| Certificate | Ready | `artifacts/live/certificate-current.html` and `artifacts/live/certificate-current.pdf` |
+| Launch roadmap | Ready | `docs/LAUNCH_ROADMAP.md` |
+| Demo script | Ready | `docs/DEMO_SCRIPT.md` |
+| DoraHacks submission text | Ready | `docs/DORAHACKS_SUBMISSION_TEXT.md` |
+| Technical jury note | Ready | `docs/TECHNICAL_JURY_NOTE.md` and `https://concordiadao.xyz/technical-jury-note` |
+
+## User-Owned Publication Assets
+
+These cannot be completed inside the repository without publishing/recording outside Codex.
+
+| Asset | Status | Required Action |
+|---|---|---|
+| Public GitHub repository URL | Pending publication | Publish the final clean ZIP/source to the public repo and paste the URL into DoraHacks. |
+| Public demo video URL | Pending recording/upload | Record the demo using `docs/DEMO_SCRIPT.md`, upload it publicly, and paste the URL into DoraHacks. |
+| X/Twitter launch post URL | Optional / pending | Post the draft from `docs/SOCIAL_LAUNCH.md` and add the URL if used. |
+| Telegram/Discord/community URL | Optional / pending | Create or link the community channel if used. |
+
+## Honest Boundary For Odra Topology
+
+The canonical reviewer proof uses the Jun 29 v1 Odra `GovernanceReceipt` receipt anchor. The Jun 30 v2 quorum-enabled GovernanceReceipt package powers the live-complete quorum exercise. The auxiliary `CouncilRegistry`, `TreasuryPolicy`, and `CardIndexLedger` modules are captured as supplemental topology genesis proof in `artifacts/live/odra-topology-genesis-proof.json`: CouncilRegistry through a representative `register_agent` call, TreasuryPolicy through `validate_allocation`, and CardIndexLedger through `seal_card_root`.
+
+The topology genesis proof is supplemental. It proves auxiliary module execution, but it does not replace the canonical reviewer receipt or claim Concordia is a fully productized four-contract DAO suite.
+
+The canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless fully evidenced and signed; full cross-contract production enforcement is roadmap, not overclaimed.

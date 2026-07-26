@@ -1,0 +1,31 @@
+{
+  "canonical_hex": null,
+  "canonical_length": null,
+  "description": "Duplicate metadata names are rejected before canonicalization.",
+  "expected_error": {
+    "code": null,
+    "name": "DuplicateArgumentName"
+  },
+  "hashes": {},
+  "kind": "authorized_metadata_manifest_v1",
+  "typed_input": {
+    "entries_in_input_order": [
+      {
+        "name": "network",
+        "type": "String",
+        "value": "casper-test"
+      },
+      {
+        "name": "network",
+        "type": "String",
+        "value": "casper:casper-test"
+      }
+    ],
+    "version": {
+      "type": "u32",
+      "value": "1"
+    }
+  },
+  "valid": false,
+  "vector_id": "GV-MM-02"
+}
