@@ -7,7 +7,7 @@ This note records the submission-risk fixes made after reviewing the final integ
 1. **Ecosystem-tooling honesty**
    - `README.md` now includes an integration truth table.
    - The required proof path is explicitly limited to Casper Testnet receipt anchoring through Locke, the receipt contract, and the Casper execution adapter.
-   - Odra, IPFS, CSPR.cloud, external MCP, CSPR.trade MCP, and CSPR.click are documented by their actual status. SafePay Lite is limited to recorded native-CSPR evidence; official x402 is not shipped.
+   - Odra, IPFS, CSPR.cloud, external MCP, CSPR.trade MCP, and CSPR.click are documented by their actual status. SafePay Lite is limited to recorded native-CSPR evidence; Casper-native x402 v2 is deployed and `https://concordiadao.xyz/x402/governance-report` exposes a live public HTTP 402 challenge; the recorded `casper-transfer` settlement finalized successfully on Casper Testnet. No external facilitator service is claimed.
 
 2. **MCP live network boundary**
    - `shared/cspr_cloud.py:get_node_status()` performs a real Casper Node JSON-RPC `info_get_status` call unless `CASPER_MCP_OFFLINE_MOCK=1`.

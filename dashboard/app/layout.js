@@ -26,9 +26,9 @@ export const metadata = {
   title: "Concordia - Evidence-Bound DAO Governance Council",
   description: "Recorded Casper Testnet governance evidence, bounded agent deliberation, human quorum, and exact approved execution.",
   icons: {
-    icon: "/dashboard/concordia-dao-logo-final.png",
-    shortcut: "/dashboard/concordia-dao-logo-final.png",
-    apple: "/dashboard/concordia-dao-logo-final.png",
+    icon: "/dashboard/concordia-dao-logo-final.webp",
+    shortcut: "/dashboard/concordia-dao-logo-final.webp",
+    apple: "/dashboard/concordia-dao-apple-touch.png",
   },
 };
 
