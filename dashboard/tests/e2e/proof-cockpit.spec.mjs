@@ -151,6 +151,26 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     await expect(page.getByRole("tablist", { name: "Proof Center sections" })).toBeVisible();
   });
 
+  test("advanced signing controls are expanded by default", async ({ page }) => {
+    await gotoDashboardRoute(page, "/dashboard/proof?tab=onchain");
+    await expect(page.getByRole("button", { name: "On-chain" })).toHaveClass(/active/);
+    await expect(page.locator("details.advanced-actions")).toHaveAttribute("open", "");
+    await expect(page.locator("details.advanced-actions").getByText("Request Casper Wallet Signature")).toBeVisible();
+  });
+
+  test("mobile sidebar footer has visible bottom clearance", async ({ page }) => {
+    await page.setViewportSize({ width: 542, height: 1534 });
+    await gotoDashboardRoute(page, "/dashboard/proof");
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const footer = page.locator(".sidebar-version");
+    await expect(footer).toBeVisible();
+    const bounds = await footer.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { bottom: box.bottom, viewport: window.innerHeight };
+    });
+    expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewport - 20);
+  });
+
   test("judge walkthrough exposes wallet sandbox and proof center deep-links to on-chain preview", async ({ page }) => {
     await gotoDashboardRoute(page, "/dashboard/judge");
     await expect(page.getByRole("heading", { name: "Live wallet / testnet sandbox" })).toBeVisible();

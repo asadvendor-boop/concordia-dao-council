@@ -151,3 +151,9 @@ test("proposal workspace does not reference approval-only decision state", () =>
   assert.notEqual(approvalStart, -1);
   assert.doesNotMatch(app.slice(workspaceStart, approvalStart), /decisionState/);
 });
+
+test("judge evidence disclosures are visible by default", () => {
+  const app = readFileSync(new URL("../../app/_components/ConcordiaApp.js", import.meta.url), "utf8");
+  assert.match(app, /const \[showAll, setShowAll\] = useState\(true\);/);
+  assert.match(app, /<details className="advanced-actions" open>/);
+});
