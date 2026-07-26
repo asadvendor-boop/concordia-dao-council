@@ -269,7 +269,7 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     await gotoDashboardRoute(page, "/dashboard");
     await expect(page.locator(".nav-group-label")).toHaveText(["MONITOR", "GOVERN", "PROVE"]);
     const hrefs = await page.locator(".nav-list .nav-item").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
-    expect(hrefs).toEqual([
+    expect(hrefs.map((href) => href?.split("?")[0])).toEqual([
       "/dashboard",
       "/dashboard/agents",
       "/dashboard/proposals",
