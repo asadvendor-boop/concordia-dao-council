@@ -142,3 +142,12 @@ test("production data requests stay same-origin for the shared-host gateway rout
   assert.match(app, /const GW = process\.env\.NEXT_PUBLIC_GATEWAY_URL \|\| "";/);
   assert.doesNotMatch(app, /const GW = [^;]*127\.0\.0\.1/);
 });
+
+test("proposal workspace does not reference approval-only decision state", () => {
+  const app = readFileSync(new URL("../../app/_components/ConcordiaApp.js", import.meta.url), "utf8");
+  const workspaceStart = app.indexOf("function ProposalWorkspacePage");
+  const approvalStart = app.indexOf("function ApprovalPage", workspaceStart);
+  assert.notEqual(workspaceStart, -1);
+  assert.notEqual(approvalStart, -1);
+  assert.doesNotMatch(app.slice(workspaceStart, approvalStart), /decisionState/);
+});
