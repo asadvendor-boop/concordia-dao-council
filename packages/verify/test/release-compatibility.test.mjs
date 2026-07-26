@@ -80,13 +80,13 @@ const V_0_1_1_PUBLIC_API = Object.freeze([
   "withMode",
 ]);
 
-test("0.1.3 keeps every 0.1.2 public API export", () => {
+test("0.1.4 keeps every 0.1.3 public API export", () => {
   const current = new Set(Object.keys(verifier));
   const missing = V_0_1_1_PUBLIC_API.filter((name) => !current.has(name));
   assert.deepEqual(missing, []);
 });
 
-test("0.1.3 retains distinct fail-closed outcomes", () => {
+test("0.1.4 retains distinct fail-closed outcomes", () => {
   assert.deepEqual(verifier.EXIT_CODES, {
     VERIFIED: 0,
     INVALID: 2,

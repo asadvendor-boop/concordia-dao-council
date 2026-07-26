@@ -3,7 +3,7 @@
 Read-only, fail-closed verification for Concordia V1 receipts, proof registries,
 and historical compatibility artifacts.
 
-Version 0.1.3 is V1-first and remains an API/parser/refusal superset of 0.1.2.
+Version 0.1.4 is V1-first and remains an API/parser/refusal superset of 0.1.3.
 It does not sign, broadcast, settle, or mutate.
 
 ## V1.5 truth boundary
@@ -38,7 +38,7 @@ Only `verified` is success. Summary booleans never override recomputed facts.
 ## Install
 
 ```bash
-npm install @concordia-dao/verify@0.1.3
+npm install @concordia-dao/verify@0.1.4
 ```
 
 Node.js 20 or newer is required.
@@ -143,9 +143,9 @@ The package ships no default RPC endpoints and accepts no RPC credentials.
 ## Release authentication
 
 `0.1.0` was operator-published without an npm provenance attestation and is
-deprecated. `0.1.1` and `0.1.2` remain supported historical releases.
+deprecated. `0.1.1`, `0.1.2`, and `0.1.3` remain supported historical releases.
 
-`0.1.3` is the provenance-strengthened V1.5 package version. Source metadata
+`0.1.4` is the provenance-strengthened V1.5 package version. Source metadata
 alone does not prove it is published. The pinned
 `.github/workflows/publish-verifier.yml` workflow must:
 

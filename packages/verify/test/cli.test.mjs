@@ -28,17 +28,17 @@ function run(...args) {
   });
 }
 
-test("0.1.3 metadata is V1-first and requires workflow provenance", async () => {
+test("0.1.4 metadata is V1-first and requires workflow provenance", async () => {
   const metadata = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
   const readme = await readFile(path.join(PACKAGE_ROOT, "README.md"), "utf8");
-  assert.equal(metadata.version, "0.1.3");
+  assert.equal(metadata.version, "0.1.4");
   assert.deepEqual(metadata.publishConfig, { access: "public" });
   assert.equal(Object.hasOwn(metadata.publishConfig, "provenance"), false);
   assert.equal(Object.hasOwn(metadata.scripts, "publish"), false);
   assert.match(readme, /`0\.1\.0` was operator-published without an npm provenance attestation/i);
   assert.match(readme, /deprecated/i);
-  assert.match(readme, /`0\.1\.1` and `0\.1\.2` remain supported historical releases/i);
-  assert.match(readme, /`0\.1\.3` is the provenance-strengthened V1\.5 package version/i);
+  assert.match(readme, /`0\.1\.1`, `0\.1\.2`, and `0\.1\.3` remain supported historical releases/i);
+  assert.match(readme, /`0\.1\.4` is the provenance-strengthened V1\.5 package version/i);
   assert.match(readme, /DAO-PROP-6CB25C/);
   assert.doesNotMatch(readme, /DAO-PROP-EXAMPLE/);
   assert.match(readme, /Casper-native x402 v2 exposes a live HTTP 402 challenge/i);

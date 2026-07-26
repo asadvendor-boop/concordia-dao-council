@@ -72,6 +72,10 @@ const provenance = document.attestations?.find(
   (item) => item?.predicateType === "https://slsa.dev/provenance/v1",
 );
 record("provenance present in bundle", Boolean(provenance?.bundle?.dsseEnvelope?.payload));
+if (!provenance?.bundle?.dsseEnvelope?.payload) {
+  console.error("npm provenance bundle has not propagated yet");
+  process.exit(75);
+}
 
 const statement = JSON.parse(
   Buffer.from(provenance.bundle.dsseEnvelope.payload, "base64").toString("utf8"),

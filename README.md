@@ -162,10 +162,10 @@ node scripts/check-package-files.mjs
 The verifier package has no signer, wallet, secret loader, settlement, or
 mutation capability.
 
-## npm verifier 0.1.3
+## npm verifier 0.1.4
 
-`@concordia-dao/verify` 0.1.3 is a provenance-strengthened V1-first compatibility
-superset of 0.1.2. All 0.1.2 public exports, parsers, adapters, outcome codes, and
+`@concordia-dao/verify` 0.1.4 is a provenance-strengthened V1-first compatibility
+superset of 0.1.3. All 0.1.3 public exports, parsers, adapters, outcome codes, and
 fail-closed refusals remain. Historical V2/V3 parsers remain available only so
 existing evidence consumers do not regress.
 
@@ -177,7 +177,7 @@ public `main` SHA as `gitHead`, while npm's signed provenance attestation binds
 the package to the authorized GitHub Actions workflow.
 
 - Package target:
-  [@concordia-dao/verify 0.1.3](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3)
+  [@concordia-dao/verify 0.1.4](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.4)
 - Package-specific documentation:
   [packages/verify/README.md](packages/verify/README.md)
 
@@ -198,7 +198,7 @@ the human-approval and fail-closed boundaries.
 - Documentation: <https://docs.concordiadao.xyz>
 - Source: <https://github.com/asadvendor-boop/concordia-dao-council>
 - npm target:
-  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3>
+  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.4>
 - X: <https://x.com/ConcordiaDAO>
 
 ## License

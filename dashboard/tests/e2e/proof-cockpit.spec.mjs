@@ -257,7 +257,7 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
       "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
       "https://docs.concordiadao.xyz/",
       "https://github.com/asadvendor-boop/concordia-dao-council",
-      "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3",
+      "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.4",
       "https://x.com/ConcordiaDAO",
     ]);
     const landingHrefs = await page.locator("a").evaluateAll((links) => links.map((link) => link.href));
