@@ -50,7 +50,7 @@ def test_npm_publish_is_manual_oidc_exact_main_tip_and_shared_verification() -> 
     workflow = _workflow("publish-verifier.yml")
     assert set(workflow["on"]) == {"workflow_dispatch"}
     dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
-    assert dispatch["version"]["default"] == "0.1.3"
+    assert dispatch["version"]["default"] == "0.1.4"
 
     publish = workflow["jobs"]["publish"]
     assert publish["environment"] == "npm-production"
@@ -86,7 +86,7 @@ def test_npm_publish_is_manual_oidc_exact_main_tip_and_shared_verification() -> 
     read_only = _workflow("verify-published-release.yml")
     assert (
         read_only["on"]["workflow_dispatch"]["inputs"]["version"]["default"]
-        == "0.1.3"
+        == "0.1.4"
     )
     assert read_only["jobs"]["verify"]["permissions"] == {"contents": "read"}
     assert "id-token" not in read_only["jobs"]["verify"]["permissions"]
@@ -186,15 +186,15 @@ def test_mkdocs_navigation_is_v1_5_scoped_and_all_links_resolve() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_verifier_0_1_3_metadata_and_docs_are_v1_first_compatibility_superset() -> None:
+def test_verifier_0_1_4_metadata_and_docs_are_v1_first_compatibility_superset() -> None:
     package_root = ROOT / "packages" / "verify"
     package = json.loads((package_root / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((package_root / "package-lock.json").read_text(encoding="utf-8"))
     readme = (package_root / "README.md").read_text(encoding="utf-8")
 
-    assert package["version"] == "0.1.3"
-    assert lock["version"] == "0.1.3"
-    assert lock["packages"][""]["version"] == "0.1.3"
+    assert package["version"] == "0.1.4"
+    assert lock["version"] == "0.1.4"
+    assert lock["packages"][""]["version"] == "0.1.4"
     assert package["description"].lower().startswith(
         "read-only, fail-closed verifier for concordia v1"
     )
