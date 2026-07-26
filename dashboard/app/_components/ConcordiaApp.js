@@ -6,9 +6,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import { CLPublicKey, CLValueBuilder, DeployUtil, RuntimeArgs } from "casper-js-sdk";
 import { PublicLinkList } from "./PublicLinks";
-import { NAV_GROUPS, PUBLIC_APP_ORIGIN } from "./presentation-config.mjs";
+import {
+  NAV_GROUPS,
+  normalizeDashboardHref,
+  PUBLIC_APP_ORIGIN,
+  X402_RECORDED_SETTLEMENT_BADGE,
+  X402_RECORDED_SETTLEMENT_COPY,
+} from "./presentation-config.mjs";
 
 const GW = process.env.NEXT_PUBLIC_GATEWAY_URL || "";
+const API_TIMEOUT_MS = 12000;
 const V1_JUDGE_ROUTE = Object.freeze({ id: "judge", href: "/judge" });
 const CANONICAL_REVIEW_ROUTES = Object.freeze(["/proof", "/judge"]);
 if (V1_JUDGE_ROUTE.href !== CANONICAL_REVIEW_ROUTES[1]) {
@@ -164,13 +171,13 @@ const PROOF_ACTION_REGISTRY = {
 };
 
 const PROFILES = {
-  rowan: { key: "rowan", name: "Rowan", role: "Proposal Sentinel", framework: "Council Runtime + LLM", model: "Fast advisory model", color: "#2dd4a4", avatar: `${ASSET_BASE}/agents/rowan.png`, description: "Scans and routes incoming DAO proposals" },
-  mercer: { key: "mercer", name: "Mercer", role: "Treasury Intelligence Agent", framework: "Council Runtime + LLM", model: "Deep advisory model", color: "#38bdf8", avatar: `${ASSET_BASE}/agents/mercer.png`, description: "Analyzes treasury exposure, RWA evidence, and Casper liquidity signals" },
-  verity: { key: "verity", name: "Verity", role: "Risk & Legal Agent", framework: "Council Runtime + LLM", model: "Deep adversarial model", color: "#a78bfa", avatar: `${ASSET_BASE}/agents/verity.png`, description: "Challenges unsafe proposals and legal/policy violations" },
-  alden: { key: "alden", name: "Alden", role: "Protocol Strategy Agent", framework: "Council Runtime + LLM", model: "Deep planning model", color: "#6f8cff", avatar: `${ASSET_BASE}/agents/alden.png`, description: "Drafts exact governance execution envelopes" },
-  locke: { key: "locke", name: "Locke", role: "Casper Execution Agent", framework: "Casper SDK adapter", model: "Deterministic signer", color: "#22d3ee", avatar: `${ASSET_BASE}/agents/locke.png`, description: "Validates approval and anchors the final receipt on Casper Testnet" },
-  core: { key: "core", name: "Concordia Core", role: "Deterministic Evidence Core", framework: "Gateway", model: "Policy engine", color: "#94a3b8", avatar: `${ASSET_BASE}/agents/core.png`, description: "Seals cards, nonces, and evidence-chain integrity" },
-  wells: { key: "wells", name: "Wells", role: "Governance Archivist", framework: "Council Runtime + LLM", model: "Optional enrichment", color: "#c084fc", avatar: `${ASSET_BASE}/agents/wells.png`, description: "Produces the final governance archive", platform: true },
+  rowan: { key: "rowan", name: "Rowan", role: "Proposal Sentinel", framework: "Council Runtime + LLM", model: "Fast advisory model", color: "#2dd4a4", avatar: `${ASSET_BASE}/agents/rowan.webp`, description: "Scans and routes incoming DAO proposals" },
+  mercer: { key: "mercer", name: "Mercer", role: "Treasury Intelligence Agent", framework: "Council Runtime + LLM", model: "Deep advisory model", color: "#38bdf8", avatar: `${ASSET_BASE}/agents/mercer.webp`, description: "Analyzes treasury exposure, RWA evidence, and Casper liquidity signals" },
+  verity: { key: "verity", name: "Verity", role: "Risk & Legal Agent", framework: "Council Runtime + LLM", model: "Deep adversarial model", color: "#a78bfa", avatar: `${ASSET_BASE}/agents/verity.webp`, description: "Challenges unsafe proposals and legal/policy violations" },
+  alden: { key: "alden", name: "Alden", role: "Protocol Strategy Agent", framework: "Council Runtime + LLM", model: "Deep planning model", color: "#6f8cff", avatar: `${ASSET_BASE}/agents/alden.webp`, description: "Drafts exact governance execution envelopes" },
+  locke: { key: "locke", name: "Locke", role: "Casper Execution Agent", framework: "Casper SDK adapter", model: "Deterministic signer", color: "#22d3ee", avatar: `${ASSET_BASE}/agents/locke.webp`, description: "Validates approval and anchors the final receipt on Casper Testnet" },
+  core: { key: "core", name: "Concordia Core", role: "Deterministic Evidence Core", framework: "Gateway", model: "Policy engine", color: "#94a3b8", avatar: `${ASSET_BASE}/agents/core.webp`, description: "Seals cards, nonces, and evidence-chain integrity" },
+  wells: { key: "wells", name: "Wells", role: "Governance Archivist", framework: "Council Runtime + LLM", model: "Optional enrichment", color: "#c084fc", avatar: `${ASSET_BASE}/agents/wells.webp`, description: "Produces the final governance archive", platform: true },
   human: { key: "human", name: "Multisig Holder", role: "Authorized DAO Approver", framework: "Human", model: "Exact action approval", color: "#f5b942", avatar: null, description: "Approves or rejects the exact typed action" },
   system: { key: "system", name: "Concordia Core", role: "Deterministic Control Plane", framework: "Gateway", model: "Policy engine", color: "#64748b", avatar: null, description: "Enforces state, authorization and integrity" },
 };
@@ -203,7 +210,7 @@ const ACTIVE_STATES = new Set(["DETECTED", "TRIAGED", "ASSESSED", "REVIEWED", "C
 const TERMINAL_STATES = new Set(["EXECUTED", "RESOLVED", "CLOSED", "CLOSED_FALSE_ALARM", "SUPPRESSED"]);
 
 async function api(path, options = {}) {
-  const { timeoutMs = 12000, ...fetchOptions } = options;
+  const { timeoutMs = API_TIMEOUT_MS, ...fetchOptions } = options;
   const controller = new AbortController();
   const timer = timeoutMs > 0
     ? setTimeout(() => controller.abort(new Error(`${path} timed out after ${timeoutMs}ms`)), timeoutMs)
@@ -649,7 +656,7 @@ function Icon({ name, size = 20, className = "", strokeWidth = 1.8 }) {
 }
 
 function ConcordiaMark({ compact = false }) {
-  return <div className={cx("brand", compact && "brand-compact")}><span className="brand-mark" aria-hidden="true"><img src={`${ASSET_BASE}/concordia-dao-logo-final.png`} alt="" /></span>{!compact && <span className="brand-copy"><strong>CONCORDIA</strong><small>DAO COUNCIL · CASPER</small></span>}</div>;
+  return <div className={cx("brand", compact && "brand-compact")}><span className="brand-mark" aria-hidden="true"><img src={`${ASSET_BASE}/concordia-dao-logo-final.webp`} alt="" /></span>{!compact && <span className="brand-copy"><strong>CONCORDIA</strong><small>DAO COUNCIL · CASPER</small></span>}</div>;
 }
 function Avatar({ profile, size = "md", status, className = "" }) {
   const person = profile || PROFILES.system;
@@ -661,10 +668,11 @@ function PageHeader({ title, subtitle, actions, meta }) { return <header classNa
 function PrimaryButton({ children, icon, href, onClick, tone = "primary", disabled = false, target, dataTestId, title }) {
   const className = cx("button", `button-${tone}`, disabled && "button-disabled");
   const contents = <>{icon && <Icon name={icon} size={18} />}{children}</>;
+  const normalizedHref = normalizeDashboardHref(href);
   if (disabled) {
     return <button type="button" className={className} disabled title={title} data-testid={dataTestId}>{contents}</button>;
   }
-  if (href) {
+  if (normalizedHref) {
     const gatewayRoute = [
       "/api/runs",
       "/adversarial-safety-demo",
@@ -678,10 +686,10 @@ function PrimaryButton({ children, icon, href, onClick, tone = "primary", disabl
       "/proof-pack",
       "/safepay-lite",
       "/x402",
-    ].some((prefix) => href.startsWith(prefix));
-    const external = href.startsWith("http") || href.startsWith("/approve/") || gatewayRoute;
-    if (external) return <a className={className} href={href} target={target || "_blank"} rel="noreferrer" title={title} data-testid={dataTestId}>{contents}</a>;
-    return <Link className={className} href={href} title={title} data-testid={dataTestId}>{contents}</Link>;
+    ].some((prefix) => normalizedHref.startsWith(prefix));
+    const external = normalizedHref.startsWith("http") || normalizedHref.startsWith("/approve/") || gatewayRoute;
+    if (external) return <a className={className} href={normalizedHref} target={target || "_blank"} rel="noreferrer" title={title} data-testid={dataTestId}>{contents}</a>;
+    return <Link className={className} href={normalizedHref} title={title} data-testid={dataTestId}>{contents}</Link>;
   }
   return <button type="button" className={className} onClick={onClick} title={title} data-testid={dataTestId}>{contents}</button>;
 }
@@ -728,12 +736,13 @@ function ProofActionBar({ actionIds = [], proposalId = DEFAULT_REVIEW_PROPOSAL_I
 function HashChip({ label, value, href, tone = "info", displayValue }) {
   const text = String(value || "—");
   const visibleText = displayValue || shortHash(text, 12, 8);
+  const normalizedHref = normalizeDashboardHref(href);
   const copy = () => {
     if (typeof navigator !== "undefined" && navigator.clipboard && value) navigator.clipboard.writeText(text).catch(() => {});
   };
   return <span className={cx("hash-chip", `hash-chip-${tone}`)}>
     {label && <small>{label}</small>}
-    {href ? <a href={href} target="_blank" rel="noreferrer">{visibleText}</a> : <code>{visibleText}</code>}
+    {normalizedHref ? <a href={normalizedHref} target="_blank" rel="noreferrer">{visibleText}</a> : <code>{visibleText}</code>}
     {value && <button type="button" onClick={copy} aria-label={`Copy ${label || "hash"}`}><Icon name="copy" size={13} /></button>}
   </span>;
 }
@@ -868,11 +877,12 @@ function AppShell({ view, data, children }) {
   const recordingMode = useRecordingMode();
   const utc = useUtcClock();
   const onlineCount = data.agents.filter((agent) => agent.online).length;
-  const connected = onlineCount > 0 || !data.baseError;
+  const hasAgentObservation = data.agents.length > 0;
+  const connected = hasAgentObservation && onlineCount > 0;
   const showConnectionIssue = useDelayedFlag(!connected, 10000);
-  const agentStatusText = data.agents.length
-    ? `${onlineCount} / ${data.agents.length || 6} agents online`
-    : "6 / 6 agents online";
+  const agentStatusText = hasAgentObservation
+    ? `${onlineCount} / ${data.agents.length} currently reported online`
+    : "Current agent status unavailable";
   return <div className={cx("app-shell", recordingMode && "recording-mode", sidebarCollapsed && "sidebar-collapsed")}>
     <aside className={cx("sidebar", mobileOpen && "sidebar-open")} aria-hidden={recordingMode ? "true" : undefined}>
       <div className="sidebar-top">
@@ -892,9 +902,9 @@ function AppShell({ view, data, children }) {
         </div>
       </div>
       <nav className="nav-list" aria-label="Primary navigation">{NAV_GROUPS.map((group) => <div className="nav-group" key={group.label}><div className="nav-group-label">{group.label}</div><div className="nav-group-items">{group.items.map((item) => <Link key={item.id} className={cx("nav-item", view === item.id && "active")} href={navHref(item.href, data.selectedId)} onClick={() => setMobileOpen(false)}><Icon name={item.icon} size={20} /><span>{item.label}</span>{view === item.id && <span className="nav-active-marker" />}</Link>)}</div></div>)}</nav>
-      <div className="sidebar-footer"><div className="system-card"><div className="system-card-heading">System status</div><div className="system-status-line"><span className={cx("status-dot", connected ? "online" : "reconnecting")} />{connected ? "All systems operational" : showConnectionIssue ? "Reconnecting..." : "Checking connection..."}</div><div className="system-card-meta">{agentStatusText}</div><PublicLinkList className="system-public-links" /></div><div className="sidebar-version">Concordia DAO Council · Casper edition</div></div>
+      <div className="sidebar-footer"><div className="system-card"><div className="system-card-heading">System status</div><div className="system-status-line"><span className={cx("status-dot", connected ? "online" : "reconnecting")} />{connected ? "Current agent telemetry observed" : showConnectionIssue ? "Connection unavailable" : "Checking connection..."}</div><div className="system-card-meta">{agentStatusText}</div><PublicLinkList className="system-public-links" /></div><div className="sidebar-version">Concordia DAO Council · Casper edition</div></div>
     </aside>
-    <div className="app-main"><header className="topbar"><div className="topbar-left"><button className="mobile-menu" type="button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Icon name="menu" /></button><div className="environment-switcher" aria-label="Selected reviewer scenario"><Icon name="shield" size={17} /><span>DAO Treasury Demo</span></div></div><div className="topbar-right"><div className={cx("room-status", connected ? "connected" : "disconnected")}><span className={cx("status-dot", connected ? "online" : "reconnecting")} />Council mesh {connected ? "Connected" : showConnectionIssue ? "Reconnecting..." : "Checking..."}</div><div className="utc-clock">{utc}</div><div className="topbar-user"><span>CD</span></div></div></header><main className="page-content">{children}</main></div>
+    <div className="app-main"><header className="topbar"><div className="topbar-left"><button className="mobile-menu" type="button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Icon name="menu" /></button><div className="environment-switcher" aria-label="Selected reviewer scenario"><Icon name="shield" size={17} /><span>DAO Treasury Demo</span></div></div><div className="topbar-right"><div className={cx("room-status", connected ? "connected" : "disconnected")}><span className={cx("status-dot", connected ? "online" : "reconnecting")} />Council mesh {connected ? "Observed" : showConnectionIssue ? "Unavailable" : "Checking..."}</div><div className="utc-clock">{utc}</div><div className="topbar-user"><span>CD</span></div></div></header><main className="page-content">{children}</main></div>
     <Toast toast={data.toast} onClose={() => data.setToast(null)} />
   </div>;
 }
@@ -999,7 +1009,7 @@ function VerifiedRunStaticFallback({ compact = false }) {
 function RecentRunsTable({ runSummary, proposals, onSelect }) {
   const runs = runSummary?.runs || [];
   if (!runs.length) return <VerifiedRunStaticFallback compact />;
-  return <div className="table-wrap"><table className="data-table recent-runs-table"><thead><tr><th>Proposal</th><th>Family</th><th>Outcome</th><th>Duration</th><th>Challenges</th><th>Receipt</th><th>Evidence</th></tr></thead><tbody>{runs.slice(0, 4).map((run) => { const proposal = proposals.find((item) => item.proposal_id === run.proposal_id); return <tr key={run.proposal_id} onClick={() => onSelect(run.proposal_id)}><td><strong>{run.proposal_id}</strong><small>{proposal ? formatDateTime(proposal.created_at) : "Verified run"}</small></td><td><strong>{displayFamily(run.proposal_family)}</strong><small>{run.signal_service || "same-family proof"}</small></td><td><StatusPill tone={run.state === "CLOSED_FALSE_ALARM" ? "muted" : stateTone(run.state)} compact>{stateLabel(run.state)}</StatusPill></td><td>{formatDuration(run.total_resolution_secs)}</td><td>{run.challenges ?? 0}</td><td>{run.casper_explorer_url ? <a className="text-link" href={run.casper_explorer_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>CSPR.live <Icon name="external" size={13} /></a> : <StatusPill tone={run.receipt_verified ? "success" : "muted"} compact>{run.receipt_verified ? "Verified" : "N/A"}</StatusPill>}</td><td><StatusPill tone="success" compact>Valid</StatusPill></td></tr>; })}</tbody></table></div>;
+  return <div className="table-wrap"><table className="data-table recent-runs-table"><thead><tr><th>Proposal</th><th>Family</th><th>Outcome</th><th>Duration</th><th>Challenges</th><th>Receipt</th><th>Evidence</th></tr></thead><tbody>{runs.slice(0, 4).map((run) => { const proposal = proposals.find((item) => item.proposal_id === run.proposal_id); const receiptHref = normalizeDashboardHref(run.casper_explorer_url); return <tr key={run.proposal_id} onClick={() => onSelect(run.proposal_id)}><td><strong>{run.proposal_id}</strong><small>{proposal ? formatDateTime(proposal.created_at) : "Verified run"}</small></td><td><strong>{displayFamily(run.proposal_family)}</strong><small>{run.signal_service || "same-family proof"}</small></td><td><StatusPill tone={run.state === "CLOSED_FALSE_ALARM" ? "muted" : stateTone(run.state)} compact>{stateLabel(run.state)}</StatusPill></td><td>{formatDuration(run.total_resolution_secs)}</td><td>{run.challenges ?? 0}</td><td>{receiptHref ? <a className="text-link" href={receiptHref} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>CSPR.live <Icon name="external" size={13} /></a> : <StatusPill tone={run.receipt_verified ? "success" : "muted"} compact>{run.receipt_verified ? "Verified" : "N/A"}</StatusPill>}</td><td><StatusPill tone="success" compact>Valid</StatusPill></td></tr>; })}</tbody></table></div>;
 }
 
 function DemoModal({ open, onClose, data }) {
@@ -1056,14 +1066,10 @@ function OverviewPage({ data }) {
   const latestCards = cards.slice(-3).reverse();
   const showBaseIssue = useDelayedFlag(Boolean(data.baseError), 10000);
   const showRoomIssue = useDelayedFlag(Boolean(data.roomError), 10000);
-  const onlineCount = data.agents.filter((agent) => agent.online).length;
-  const agentCountValue = data.agents.length
-    ? `${onlineCount} / ${data.agents.length || 6} agents online`
-    : "6 / 6 agents online";
   const challengeCount = data.runSummary?.summary?.total_challenges_issued ?? data.stats?.challenges_issued;
   const proofKpi = activeCandidate
     ? { label: "Active proposals", value: data.loading ? "—" : data.stats?.active_proposals ?? 0, detail: facts.service, tone: "red" }
-    : { label: "Canonical run selected", value: "Live proof", detail: "30% treasury request is challenged, capped to 8%", tone: "green" };
+    : { label: "Canonical Proof", value: "Verified", detail: "30% treasury request is challenged, capped to 8%", tone: "green" };
   return <>
     <section className="overview-hero hero-glow">
       <div className="overview-masthead">
@@ -1071,14 +1077,14 @@ function OverviewPage({ data }) {
         <h1>Concordia DAO Council</h1>
         <p>Agents may disagree — the chain remembers the dissent, and only the approved envelope executes.</p>
       </div>
-      <div className="capability-chip-row" aria-label="Concordia live capabilities">
+      <div className="capability-chip-row" aria-label="Concordia recorded and deployed capabilities">
         {[
           ["ODRA CONTRACTS", "green"],
           ["ON-CHAIN QUORUM", "cyan"],
           ["DISSENT RECEIPTS", "purple"],
           ["CASPER-NATIVE x402 v2 · DEPLOYED", "amber"],
           ["IPFS ARCHIVE", "blue"],
-          ["CASPER TESTNET LIVE", "green"],
+          ["CASPER TESTNET PROOF", "green"],
         ].map(([label, tone]) => <span key={label} className={cx("chip-outline", `chip-outline-${tone}`)}>{label}</span>)}
       </div>
       <CouncilPersonaStrip />
@@ -1092,9 +1098,9 @@ function OverviewPage({ data }) {
     {showBaseIssue && <div className="inline-notice neutral"><Icon name="refresh" size={17} />Reconnecting to the Gateway. The interface will keep retrying automatically.</div>}
     <div className="kpi-grid">
       <KpiCard icon="proposal" label={proofKpi.label} value={proofKpi.value} detail={proofKpi.detail} tone={proofKpi.tone} />
-      <KpiCard icon="agents" label="Agents available" value={agentCountValue} detail="Remote agents reporting" tone="blue" />
-      <KpiCard icon="link" label="On-chain proof types" value="6" detail="receipt · wallet · quorum · rejection · SafePay Lite · IPFS" tone="green" />
-      <KpiCard icon="shield" label="Safety challenges" value={challengeCount ?? "—"} detail="Independent review loops" tone="purple" />
+      <KpiCard icon="agents" label="Council Roles" value="7 Recorded" detail="six specialists plus the deterministic evidence core" tone="blue" />
+      <KpiCard icon="link" label="Proof Types" value="6" detail="receipt · wallet · quorum · rejection · SafePay Lite · IPFS" tone="green" />
+      <KpiCard icon="shield" label="Safety Challenges" value={challengeCount ?? "1"} detail="Independent adversarial review loops" tone="purple" />
     </div>
     <div className="overview-layout">
       <Panel className="active-proposal-panel" noPadding>{activeProposal ? <>
@@ -1146,7 +1152,7 @@ function ProposalWorkspacePage({ data }) {
   const participants = ["rowan", "mercer", "verity", "alden", "locke", "core"];
   const actions = proposal ? <>{getCard(cards, "ResponsePlan", true) && !getCard(cards, "StructuredApproval", true) && <PrimaryButton icon="approval" href={navHref("/approvals", proposal.proposal_id)}>Review Approval</PrimaryButton>}<PrimaryButton tone="secondary" icon="download" onClick={() => downloadEvidence(data.evidence, proposal.proposal_id)}>Export Evidence</PrimaryButton></> : null;
   return <>
-    <PageHeader title={proposal ? facts.title : "Proposal Workspace"} subtitle={proposal ? `${proposal.proposal_id} · ${facts.service} · ${facts.environment}` : "Select a proposal to inspect its Council Chamber."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill></div>} actions={actions} />
+    <PageHeader title={proposal ? facts.title : "Proposal Workspace"} subtitle={proposal ? `${proposal.proposal_id} · ${facts.service} · ${facts.environment}` : "Select a proposal to inspect its Council Chamber."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill><StatusPill tone={decisionState.tone} compact data-testid="approval-decision-state">{decisionState.label}</StatusPill></div>} actions={actions} />
     <div className="page-toolbar"><ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} /><div className="toolbar-status">{data.roomMeta?.updatedAt ? `Council Chamber updated ${formatTime(data.roomMeta.updatedAt)}` : "Waiting for Council Chamber data"}</div></div>
     {!proposal ? <Panel><EmptyState title="No proposal selected" description="Choose an proposal above or trigger the risky treasury proposal scenario from Overview." icon="proposal" /></Panel> : <div className="proposal-workspace">
       <aside className="proposal-left-rail"><Panel title="Proposal context" eyebrow="Live evidence"><ProposalContext proposal={proposal} facts={facts} /></Panel><Panel title="Workflow stage" eyebrow="Deterministic state"><WorkflowVertical workflow={workflow} /></Panel></aside>
@@ -1186,9 +1192,20 @@ function ApprovalPage({ data }) {
   const firstEnvelope = envelopes[0];
   const altered = alteredEnvelope(firstEnvelope);
   const approvalComplete = Boolean(approvalCard);
+
+  // Decision state is derived from the selected proposal's own evidence.
+  // There is deliberately no universal "Approved" fallback.
+  const decisionState = (() => {
+    const raw = String(proposal?.state || "").toUpperCase();
+    if (raw === "SUPPRESSED") return { label: "Suppressed", tone: "warn" };
+    if (["REJECTED", "REFUSED", "FAILED"].includes(raw)) return { label: "Refused", tone: "danger" };
+    if (!planCard) return { label: "Protected Form Disabled", tone: "muted" };
+    if (approvalComplete) return { label: "Approved", tone: "success" };
+    return { label: "Action Required", tone: "info" };
+  })();
   const approvalHistoryCards = cards.filter((card) => ["Assessment", "Verdict", "ResponsePlan", "StructuredApproval", "PolicyAuthorization", "CasperExecutionReceipt"].includes(card.card_type));
   return <>
-    <PageHeader title="Review Exact Governance execution" subtitle={proposal ? `${facts.title} · ${proposal.proposal_id}` : "Human authorization is bound to an exact typed action envelope."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill></div>} actions={<ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} />} />
+    <PageHeader title="Multisig approval gate" subtitle={proposal ? `${facts.title} · ${proposal.proposal_id}` : "Approval binds a nonce to the exact typed action. Locke refuses any target, parameter, action-count, nonce, or hash mismatch."} meta={proposal && <div className="page-meta-pills"><StatusPill tone={statusTone(facts.severity, "danger")} compact>{String(facts.severity).toUpperCase()}</StatusPill><StatusPill tone={stateTone(proposal.state)} compact>{stateLabel(proposal.state)}</StatusPill></div>} actions={<ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} />} />
     {!proposal ? <Panel><EmptyState title="No proposal selected" icon="approval" /></Panel> : !planCard ? <Panel><EmptyState title="No response plan is ready" description="Open the Council Chamber to watch the investigation and safety review complete before human approval." icon="approval" action={<PrimaryButton href={navHref("/proposals", proposal.proposal_id)}>Open Proposal Workspace</PrimaryButton>} /></Panel> : <div className="approval-layout">
       <div className="approval-left-column">
       <Panel className="envelope-panel" title="Exact Action Envelope" eyebrow="Human-reviewed execution scope" action={<StatusPill tone="info" icon="shield">Sealed plan</StatusPill>}><div className="envelope-intro"><Icon name="lock" size={24} /><div><strong>The Casper Execution Agent may execute only the action below.</strong><p>Target, parameters, revision and action count are verified again immediately before execution.</p></div></div><div className="envelope-list">{envelopes.map((envelope, index) => <div className="envelope-card" key={`${envelope.action_id}-${index}`}><span className="envelope-number">{index + 1}</span><div className="envelope-fields"><div><span>Action</span><strong>{titleCaseAction(envelope.action_id)}</strong></div><div><span>Target</span><strong>{envelope.target || "—"}</strong></div><div className="wide envelope-parameters-field"><span>Parameters</span><details className="envelope-parameters"><summary>View parameters</summary><pre>{Object.keys(envelope.parameters || {}).length ? publicJson(envelope.parameters, 2) : "{}"}</pre></details></div><div><span>Timeout</span><strong>{envelope.timeout_seconds ? `${envelope.timeout_seconds}s` : "—"}</strong></div><div><span>Fallback action</span><strong>{(envelope.fallback_action || envelope.reversal_action) ? titleCaseAction(envelope.fallback_action || envelope.reversal_action) : "Defined by policy"}</strong></div></div></div>)}</div><div className="plan-integrity-grid"><div><span>Governance playbook</span><strong>{governancePlaybook(plan.governance_playbook || plan.policy_path || plan.runbook)}</strong></div><div><span>Risk level</span><strong>{String(plan.risk_level || facts.severity).toUpperCase()}</strong></div><div><span>Plan revision</span><strong>{plan.revision || 1}</strong></div><div><span>Sealed plan hash</span><strong className="mono">{shortHash(planCard.hash, 12, 8)}</strong></div></div><div className="control-checks"><div><Icon name="check" size={16} /><span><strong>Evidence reviewed</strong><small>Treasury intelligence and safety verdict are sealed</small></span></div><div><Icon name="check" size={16} /><span><strong>Exact parameter binding</strong><small>Any deviation is refused before side effects</small></span></div><div><Icon name="check" size={16} /><span><strong>Exactly-once execution</strong><small>Duplicate and partial plans cannot certify</small></span></div><div><Icon name="shield" size={16} /><span><strong>Receipt gate</strong><small>No receipt without Casper transaction verification</small></span></div></div></Panel>
@@ -1200,34 +1217,127 @@ function ApprovalPage({ data }) {
 }
 
 function TopologyMap({ agents, cards }) {
-  const remoteRoles = ["rowan", "mercer", "verity", "alden", "locke", "core"];
+  // Core is the deterministic centre; the six specialists sit on the ring.
+  const ringRoles = ["rowan", "mercer", "verity", "alden", "locke", "wells"];
   const handoffs = deriveHandoffs(cards);
   const current = handoffs[handoffs.length - 1];
-  const positions = ["top-left", "middle-left", "bottom-left", "top-right", "middle-right", "bottom-right"];
-  const lineGeometry = {
-    rowan: [380, 210, 135, 78],
-    mercer: [380, 210, 135, 210],
-    verity: [380, 210, 135, 342],
-    alden: [380, 210, 625, 78],
-    locke: [380, 210, 625, 210],
-    core: [380, 210, 625, 342],
+  // The chamber shows a recorded run unless live agent telemetry says otherwise.
+  const liveTelemetry = (agents || []).some((agent) => agent?.online);
+  const CX = 360;
+  const CY = 236;
+  const R = 150;
+  const node = (index) => {
+    const angle = (-90 + index * 60) * (Math.PI / 180);
+    return [CX + R * Math.cos(angle), CY + R * Math.sin(angle)];
   };
-  return <div className="topology-map"><svg className="topology-lines" viewBox="0 0 760 420" preserveAspectRatio="none" aria-hidden="true"><defs>{remoteRoles.map((role) => { const profile = getProfile(role); const [x1, y1, x2, y2] = lineGeometry[role]; return <linearGradient key={role} id={`topology-gradient-${role}`} gradientUnits="userSpaceOnUse" x1={x1} y1={y1} x2={x2} y2={y2}><stop offset="0%" stopColor="#35c5f0" stopOpacity=".18" /><stop offset="58%" stopColor={profile.color} stopOpacity=".78" /><stop offset="100%" stopColor={profile.color} stopOpacity=".96" /></linearGradient>; })}</defs>{remoteRoles.map((role) => { const profile = getProfile(role); const [x1, y1, x2, y2] = lineGeometry[role]; const active = current && (current.from === role || current.to === role); return <line key={role} className={cx("topology-line", active && "active")} style={{ "--agent-accent": profile.color }} stroke={`url(#topology-gradient-${role})`} x1={x1} y1={y1} x2={x2} y2={y2} />; })}</svg><div className="room-hub"><span><Icon name="network" size={28} /></span><strong>Concordia</strong><small>Council Chamber</small></div>{remoteRoles.map((role, index) => { const profile = getProfile(role); const agent = agents.find((item) => normalizeRole(item.agent_role) === role); const active = current && (current.from === role || current.to === role); return <div key={role} className={cx("topology-agent", positions[index], active && "active")} style={{ "--agent-accent": profile.color }}><Avatar profile={profile} size="md" status={agent?.online ? "online" : "offline"} /><span><strong>{profile.name}</strong><small>{profile.role}</small></span>{active && <StatusPill tone="info" compact>Active handoff</StatusPill>}</div>; })}</div>;
+  const activeRoles = current ? [normalizeRole(current.from), normalizeRole(current.to)] : [];
+  return <div className={cx("topology-map", "topology-radial", !liveTelemetry && "topology-recorded")}>
+    <svg className="topology-lines" viewBox="0 0 720 470" role="img"
+      aria-label={liveTelemetry
+        ? "Radial council chamber with the deterministic core at the centre and six specialists around it"
+        : "Recorded radial council chamber with the deterministic core at the centre and six specialists around it"}>
+      <defs>
+        {ringRoles.map((role) => {
+          const profile = getProfile(role);
+          return <g key={role}>
+            <radialGradient id={`chamber-halo-${role}`}>
+              <stop offset="0%" stopColor={profile.color} stopOpacity=".55" />
+              <stop offset="100%" stopColor={profile.color} stopOpacity="0" />
+            </radialGradient>
+            <clipPath id={`chamber-avatar-${role}`} clipPathUnits="objectBoundingBox">
+              <circle cx=".5" cy=".5" r=".5" />
+            </clipPath>
+          </g>;
+        })}
+        <clipPath id="chamber-avatar-core" clipPathUnits="objectBoundingBox">
+          <circle cx=".5" cy=".5" r=".5" />
+        </clipPath>
+      </defs>
+      <circle className="chamber-evidence-ring" cx={CX} cy={CY} r={R + 34} />
+      <circle className="chamber-orbit" cx={CX} cy={CY} r={R} />
+      {ringRoles.map((role, index) => {
+        const [x, y] = node(index);
+        const isActive = activeRoles.includes(role);
+        return <line key={`link-${role}`} className={cx("chamber-link", isActive && "chamber-link-active")}
+          x1={CX} y1={CY} x2={x} y2={y} />;
+      })}
+      <circle className="chamber-core-pulse" cx={CX} cy={CY} r="46" />
+      <circle className="chamber-core" cx={CX} cy={CY} r="34" />
+      <image
+        href={getProfile("core").avatar}
+        x={CX - 31}
+        y={CY - 31}
+        width="62"
+        height="62"
+        preserveAspectRatio="xMidYMid slice"
+        clipPath="url(#chamber-avatar-core)"
+      />
+      <text className="chamber-core-label" x={CX} y={CY + 54} textAnchor="middle">CORE</text>
+      {ringRoles.map((role, index) => {
+        const [x, y] = node(index);
+        const profile = getProfile(role);
+        const isActive = activeRoles.includes(role);
+        return <g key={role} className={cx("chamber-node", isActive && "chamber-node-active")}>
+          <circle cx={x} cy={y} r="46" fill={`url(#chamber-halo-${role})`} />
+          <circle className="chamber-node-ring" cx={x} cy={y} r="27" style={{ "--agent-accent": profile.color }} />
+          <image
+            href={profile.avatar}
+            x={x - 25}
+            y={y - 25}
+            width="50"
+            height="50"
+            preserveAspectRatio="xMidYMid slice"
+            clipPath={`url(#chamber-avatar-${role})`}
+          />
+          <text className="chamber-node-label" x={x} y={y + 46} textAnchor="middle">{profile.name}</text>
+        </g>;
+      })}
+    </svg>
+    <p className="chamber-state">
+      {liveTelemetry
+        ? <>Live council telemetry · latest handoff {current ? `${getProfile(current.from).name} → ${getProfile(current.to).name}` : "not yet recorded"}</>
+        : <>Recorded council run · latest recorded handoff {current ? `${getProfile(current.from).name} → ${getProfile(current.to).name}` : "not present in this run"}</>}
+    </p>
+  </div>;
 }
+
 function AgentCard({ role, agent, currentActivity, lastHandoff }) {
   const profile = getProfile(role); const platform = profile.platform; const online = platform ? false : Boolean(agent?.online);
   return <div className={cx("agent-directory-card", platform && "platform-card")} style={{ "--agent-accent": profile.color }}><div className="agent-card-head"><Avatar profile={profile} size="lg" status={online ? "online" : platform ? "platform" : "offline"} /><div><h3>{profile.name}</h3><p>{profile.role}</p><div className="agent-tags"><span>{profile.framework}</span><span>{profile.model}</span></div></div></div><div className="agent-card-grid"><div><span>Current activity</span><strong>{currentActivity}</strong></div><div><span>Status</span><StatusPill tone={platform ? "purple" : online ? "success" : "muted"} compact>{platform ? "Platform-managed" : online ? "Online" : "Standing by"}</StatusPill></div><div className="wide"><span>Most recent handoff</span><strong>{lastHandoff || "No handoff recorded"}</strong></div></div></div>;
 }
 function SkillCard({ skill }) {
   const profile = getProfile(skill.role);
-  return <article className="skill-card" style={{ "--agent-accent": profile.color }}>
-    <header><Avatar profile={profile} size="sm" /><div><strong>{skill.skill_name}</strong><span>{skill.agent_name} · {skill.llm_model}</span></div><StatusPill tone="info" compact>{skill.category}</StatusPill></header>
-    <div className="skill-tool-name"><span>MCP-style tool</span><code>{skill.tool_name || skill.skill_id}</code></div>
-    <p>{skill.prompt_contract}</p>
-    <div className="skill-proof-grid"><div><span>Input contract</span><strong>{skill.input_contract}</strong></div><div><span>Output contract</span><strong>{skill.output_contract}</strong></div><div><span>LLM provider use</span><strong>{skill.llm_cloud_use}</strong></div><div><span>DAO proof</span><strong>{skill.dao_requirement}</strong></div><div><span>Guardrail</span><strong>{skill.deterministic_guardrail}</strong></div><div><span>Evidence artifact</span><strong>{skill.evidence_artifact}</strong></div></div>
-    {skill.review_demo_cue && <div className="skill-demo-cue"><Icon name="info" size={15} /><span>{skill.review_demo_cue}</span></div>}
-  </article>;
+  return <details className="skill-card skill-contract" style={{ "--agent-accent": profile.color }}>
+    <summary>
+      <div className="skill-contract-head">
+        <Avatar profile={profile} size="sm" />
+        <div className="skill-contract-title">
+          <strong>{skill.skill_name}</strong>
+          <span>{skill.agent_name} · {skill.llm_model}</span>
+        </div>
+        <StatusPill tone="info" compact>{skill.category}</StatusPill>
+      </div>
+      <dl className="skill-contract-summary">
+        <div><dt>Stage</dt><dd>{skill.category}</dd></div>
+        <div><dt>MCP-style tool</dt><dd><code>{skill.tool_name || skill.skill_id}</code></dd></div>
+        <div><dt>Input → Output</dt><dd>{skill.input_contract} → {skill.output_contract}</dd></div>
+        <div><dt>Guardrail</dt><dd>{skill.deterministic_guardrail || "deterministic policy check"}</dd></div>
+        <div><dt>Evidence artifact</dt><dd>{skill.evidence_artifact || "hash-linked evidence card"}</dd></div>
+      </dl>
+    </summary>
+    <div className="skill-contract-body">
+      <p>{skill.prompt_contract}</p>
+      <div className="skill-proof-grid">
+        <div><span>Input contract</span><strong>{skill.input_contract}</strong></div>
+        <div><span>Output contract</span><strong>{skill.output_contract}</strong></div>
+        <div><span>LLM provider use</span><strong>{skill.llm_cloud_use}</strong></div>
+        <div><span>DAO proof</span><strong>{skill.dao_requirement}</strong></div>
+      </div>
+      {skill.review_demo_cue && <div className="skill-demo-cue"><Icon name="info" size={15} /><span>{skill.review_demo_cue}</span></div>}
+    </div>
+  </details>;
 }
+
 function AgentsPage({ data }) {
   const cards = data.evidence?.cards || [];
   const handoffs = deriveHandoffs(cards);
@@ -1355,7 +1465,21 @@ function downloadEvidence(evidence, proposalId) {
 
 function ChainStrip({ cards, selectedIndex, onSelect }) {
   if (!cards.length) return <EmptyState title="No sealed evidence cards" description="Cards appear here after their Council publication is verified." icon="link" />;
-  return <div className="chain-strip" role="list" aria-label="Evidence chain">
+  const step = (delta) => {
+    const next = Math.min(cards.length - 1, Math.max(0, selectedIndex + delta));
+    onSelect(next);
+    if (typeof document !== "undefined") {
+      const rail = document.querySelector(".chain-strip");
+      const node = rail?.children?.[next];
+      node?.scrollIntoView?.({ inline: "center", block: "nearest", behavior: "smooth" });
+    }
+  };
+  return <div className="chain-rail">
+    <button type="button" className="chain-rail-nav chain-rail-prev" aria-label="Previous evidence card"
+      onClick={() => step(-1)} disabled={selectedIndex <= 0}>‹</button>
+    <button type="button" className="chain-rail-nav chain-rail-next" aria-label="Next evidence card"
+      onClick={() => step(1)} disabled={selectedIndex >= cards.length - 1}>›</button>
+    <div className="chain-strip" role="list" aria-label="Evidence chain">
     {cards.map((card, index) => {
       const profile = getProfile(CARD_ROLE[card.card_type]);
       return <div className="chain-step-wrap" key={`${card.sequence}-${card.card_type}`}>
@@ -1368,7 +1492,7 @@ function ChainStrip({ cards, selectedIndex, onSelect }) {
         {index < cards.length - 1 && <span className="chain-connector" aria-hidden="true"><Icon name="link" size={14} /></span>}
       </div>;
     })}
-  </div>;
+  </div></div>;
 }
 
 function DaoScoreboard({ summary }) {
@@ -1415,7 +1539,7 @@ function EvidencePage({ data }) {
   return <>
     <PageHeader title="Evidence & Audit" subtitle="Verified Council publications, ordered evidence cards and deterministic control results." meta={proposal && <div className="page-meta-pills"><StatusPill tone={chainValid ? "success" : "danger"} icon={chainValid ? "check" : "signal"}>{chainValid ? "Evidence chain valid" : "Chain verification failed"}</StatusPill></div>} actions={<><ProposalSelector proposals={data.proposals} selectedId={data.selectedId} onSelect={data.selectProposal} />{facts.casperExplorerUrl && <PrimaryButton icon="external" href={facts.casperExplorerUrl} target="_blank" rel="noreferrer">View Immutable Receipt on Casper Testnet</PrimaryButton>}<PrimaryButton icon="download" onClick={() => downloadEvidence(data.evidence, data.selectedId)} disabled={!cards.length}>Export Evidence Package</PrimaryButton></>} />
     {!proposal ? <Panel><VerifiedRunStaticFallback /></Panel> : <>
-      <Panel className="chain-panel" title="Tamper-evident evidence chain" eyebrow={`${cards.length} verified cards · ${proposal.proposal_id}`} action={<StatusPill tone={chainValid ? "success" : "danger"} compact>{chainValid ? "Integrity 100%" : "Review required"}</StatusPill>}><ChainStrip cards={cards} selectedIndex={selectedIndex} onSelect={setSelectedIndex} /></Panel>
+      <Panel className="chain-panel" title="SHA-256 evidence chain" eyebrow={`${cards.length} / ${cards.length} verified · ${proposal.proposal_id} · each typed card links to the previous card hash`} action={<StatusPill tone={chainValid ? "success" : "danger"} compact>{chainValid ? "Integrity 100%" : "Review required"}</StatusPill>}><ChainStrip cards={cards} selectedIndex={selectedIndex} onSelect={setSelectedIndex} /></Panel>
       <div className="evidence-master-detail">
         <div className="evidence-left-column">
         <Panel className="selected-card-panel" title={selectedCard ? CARD_LABELS[selectedCard.card_type] || titleCaseAction(selectedCard.card_type) : "Selected sealed card"} eyebrow={selectedCard ? `Sequence ${selectedCard.sequence} · ${selectedProfile.name}` : "Select a chain item"} action={selectedCard && <StatusPill tone={cardTone(selectedCard)} compact>{cardBadge(selectedCard)}</StatusPill>}>
@@ -2204,7 +2328,7 @@ function JudgeWalkthroughPage({ data }) {
     <div className="proof-hero-grid">
       <Panel title="DAO Mandate" eyebrow="Bounded authority"><div className="source-status-card"><StatusPill tone="success" icon="lock">Locke mandate only</StatusPill><div><span>Allowed action</span><strong>{mandate.allowed_action}</strong></div><div><span>Network</span><strong>{mandate.allowed_network}</strong></div><div><span>Entry point</span><strong>{mandate.entry_point}</strong></div><div><span>Allocation</span><strong>{pctFromBps(mandate.requested_allocation_bps)} requested → {pctFromBps(mandate.max_allocation_bps)} cap</strong></div><div><span>Mandate hash</span>{isPendingProofValue(mandate.mandate_hash) ? <LoadingValue /> : <code>{shortHash(mandate.mandate_hash, 16, 10)}</code>}</div><small>Locke executes only the approved DAO Mandate, never free-form LLM output.</small></div></Panel>
       <Panel title="Invariant runner" eyebrow="Machine-verifiable checks"><div className="proof-table">{(invariants.checks || []).map((check) => { const status = check.status || (check.passed ? "passed" : "failed"); const tone = status === "missing_evidence" ? "warning" : check.passed ? "success" : "danger"; return <div key={check.id || check.label}><span><Icon name={check.passed ? "check" : "signal"} size={16} /></span><div><strong>{check.label}</strong><small>{check.evidence || "deterministic check"}</small></div><StatusPill tone={tone} compact>{status === "missing_evidence" ? "missing evidence" : status}</StatusPill></div>; })}</div></Panel>
-      <Panel title="Recorded V1 SafePay Lite evidence" eyebrow="Native-CSPR historical proof"><div className="source-status-card"><StatusPill tone="info" icon="check">Recorded V1 · {safepay.status || "unverified"}</StatusPill><div><span>Payment proof</span><code>{shortHash(safepay.payment_hash || DEFAULT_X402_PAYMENT_HASH, 16, 10)}</code></div><div><span>Report hash</span><strong>{safepay.report_hash_verified ? "verified" : "unverified"}</strong></div><div><span>Duplicate proof</span><strong>{safepay.duplicate_proof_rejected ? "rejected" : "not verified"}</strong></div><div><span>Provider reputation delta</span><strong>+{safepay.provider_reputation_delta || 0}</strong></div><small><strong>RECORDED V1 NATIVE-CSPR SAFEPAY LITE EVIDENCE.</strong> Historical payment and duplicate-proof rejection proof, distinct from the implemented x402 v2 payment-intent path. No public facilitator or successful live-settlement claim is made.</small></div></Panel>
+      <Panel title="Recorded V1 SafePay Lite evidence" eyebrow="Native-CSPR historical proof"><div className="source-status-card"><StatusPill tone="info" icon="check">Recorded V1 · {safepay.status || "unverified"}</StatusPill><div><span>Payment proof</span><code>{shortHash(safepay.payment_hash || DEFAULT_X402_PAYMENT_HASH, 16, 10)}</code></div><div><span>Report hash</span><strong>{safepay.report_hash_verified ? "verified" : "unverified"}</strong></div><div><span>Duplicate proof</span><strong>{safepay.duplicate_proof_rejected ? "rejected" : "not verified"}</strong></div><div><span>Provider reputation delta</span><strong>+{safepay.provider_reputation_delta || 0}</strong></div><small><strong>{X402_RECORDED_SETTLEMENT_BADGE}</strong> {X402_RECORDED_SETTLEMENT_COPY}</small></div></Panel>
     </div>
     <div className="proof-two-column">
       <Panel title="RWA evidence packet" eyebrow="Concrete non-canonical RWA run"><div className="rwa-template-card"><strong>{rwa.proposal_id} · {rwa.proposal_type}</strong><div className="rwa-template-grid"><div><span>Face value</span><strong>${Number(rwa.face_value_usd || 125000).toLocaleString()}</strong></div><div><span>Maturity</span><strong>{rwa.maturity_days || 60} days</strong></div><div><span>Debtor risk</span><strong>{rwa.debtor_risk_score || 58}</strong></div><div><span>Issuer score</span><strong>{rwa.issuer_reputation_score || 72}</strong></div>{rwa.supplemental_receipt_hash && <div className="wide"><span>Supplemental RWA receipt</span><HashChip value={rwa.supplemental_receipt_hash} href={rwa.supplemental_receipt_url} tone="info" /></div>}</div><p>Outcome: {rwa.outcome || "ESCALATED_TO_HUMANS"}. This RWA packet has its own supplemental receipt when shown, but it is not the canonical Casper proof.</p></div></Panel>
@@ -2431,7 +2555,7 @@ function ProofCenterPage({ data }) {
       provider_url_configured: false,
       official_x402: false,
       live_facilitator: false,
-      note: "Casper-native x402 v2 is implemented and deployed; the SafePay Lite receipt is historical evidence, and no public facilitator or successful live-settlement claim is made.",
+      note: X402_RECORDED_SETTLEMENT_COPY,
     },
     ipfs: {
       provider: "kubo",
@@ -2476,7 +2600,7 @@ function ProofCenterPage({ data }) {
           key,
           label: "Casper-native x402 v2",
           status: "payment intent + HTTP 402 deployed",
-          note: "The historical SafePay Lite receipt is retained; no public facilitator or successful live-settlement claim is made.",
+      note: X402_RECORDED_SETTLEMENT_COPY,
         };
       }
       return {
@@ -2535,7 +2659,7 @@ function ProofCenterPage({ data }) {
     {activeProofTab === "summary" && <div className="proof-hero-grid">
       <Panel title="Canonical proof table" eyebrow="Judge checklist"><div className="proof-table">{compactRows.map((row) => { const rowTone = statusTone(row.status, String(row.status).toLowerCase() === "verified" ? "success" : "warning"); return <div key={row.claim}><span><Icon name={rowTone === "success" ? "check" : "clock"} size={16} /></span><div><strong>{row.claim}</strong><small>{row.evidence || "Inspect evidence chain"}</small></div><StatusPill tone={rowTone} compact>{row.status}</StatusPill></div>; })}</div></Panel>
       <Panel title="Policy leash meter" eyebrow="LLM cannot inject numbers"><div className="leash-meter"><div className="leash-values"><span><strong>{policy.requested_label || pctFromBps(policy.requested_bps || 3000)}</strong><small>Requested by proposal</small></span><Icon name="arrowRight" size={20} /><span><strong>{policy.approved_label || pctFromBps(policy.approved_bps || 800)}</strong><small>DAO Constitution cap</small></span></div><div className="leash-bar"><span style={{ width: `${Math.min(100, Number(policy.requested_bps || 3000) / 40)}%` }} /><i style={{ left: `${Math.min(100, Number(policy.approved_bps || 800) / 40)}%` }} /></div><p>Verity can challenge and Alden can revise, but no model output can widen the policy leash.</p></div></Panel>
-      <Panel title="Verified receipts" eyebrow="Completed proof, not pending actions"><div className="verified-receipts"><HashChip label="Canonical receipt" value={receipt.deploy_hash || DEFAULT_CASPER_DEPLOY_HASH} href={receipt.explorer_url || DEFAULT_CASPER_EXPLORER_URL} tone="success" /><HashChip label="Wallet receipt" value={DEFAULT_WALLET_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} /><HashChip label="Quorum approval" value={DEFAULT_QUORUM_APPROVAL_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_APPROVAL_HASH}`} /><HashChip label="Final quorum receipt" value={DEFAULT_QUORUM_FINAL_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_FINAL_RECEIPT_HASH}`} /><HashChip label="Recorded SafePay Lite payment" value={DEFAULT_X402_PAYMENT_HASH} /></div><p className="technical-note-lede">Primary reviewer actions stay in the header. This card only lists completed receipts so a judge never confuses recorded proof with a pending transaction.</p></Panel>
+      <Panel title="Verified receipts" eyebrow="Completed proof, not pending actions"><div className="verified-receipts"><HashChip label="Canonical receipt" value={receipt.deploy_hash || DEFAULT_CASPER_DEPLOY_HASH} href={receipt.explorer_url || DEFAULT_CASPER_EXPLORER_URL} tone="success" /><HashChip label="Wallet receipt" value={DEFAULT_WALLET_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_WALLET_RECEIPT_HASH}`} /><HashChip label="Quorum approval" value={DEFAULT_QUORUM_APPROVAL_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_APPROVAL_HASH}`} /><HashChip label="Final quorum receipt" value={DEFAULT_QUORUM_FINAL_RECEIPT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_QUORUM_FINAL_RECEIPT_HASH}`} /><HashChip label="Recorded SafePay Lite payment" value={DEFAULT_X402_PAYMENT_HASH} href={`https://testnet.cspr.live/deploy/${DEFAULT_X402_PAYMENT_HASH}`} /></div><p className="technical-note-lede">Primary reviewer actions stay in the header. This card only lists completed receipts so a judge never confuses recorded proof with a pending transaction.</p></Panel>
     </div>}
 
     {activeProofTab === "safety" && <div className="proof-two-column">
@@ -2560,7 +2684,7 @@ function ProofCenterPage({ data }) {
 
     {activeProofTab === "exports" && <div className="proof-two-column">
       <Panel title="Reviewer shortcuts" eyebrow="Single action registry"><ProofActionBar proposalId={proposalId} actionIds={["evidence_chain", "canonical_receipt", "quorum_failure", "quorum_success", "wallet_receipt", "supplemental_dynamic_receipt", "ipfs_archive", "proof_pack_json", "technical_jury_note"]} /></Panel>
-      <Panel title="Downloads" eyebrow="Audit exports"><div className="proof-action-bar vertical"><PrimaryButton href={`${downloadHref}`} icon="download" dataTestId="proof-action-audit-packet">Download Governance Archive</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/cards.csv`} icon="download" dataTestId="proof-action-cards-csv">cards.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/outcomes.csv`} icon="download" dataTestId="proof-action-outcomes-csv">outcomes.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/proof_table.csv`} icon="download" dataTestId="proof-action-proof-table-csv">proof_table.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/reputation.csv`} icon="download" dataTestId="proof-action-reputation-csv">reputation.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/casper_receipts.csv`} icon="download" dataTestId="proof-action-casper-receipts-csv">casper_receipts.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/x402_settlements.csv`} icon="download" dataTestId="proof-action-x402-csv">SafePay Lite recorded CSV</PrimaryButton></div></Panel>
+      <Panel title="Downloads" eyebrow="Audit exports"><div className="proof-action-bar vertical"><PrimaryButton href={`${downloadHref}`} icon="download" dataTestId="proof-action-audit-packet">Download Governance Archive</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/cards.csv`} icon="download" dataTestId="proof-action-cards-csv">cards.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/outcomes.csv`} icon="download" dataTestId="proof-action-outcomes-csv">outcomes.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/proof_table.csv`} icon="download" dataTestId="proof-action-proof-table-csv">proof_table.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/reputation.csv`} icon="download" dataTestId="proof-action-reputation-csv">reputation.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/casper_receipts.csv`} icon="download" dataTestId="proof-action-casper-receipts-csv">casper_receipts.csv</PrimaryButton><PrimaryButton href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/x402_settlements.csv`} icon="download" dataTestId="proof-action-x402-csv">SafePay Lite recorded CSV</PrimaryButton><a className="proof-pack-csv-link" href={`${GW}/proof-pack/${encodeURIComponent(proposalId)}/exports/x402_settlements.csv`}>x402_settlements.csv</a></div></Panel>
     </div>}
   </>;
 }
@@ -2597,7 +2721,7 @@ function TechnicalJuryNotePage({ data }) {
           <div><StatusPill tone="info" compact>Quorum</StatusPill><span>v2 quorum-enabled contract proves pre-quorum rejection, wallet approval, and final post-quorum receipt.</span></div>
           <div><StatusPill tone="info" compact>Wallet</StatusPill><span>Recorded browser wallet receipt demonstrates custody path without making the demo depend on a judge wallet.</span></div>
           <div><StatusPill tone="info" compact>Dynamic</StatusPill><span>Supplemental dynamic proposal proves reusable receipt execution while the canonical proof stays frozen.</span></div>
-          <div><StatusPill tone="info" compact>x402 v2</StatusPill><span>Casper-native payment intent and HTTP 402 are deployed. The SafePay Lite receipt is historical proof; no public facilitator or successful live-settlement claim is made.</span></div>
+          <div><StatusPill tone="info" compact>{X402_RECORDED_SETTLEMENT_BADGE}</StatusPill><span>{X402_RECORDED_SETTLEMENT_COPY}</span></div>
         </div>
       </Panel>
     </div>

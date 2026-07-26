@@ -17,7 +17,7 @@ Concordia's live proof is designed so judges can verify the whole governance loo
     `https://concordiadao.xyz/safepay-lite/DAO-PROP-6CB25C` and compare its
     recorded native-CSPR payment
     `dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c`
-    with CSPR.live. Official x402 is not shipped.
+    with CSPR.live. Casper-native x402 v2 is deployed and `https://concordiadao.xyz/x402/governance-report` exposes a live public HTTP 402 challenge; the recorded `casper-transfer` settlement finalized successfully on Casper Testnet. No external facilitator service is claimed.
 
 11. Run the local verifier:
 

@@ -226,14 +226,15 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
   test("V1.5 landing exposes truthful proof and approved publication links", async ({ page }) => {
     await gotoDashboardRoute(page, "/dashboard/landing");
     await expect(page.getByRole("heading", { name: "Governance that AI cannot overrule." })).toBeVisible();
-    await expect(page.locator('img[src="/dashboard/concordia-dao-logo-final.png"]').first()).toBeVisible();
+    await expect(page.locator('img[src="/dashboard/concordia-dao-logo-final.webp"]').first()).toBeVisible();
     await expect(page.getByRole("link", { name: /Start Judge Walkthrough/ })).toHaveAttribute("href", "/dashboard/judge?proposal=DAO-PROP-6CB25C");
-    await expect(page.getByText(/Casper-native x402 v2 is implemented and deployed/)).toBeVisible();
-    await expect(page.getByText(/no public facilitator or successful live-settlement claim is made/)).toBeVisible();
+    await expect(page.getByText(/Casper-native x402 v2 is deployed/)).toBeVisible();
+    await expect(page.getByText(/x402 · CASPER-TRANSFER · RECORDED SETTLEMENT/)).toBeVisible();
+    await expect(page.getByText(/successful live-settlement claim/i)).toHaveCount(0);
 
     const publicHrefs = await page.locator(".landing-public-links a").evaluateAll((links) => links.map((link) => link.href));
     expect(publicHrefs).toEqual([
-      "https://concordiadao.xyz/",
+      "https://testnet.cspr.live/deploy/e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852",
       "https://docs.concordiadao.xyz/",
       "https://github.com/asadvendor-boop/concordia-dao-council",
       "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2",

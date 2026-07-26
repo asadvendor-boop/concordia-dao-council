@@ -1,5 +1,26 @@
 export const PUBLIC_APP_ORIGIN = "https://concordiadao.xyz";
 export const DEFAULT_REVIEW_PROPOSAL_ID = "DAO-PROP-6CB25C";
+export const X402_RECORDED_SETTLEMENT_COPY = "Casper-native x402 v2 is deployed. The public endpoint exposes a live HTTP 402 challenge, and a recorded Casper Testnet casper-transfer settlement finalized successfully. No external facilitator service is claimed.";
+export const X402_RECORDED_SETTLEMENT_BADGE = "x402 · CASPER-TRANSFER · RECORDED SETTLEMENT";
+export const X402_CANONICAL_RECEIPT_HASH = "e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852";
+
+export function normalizeDashboardHref(href) {
+  if (typeof href !== "string" || !href) return href;
+  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  try {
+    const url = new URL(href);
+    const hostname = url.hostname.toLowerCase();
+    const legacySelfHost = hostname === "localhost"
+      || hostname === "127.0.0.1"
+      || hostname === "47.84.232.193"
+      || hostname.endsWith(".sslip.io");
+    return legacySelfHost
+      ? `${PUBLIC_APP_ORIGIN}${url.pathname}${url.search}${url.hash}`
+      : href;
+  } catch {
+    return href;
+  }
+}
 
 export const NAV_GROUPS = [
   {
@@ -28,7 +49,7 @@ export const NAV_GROUPS = [
 ];
 
 export const PUBLIC_LINKS = [
-  { id: "website", label: "Website", href: PUBLIC_APP_ORIGIN },
+  { id: "canonical_receipt", label: "Canonical Receipt", href: `https://testnet.cspr.live/deploy/${X402_CANONICAL_RECEIPT_HASH}` },
   { id: "docs", label: "Docs", href: "https://docs.concordiadao.xyz" },
   { id: "github", label: "GitHub", href: "https://github.com/asadvendor-boop/concordia-dao-council" },
   { id: "npm", label: "Verifier 0.1.2", href: "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2" },

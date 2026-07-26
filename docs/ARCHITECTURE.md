@@ -56,5 +56,5 @@ Concordia uses the Casper stack as follows:
 - **Python-native Casper JSON-RPC execution** through `shared/casper_executor.py`.
 - **CSPR.cloud** via credential-gated adapters in `shared/cspr_cloud.py`; local mode is explicitly labeled mock.
 - **MCP adapters** via `shared/casper_mcp.py`; external MCP calls require configured server URLs, while node status can call live JSON-RPC.
-- **SafePay Lite** preserves a recorded native-CSPR payment/report relation for V1 review. Official x402 and live provider/facilitator behavior are not shipped.
+- **SafePay Lite** preserves a recorded native-CSPR payment/report relation for V1 review. Casper-native x402 v2 is deployed and `https://concordiadao.xyz/x402/governance-report` exposes a live public HTTP 402 challenge; the recorded `casper-transfer` settlement finalized successfully on Casper Testnet. No external facilitator service is claimed.
 - **CSPR.click skill path** documented for wallet creation, signing, and event handling.
