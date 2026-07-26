@@ -1076,7 +1076,7 @@ function OverviewPage({ data }) {
           ["ODRA CONTRACTS", "green"],
           ["ON-CHAIN QUORUM", "cyan"],
           ["DISSENT RECEIPTS", "purple"],
-          ["SAFEPAY LITE · RECORDED V1", "amber"],
+          ["CASPER-NATIVE x402 v2 · DEPLOYED", "amber"],
           ["IPFS ARCHIVE", "blue"],
           ["CASPER TESTNET LIVE", "green"],
         ].map(([label, tone]) => <span key={label} className={cx("chip-outline", `chip-outline-${tone}`)}>{label}</span>)}
@@ -2204,7 +2204,7 @@ function JudgeWalkthroughPage({ data }) {
     <div className="proof-hero-grid">
       <Panel title="DAO Mandate" eyebrow="Bounded authority"><div className="source-status-card"><StatusPill tone="success" icon="lock">Locke mandate only</StatusPill><div><span>Allowed action</span><strong>{mandate.allowed_action}</strong></div><div><span>Network</span><strong>{mandate.allowed_network}</strong></div><div><span>Entry point</span><strong>{mandate.entry_point}</strong></div><div><span>Allocation</span><strong>{pctFromBps(mandate.requested_allocation_bps)} requested → {pctFromBps(mandate.max_allocation_bps)} cap</strong></div><div><span>Mandate hash</span>{isPendingProofValue(mandate.mandate_hash) ? <LoadingValue /> : <code>{shortHash(mandate.mandate_hash, 16, 10)}</code>}</div><small>Locke executes only the approved DAO Mandate, never free-form LLM output.</small></div></Panel>
       <Panel title="Invariant runner" eyebrow="Machine-verifiable checks"><div className="proof-table">{(invariants.checks || []).map((check) => { const status = check.status || (check.passed ? "passed" : "failed"); const tone = status === "missing_evidence" ? "warning" : check.passed ? "success" : "danger"; return <div key={check.id || check.label}><span><Icon name={check.passed ? "check" : "signal"} size={16} /></span><div><strong>{check.label}</strong><small>{check.evidence || "deterministic check"}</small></div><StatusPill tone={tone} compact>{status === "missing_evidence" ? "missing evidence" : status}</StatusPill></div>; })}</div></Panel>
-      <Panel title="Recorded V1 SafePay Lite evidence" eyebrow="Native-CSPR historical proof"><div className="source-status-card"><StatusPill tone="info" icon="check">Recorded V1 · {safepay.status || "unverified"}</StatusPill><div><span>Payment proof</span><code>{shortHash(safepay.payment_hash || DEFAULT_X402_PAYMENT_HASH, 16, 10)}</code></div><div><span>Report hash</span><strong>{safepay.report_hash_verified ? "verified" : "unverified"}</strong></div><div><span>Duplicate proof</span><strong>{safepay.duplicate_proof_rejected ? "rejected" : "not verified"}</strong></div><div><span>Provider reputation delta</span><strong>+{safepay.provider_reputation_delta || 0}</strong></div><small><strong>RECORDED V1 NATIVE-CSPR SAFEPAY LITE EVIDENCE.</strong> Historical payment and duplicate-proof rejection proof only; not official x402 and not a live facilitator.</small></div></Panel>
+      <Panel title="Recorded V1 SafePay Lite evidence" eyebrow="Native-CSPR historical proof"><div className="source-status-card"><StatusPill tone="info" icon="check">Recorded V1 · {safepay.status || "unverified"}</StatusPill><div><span>Payment proof</span><code>{shortHash(safepay.payment_hash || DEFAULT_X402_PAYMENT_HASH, 16, 10)}</code></div><div><span>Report hash</span><strong>{safepay.report_hash_verified ? "verified" : "unverified"}</strong></div><div><span>Duplicate proof</span><strong>{safepay.duplicate_proof_rejected ? "rejected" : "not verified"}</strong></div><div><span>Provider reputation delta</span><strong>+{safepay.provider_reputation_delta || 0}</strong></div><small><strong>RECORDED V1 NATIVE-CSPR SAFEPAY LITE EVIDENCE.</strong> Historical payment and duplicate-proof rejection proof, distinct from the implemented x402 v2 payment-intent path. No public facilitator or successful live-settlement claim is made.</small></div></Panel>
     </div>
     <div className="proof-two-column">
       <Panel title="RWA evidence packet" eyebrow="Concrete non-canonical RWA run"><div className="rwa-template-card"><strong>{rwa.proposal_id} · {rwa.proposal_type}</strong><div className="rwa-template-grid"><div><span>Face value</span><strong>${Number(rwa.face_value_usd || 125000).toLocaleString()}</strong></div><div><span>Maturity</span><strong>{rwa.maturity_days || 60} days</strong></div><div><span>Debtor risk</span><strong>{rwa.debtor_risk_score || 58}</strong></div><div><span>Issuer score</span><strong>{rwa.issuer_reputation_score || 72}</strong></div>{rwa.supplemental_receipt_hash && <div className="wide"><span>Supplemental RWA receipt</span><HashChip value={rwa.supplemental_receipt_hash} href={rwa.supplemental_receipt_url} tone="info" /></div>}</div><p>Outcome: {rwa.outcome || "ESCALATED_TO_HUMANS"}. This RWA packet has its own supplemental receipt when shown, but it is not the canonical Casper proof.</p></div></Panel>
@@ -2425,13 +2425,13 @@ function ProofCenterPage({ data }) {
     cspr_click: { status: "intent_endpoint_ready", mode: "browser_wallet_signing_intent" },
     cspr_cloud: { status: "live_configured", note: "REST reads are configured on the hosted demo." },
     x402: {
-      mode: "recorded_v1_evidence",
-      status: "recorded_v1_native_cspr_safepay_lite_evidence",
+      mode: "casper_native_x402_v2_implemented",
+      status: "payment_intent_and_http_402_available",
       settlement_driver: "native_cspr_historical_record",
       provider_url_configured: false,
       official_x402: false,
       live_facilitator: false,
-      note: "Recorded V1 native-CSPR SafePay Lite payment and duplicate-proof rejection evidence only; not official x402 and not a live facilitator.",
+      note: "Casper-native x402 v2 is implemented and deployed; the SafePay Lite receipt is historical evidence, and no public facilitator or successful live-settlement claim is made.",
     },
     ipfs: {
       provider: "kubo",
@@ -2468,6 +2468,24 @@ function ProofCenterPage({ data }) {
   const liveRead = proof?.mercer_live_casper_read || {};
   const ipfsEvidence = proof?.ipfs_evidence || data.evidence?.ipfs_evidence || fallbackIpfsEvidence;
   const integrationStatus = integrations || fallbackIntegrations;
+  const integrationRows = Object.entries(integrationStatus)
+    .filter(([key]) => key !== "roadmap_only")
+    .map(([key, value]) => {
+      if (key === "x402") {
+        return {
+          key,
+          label: "Casper-native x402 v2",
+          status: "payment intent + HTTP 402 deployed",
+          note: "The historical SafePay Lite receipt is retained; no public facilitator or successful live-settlement claim is made.",
+        };
+      }
+      return {
+        key,
+        label: titleCaseAction(key),
+        status: typeof value === "object" ? (value.status || value.mode || value.provider || "configured") : String(value),
+        note: typeof value === "object" ? (value.note || value.message || "") : "",
+      };
+    });
   const walletIntentStatus = unsignedIntent?.status || (walletReceiptHash ? "wallet receipt verified" : "wallet path ready");
   const walletArgumentSource = unsignedIntent?.argument_source || receipt.argument_source || "";
   const walletArgumentSourceLabel = walletArgumentSource === SUPPLEMENTAL_DYNAMIC_ARGUMENT_SOURCE
@@ -2537,7 +2555,7 @@ function ProofCenterPage({ data }) {
       <Panel title="Mercer live Casper read" eyebrow="MCP-style data source"><div className="source-status-card"><StatusPill tone="success" icon="check">Live data source</StatusPill><div><span>Network</span><strong>{liveRead.network || "casper-test"}</strong></div><div><span>Block height</span><strong>{liveRead.latest_block_height || receipt.block_height || "verified in receipt"}</strong></div><div><span>State root</span><HashChip value={liveRead.state_root_hash || receipt.block_hash || DEFAULT_CASPER_DEPLOY_HASH} /></div><small>{liveRead.source || "Casper Node RPC / CSPR.live"}</small></div></Panel>
       <Panel title="RWA evidence packet" eyebrow="Non-canonical applicability proof"><div className="rwa-template-card"><strong>{rwa.proposal_id || "DAO-PROP-RWA-001"} · {rwa.proposal_type || "RWA_INVOICE_POOL_ONBOARDING"}</strong><div className="rwa-template-grid"><div><span>Face value</span><strong>${Number(rwa.face_value_usd || 125000).toLocaleString()}</strong></div><div><span>Maturity</span><strong>{rwa.maturity_days || 60} days</strong></div><div><span>Debtor risk</span><strong>{rwa.debtor_risk_score || 58}</strong></div><div><span>Issuer reputation</span><strong>{rwa.issuer_reputation_score || 72}</strong></div>{rwa.supplemental_receipt_hash && <div className="wide"><span>Supplemental RWA receipt</span><HashChip value={rwa.supplemental_receipt_hash} href={rwa.supplemental_receipt_url} tone="info" /></div>}</div><p>Visible RWA applicability packet; supplemental receipt is separate from the canonical Casper proof.</p></div></Panel>
       <Panel title="IPFS evidence CID" eyebrow="Governance archive pin"><div className="source-status-card"><StatusPill tone={ipfsEvidence?.cid ? "success" : "warning"} icon={ipfsEvidence?.cid ? "check" : "clock"}>{ipfsEvidence?.cid ? "Pinned" : "Evidence route ready"}</StatusPill><div><span>Provider</span><strong>{ipfsEvidence?.provider || integrationStatus?.ipfs?.provider || "kubo"}</strong></div><HashChip label="CID" value={ipfsEvidence?.cid || DEFAULT_IPFS_CID} href={ipfsEvidence?.gateway_url || DEFAULT_IPFS_GATEWAY_URL} /></div></Panel>
-      <Panel title="Integration status" eyebrow="Implemented now vs roadmap"><div className="integration-list">{Object.entries(integrationStatus).filter(([key]) => key !== "roadmap_only").map(([key, value]) => <div key={key}><span>{titleCaseAction(key)}</span><strong>{typeof value === "object" ? (value.status || value.mode || value.provider || "configured") : String(value)}</strong><small>{typeof value === "object" ? (value.note || value.message || "") : ""}</small></div>)}</div>{integrationStatus?.roadmap_only?.length ? <div className="roadmap-note"><Icon name="info" size={16} /><span>Roadmap only: {integrationStatus.roadmap_only.join(" · ")}</span></div> : null}</Panel>
+      <Panel title="Integration status" eyebrow="Implemented now vs roadmap"><div className="integration-list">{integrationRows.map((item) => <div key={item.key}><span>{item.label}</span><strong>{item.status}</strong><small>{item.note}</small></div>)}</div>{integrationStatus?.roadmap_only?.length ? <div className="roadmap-note"><Icon name="info" size={16} /><span>Roadmap only: {integrationStatus.roadmap_only.join(" · ")}</span></div> : null}</Panel>
     </div>}
 
     {activeProofTab === "exports" && <div className="proof-two-column">
@@ -2579,7 +2597,7 @@ function TechnicalJuryNotePage({ data }) {
           <div><StatusPill tone="info" compact>Quorum</StatusPill><span>v2 quorum-enabled contract proves pre-quorum rejection, wallet approval, and final post-quorum receipt.</span></div>
           <div><StatusPill tone="info" compact>Wallet</StatusPill><span>Recorded browser wallet receipt demonstrates custody path without making the demo depend on a judge wallet.</span></div>
           <div><StatusPill tone="info" compact>Dynamic</StatusPill><span>Supplemental dynamic proposal proves reusable receipt execution while the canonical proof stays frozen.</span></div>
-          <div><StatusPill tone="info" compact>Recorded V1</StatusPill><span>Native-CSPR SafePay Lite payment and duplicate-proof rejection evidence is historical proof, not official x402 or a live facilitator.</span></div>
+          <div><StatusPill tone="info" compact>x402 v2</StatusPill><span>Casper-native payment intent and HTTP 402 are deployed. The SafePay Lite receipt is historical proof; no public facilitator or successful live-settlement claim is made.</span></div>
         </div>
       </Panel>
     </div>
@@ -2605,7 +2623,7 @@ function TechnicalJuryNotePage({ data }) {
       </Panel>
       <Panel title="Live vs roadmap" eyebrow="No overclaiming">
         <div className="technical-boundary-list">
-          <div><StatusPill tone="success" compact>Available</StatusPill><span>Canonical receipt, Proof Center, Judge Walkthrough, browser wallet receipt, quorum proof, recorded V1 native-CSPR SafePay Lite evidence, IPFS archive, PDF/HTML certificate, and verifier artifacts.</span></div>
+          <div><StatusPill tone="success" compact>Available</StatusPill><span>Canonical receipt, Proof Center, Judge Walkthrough, browser wallet receipt, quorum proof, Casper-native x402 v2 payment intent, recorded V1 native-CSPR SafePay Lite evidence, IPFS archive, PDF/HTML certificate, and verifier artifacts.</span></div>
           <div><StatusPill tone="warning" compact>Supplemental</StatusPill><span>Odra topology genesis and dynamic proposal receipts are supporting proofs, not replacements for the canonical reviewer proof.</span></div>
           <div><StatusPill tone="muted" compact>Roadmap</StatusPill><span>Full cross-contract production enforcement, enterprise IAM/durable queues, and SSE finality pipeline remain launch-plan work.</span></div>
         </div>

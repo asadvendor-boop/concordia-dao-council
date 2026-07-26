@@ -228,7 +228,8 @@ test.describe("Concordia proof cockpit browser acceptance", () => {
     await expect(page.getByRole("heading", { name: "Governance that AI cannot overrule." })).toBeVisible();
     await expect(page.locator('img[src="/dashboard/concordia-dao-logo-final.png"]').first()).toBeVisible();
     await expect(page.getByRole("link", { name: /Start Judge Walkthrough/ })).toHaveAttribute("href", "/dashboard/judge?proposal=DAO-PROP-6CB25C");
-    await expect(page.getByText("No Mainnet, governance v3, or official x402 capability is claimed.")).toBeVisible();
+    await expect(page.getByText(/Casper-native x402 v2 is implemented and deployed/)).toBeVisible();
+    await expect(page.getByText(/no public facilitator or successful live-settlement claim is made/)).toBeVisible();
 
     const publicHrefs = await page.locator(".landing-public-links a").evaluateAll((links) => links.map((link) => link.href));
     expect(publicHrefs).toEqual([

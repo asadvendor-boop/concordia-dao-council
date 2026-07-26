@@ -17,25 +17,25 @@
     "demo_hook": "A malicious AI tries to push an unsafe 30% treasury allocation. Concordia catches the violation, Verity challenges it with Dissent Receipts, the DAO Mandate caps it to 8%, Locke can execute only the exact approved hash, and browser-wallet quorum proves the same action is reverted before quorum and accepted after quorum.",
     "ipfs_archive": {
       "cid": "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
-      "gateway_url": "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
+      "gateway_url": "https://concordiadao.xyz/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq",
       "ipfs_uri": "ipfs://bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
     },
     "product_framing": "Concordia DAO Council is the Casper governance firewall for AI-run DAOs: Dissent Receipts preserve Verity's objection, Locke is bound to the exact approved hash, and browser-wallet quorum is proven on-chain when execution is reverted before quorum and accepted after quorum.",
     "proposal_id": "DAO-PROP-6CB25C",
     "public_urls": {
-      "certificate": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C",
-      "certificate_pdf": "https://concordia.47.84.232.193.sslip.io/certificate/DAO-PROP-6CB25C/pdf",
-      "dashboard": "https://concordia.47.84.232.193.sslip.io/dashboard",
-      "evidence": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-6CB25C",
-      "judge_walkthrough": "https://concordia.47.84.232.193.sslip.io/dashboard/judge",
-      "proof_center": "https://concordia.47.84.232.193.sslip.io/dashboard/proof",
-      "proof_pack": "https://concordia.47.84.232.193.sslip.io/proof-pack/DAO-PROP-6CB25C",
-      "technical_jury_note": "https://concordia.47.84.232.193.sslip.io/technical-jury-note"
+      "certificate": "https://concordiadao.xyz/certificate/DAO-PROP-6CB25C",
+      "certificate_pdf": "https://concordiadao.xyz/certificate/DAO-PROP-6CB25C/pdf",
+      "dashboard": "https://concordiadao.xyz/dashboard",
+      "evidence": "https://concordiadao.xyz/evidence/DAO-PROP-6CB25C",
+      "judge_walkthrough": "https://concordiadao.xyz/dashboard/judge",
+      "proof_center": "https://concordiadao.xyz/dashboard/proof",
+      "proof_pack": "https://concordiadao.xyz/proof-pack/DAO-PROP-6CB25C",
+      "technical_jury_note": "https://concordiadao.xyz/technical-jury-note"
     },
     "supplemental_dynamic_lifecycle_proof": {
       "contract_hash": "hash-a8640466af8c72fdcb8d9bb85bf445903ce5969fd9a7e7cb08179ffd5caa42f1",
       "deploy_hash": "68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0",
-      "evidence_url": "https://concordia.47.84.232.193.sslip.io/evidence/DAO-PROP-DYN-002",
+      "evidence_url": "https://concordiadao.xyz/evidence/DAO-PROP-DYN-002",
       "explorer_url": "https://testnet.cspr.live/deploy/68fd77bc4f59f56cb7fb7310d3cbc525ffbfbe87ffda70b51bfd55985e4040e0",
       "proposal_id": "DAO-PROP-DYN-002"
     },
@@ -48,7 +48,7 @@
     },
     "technical_jury_note": {
       "summary": "The canonical reviewer proof is frozen for reproducibility. Dynamic proposals are preview/execution-ready unless their own evidence chain, signature, finality record, and proof artifact exist. The Odra topology genesis proves auxiliary modules independently; full cross-contract production enforcement is roadmap, not overclaimed.",
-      "url": "https://concordia.47.84.232.193.sslip.io/technical-jury-note"
+      "url": "https://concordiadao.xyz/technical-jury-note"
     },
     "x402_payment": {
       "api_url": "https://api.testnet.cspr.live/deploys/dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c",
@@ -77,7 +77,7 @@
       "tone": "muted"
     }
   ],
-  "generated_at": "2026-07-06T11:33:36.781795+00:00",
+  "generated_at": "2026-07-26T11:27:38.770000+00:00",
   "jaeger_available": true,
   "observations": [
     {
@@ -800,5 +800,5 @@
     }
   },
   "trace_type": "ConcordiaPublicRunTrace",
-  "traces_url": "https://concordia.47.84.232.193.sslip.io/traces"
+  "traces_url": "https://concordiadao.xyz/traces"
 }

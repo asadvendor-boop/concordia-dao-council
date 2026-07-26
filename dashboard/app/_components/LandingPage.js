@@ -67,7 +67,7 @@ export function LandingPage() {
             <Link className="landing-button landing-button-primary" href={`/judge?proposal=${DEFAULT_REVIEW_PROPOSAL_ID}`}>Start Judge Walkthrough <span aria-hidden="true">→</span></Link>
             <Link className="landing-button landing-button-secondary" href={`/proof?proposal=${DEFAULT_REVIEW_PROPOSAL_ID}`}>Open Proof Center</Link>
           </div>
-          <p className="landing-scope-note">V1.5 presentation over the preserved V1 runtime. No Mainnet, governance v3, or official x402 capability is claimed.</p>
+          <p className="landing-scope-note">V1.5 presentation over the preserved V1 runtime. Casper-native x402 v2 is implemented and deployed; no public facilitator or successful live-settlement claim is made. Mainnet and governance v3 are not claimed.</p>
         </div>
         <div className="landing-hero-visual" aria-label="Recorded authorization sequence">
           <div className="landing-visual-kicker">CONSTITUTIONAL CONTROL PATH</div>
@@ -90,7 +90,7 @@ export function LandingPage() {
             <span>{row.label}</span><code>{short(row.value)}</code><small>{row.status}</small><b aria-hidden="true">↗</b>
           </a>)}
         </div>
-        <div className="landing-safepay-note"><span>RECORDED V1 NATIVE-CSPR SAFEPAY LITE EVIDENCE</span><p>Historical payment and duplicate-proof rejection evidence is available at <a href={`${PUBLIC_APP_ORIGIN}/safepay-lite/${DEFAULT_REVIEW_PROPOSAL_ID}`} target="_blank" rel="noopener noreferrer">the owned Concordia domain</a>. It is not official x402 and not a live facilitator.</p></div>
+        <div className="landing-safepay-note"><span>RECORDED V1 NATIVE-CSPR SAFEPAY LITE EVIDENCE</span><p>Historical payment and duplicate-proof rejection evidence is available at <a href={`${PUBLIC_APP_ORIGIN}/safepay-lite/${DEFAULT_REVIEW_PROPOSAL_ID}`} target="_blank" rel="noopener noreferrer">the owned Concordia domain</a>. It complements the deployed x402 payment-intent path but does not prove successful live settlement.</p></div>
       </section>
 
       <section id="council" className="landing-council-section" aria-labelledby="landing-council-heading">

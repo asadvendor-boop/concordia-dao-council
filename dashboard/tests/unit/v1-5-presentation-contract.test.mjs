@@ -52,7 +52,7 @@ test("SafePay Lite remains a recorded V1 proof under the apex domain", () => {
   assert.equal(safePay.href, "https://concordiadao.xyz/safepay-lite/DAO-PROP-6CB25C");
 });
 
-test("Proof Center fallback never invents a live SafePay integration", () => {
+test("Proof Center fallback exposes implemented x402 while refusing a live-settlement claim", () => {
   const app = readFileSync(new URL("../../app/_components/ConcordiaApp.js", import.meta.url), "utf8");
   const fallbackStart = app.indexOf("const fallbackIntegrations = {");
   const fallbackEnd = app.indexOf("\n  };", fallbackStart);
@@ -60,12 +60,13 @@ test("Proof Center fallback never invents a live SafePay integration", () => {
   assert.notEqual(fallbackEnd, -1);
 
   const fallback = app.slice(fallbackStart, fallbackEnd);
-  assert.match(fallback, /mode:\s*"recorded_v1_evidence"/);
-  assert.match(fallback, /status:\s*"recorded_v1_native_cspr_safepay_lite_evidence"/);
+  assert.match(fallback, /mode:\s*"casper_native_x402_v2_implemented"/);
+  assert.match(fallback, /status:\s*"payment_intent_and_http_402_available"/);
   assert.match(fallback, /settlement_driver:\s*"native_cspr_historical_record"/);
   assert.match(fallback, /provider_url_configured:\s*false/);
   assert.match(fallback, /official_x402:\s*false/);
   assert.match(fallback, /live_facilitator:\s*false/);
-  assert.match(fallback, /not official x402 and not a live facilitator/i);
+  assert.match(fallback, /Casper-native x402 v2 is implemented and deployed/i);
+  assert.match(fallback, /no public facilitator or successful live-settlement claim is made/i);
   assert.doesNotMatch(fallback, /mode:\s*"real"|external_paid_provider|provider_url_configured:\s*true/);
 });

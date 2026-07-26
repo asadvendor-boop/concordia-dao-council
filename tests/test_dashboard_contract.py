@@ -45,10 +45,30 @@ def test_judge_facing_surfaces_do_not_link_public_ipfs_gateway():
         Path("dashboard/app/proof/page.js"),
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in surfaces)
+    owned_gateway = (
+        "https://concordiadao.xyz/api/ipfs/"
+        "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
+    )
+    retired_gateway = (
+        "https://concordia.47.84.232.193.sslip.io/api/ipfs/"
+        "bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq"
+    )
 
     assert "https://ipfs.io/ipfs" not in combined
     assert "ipfs.io" not in combined
-    assert "https://concordia.47.84.232.193.sslip.io/api/ipfs/bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq" in combined
+    assert owned_gateway in combined
+    assert retired_gateway not in combined
+
+
+def test_dashboard_states_the_exact_x402_release_boundary():
+    dashboard = Path("dashboard/app/_components/ConcordiaApp.js").read_text(encoding="utf-8")
+    landing = Path("dashboard/app/_components/LandingPage.js").read_text(encoding="utf-8")
+    combined = "\n".join([dashboard, landing])
+
+    assert "CASPER-NATIVE x402 v2 · DEPLOYED" in dashboard
+    assert "Casper-native x402 v2 is implemented and deployed" in combined
+    assert "no public facilitator or successful live-settlement claim is made" in combined
+    assert "No Mainnet, governance v3, or official x402 capability is claimed." not in landing
 
 
 def test_public_pitch_leads_with_concordia_differentiators():
