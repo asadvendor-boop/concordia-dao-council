@@ -94,7 +94,8 @@ def test_overview_surfaces_council_personas_without_fake_dropdown_affordance():
     assert "function CouncilPersonaStrip" in dashboard
     assert "Meet the council behind the proof" in dashboard
     assert "no agent can widen the DAO leash" in dashboard
-    assert "Calm intake sentinel" in dashboard
+    assert '\\"Every proposal earns its hearing.\\"' in dashboard
+    assert "Calm intake sentinel" not in dashboard
     for name in ["Rowan", "Mercer", "Verity", "Alden", "Locke", "Wells"]:
         assert name in dashboard
     assert 'aria-label="Selected reviewer scenario"' in dashboard

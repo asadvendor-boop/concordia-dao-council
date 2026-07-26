@@ -911,7 +911,7 @@ function AgentMiniRow({ role, status, detail, tone }) { const profile = getProfi
 function CollaborationEvent({ card, compact = false, onClick }) { const profile = getProfile(CARD_ROLE[card?.card_type] || "system"); const tone = cardTone(card); return <button type="button" className={cx("collaboration-event", compact && "compact", `event-${tone}`)} onClick={onClick}><Avatar profile={profile} size={compact ? "sm" : "md"} /><div className="collaboration-event-copy"><div className="event-heading"><strong>{profile.name}</strong><span>{profile.role}</span><StatusPill tone={tone} compact>{cardBadge(card)}</StatusPill></div><p><RichText value={cardSummary(card)} /></p></div><time>{formatTime(card?.data?.created_at || card?.data?.timestamp)}</time></button>; }
 function CouncilPersonaStrip() {
   const roles = [
-    { role: "rowan", trait: "Calm intake sentinel" },
+    { role: "rowan", trait: "\"Every proposal earns its hearing.\"" },
     { role: "mercer", trait: "\"Numbers before narratives.\"" },
     { role: "verity", trait: "\"Dissent is evidence.\"" },
     { role: "alden", trait: "\"Exact envelopes only.\"" },
