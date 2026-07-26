@@ -166,6 +166,44 @@ def test_public_release_copy_is_v1_first_and_explicit_about_exclusions() -> None
     assert "safepay lite is the first monetization primitive" not in public_copy.lower()
 
 
+def test_public_introduction_uses_approved_implicit_positioning_and_no_stale_community_notes() -> None:
+    approved_lead = "Agentic payments on Casper are arriving. The unsolved half is authorization"
+    for path in (ROOT / "README.md", ROOT / "docs-site" / "index.md"):
+        copy = path.read_text(encoding="utf-8")
+        assert approved_lead in copy
+        assert "A gateway can be routed around." in copy
+
+    public_positioning = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs-site" / "index.md",
+            ROOT / "dashboard" / "app" / "_components" / "LandingPage.js",
+        )
+    )
+    for competitor in (
+        "AiFinPay",
+        "A2A Governance Gateway",
+        "LASTRE",
+        "Phoenix Zero",
+        "Sluice",
+        "AgentPay",
+        "CasperGuard",
+    ):
+        assert competitor not in public_positioning
+
+    social = (ROOT / "docs" / "SOCIAL_LAUNCH.md").read_text(encoding="utf-8")
+    assets = (ROOT / "docs" / "SUBMISSION_ASSETS_STATUS.md").read_text(encoding="utf-8")
+    assert "Community channel pending" not in social
+    assert "Telegram/Discord/community URL | Optional / pending" not in assets
+    for url in (
+        "https://t.me/CSPRDevelopers",
+        "https://discord.com/invite/caspernetwork",
+    ):
+        assert url in social
+        assert url in assets
+
+
 def test_mkdocs_navigation_is_v1_5_scoped_and_all_links_resolve() -> None:
     config = yaml.safe_load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"))
     nav_text = json.dumps(config["nav"])

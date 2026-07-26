@@ -68,7 +68,8 @@ export function LandingPage() {
         <div className="landing-hero-copy">
           <div className="landing-proof-badge"><span />RECORDED ON CASPER TESTNET · VERIFIED AT CAPTURE</div>
           <h1 id="landing-title">Governance that AI cannot overrule.</h1>
-          <p>Concordia is the Casper governance firewall for AI-run DAOs. Specialist agents deliberate, deterministic policy blocks unsafe proposals, dissent is preserved as a signed receipt, and human quorum permits only the exact approved action — proven on Casper Testnet.</p>
+          <p className="landing-hero-thesis">Agentic payments on Casper are arriving. The unsolved half is authorization: when an autonomous agent can move funds, what proves a decision was actually approved — and what refuses the ones that weren&apos;t?</p>
+          <p className="landing-hero-detail">A gateway can be routed around. Concordia puts the refusal in the governed action path: specialist agents deliberate, deterministic policy blocks unsafe proposals, dissent is preserved as a signed receipt, and human quorum permits only the exact approved action — proven on Casper Testnet.</p>
           <div className="landing-actions">
             <Link className="landing-button landing-button-primary" href={`/judge?proposal=${DEFAULT_REVIEW_PROPOSAL_ID}`}>Start Judge Walkthrough <span aria-hidden="true">→</span></Link>
             <Link className="landing-button landing-button-secondary" href={`/proof?proposal=${DEFAULT_REVIEW_PROPOSAL_ID}`}>Open Proof Center</Link>

@@ -36,4 +36,10 @@ Start at the Judge Walkthrough. Show the 30% treasury proposal, then the 8% poli
 
 ## Community Channel
 
-Community channel pending. Before public submission, add the final project X/Twitter post URL and any Telegram, Discord, or DoraHacks discussion link here.
+Official Casper developer community channels:
+
+- Telegram Developers Group: https://t.me/CSPRDevelopers
+- Casper Discord Server: https://discord.com/invite/caspernetwork
+
+These are organizer-provided ecosystem channels, not evidence of Concordia
+adoption, endorsement, or partnership.

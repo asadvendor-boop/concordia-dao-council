@@ -157,3 +157,18 @@ test("judge evidence disclosures are visible by default", () => {
   assert.match(app, /const \[showAll, setShowAll\] = useState\(true\);/);
   assert.match(app, /<details className="advanced-actions" open>/);
 });
+
+test("landing leads with the approved authorization thesis without naming competitors", () => {
+  const landing = readFileSync(new URL("../../app/_components/LandingPage.js", import.meta.url), "utf8");
+  assert.match(
+    landing,
+    /Agentic payments on Casper are arriving\. The unsolved half is authorization:/,
+  );
+  assert.match(landing, /what refuses the ones that weren(?:'|&apos;)t\?/);
+  assert.match(landing, /A gateway can be routed around\./);
+  assert.match(landing, /the governed action path/);
+  assert.doesNotMatch(
+    landing,
+    /AiFinPay|A2A Governance Gateway|LASTRE|Phoenix Zero|Sluice|AgentPay|CasperGuard/i,
+  );
+});
