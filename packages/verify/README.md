@@ -3,7 +3,7 @@
 Read-only, fail-closed verification for Concordia V1 receipts, proof registries,
 and historical compatibility artifacts.
 
-Version 0.1.2 is V1-first and remains an API/parser/refusal superset of 0.1.1.
+Version 0.1.3 is V1-first and remains an API/parser/refusal superset of 0.1.2.
 It does not sign, broadcast, settle, or mutate.
 
 ## V1.5 truth boundary
@@ -13,10 +13,12 @@ receipt
 `e926582f3dacd05d9bd59a4fe0ae3c3c884ad57f23ab7318925cef34c286d852`,
 and the recorded quorum sequence.
 
-- Official x402 is not shipped.
+- Casper-native x402 v2 exposes a live HTTP 402 challenge; the package does not
+  claim or verify an external facilitator service.
 - Mainnet has not been executed.
 - Governance v3 is excluded from V1.5.
-- SafePay Lite is recorded native-CSPR evidence, not an official facilitator.
+- SafePay Lite is recorded native-CSPR settlement evidence, not an external
+  facilitator claim.
 
 Historical V2/V3 names below are compatibility schema identifiers. Retaining
 them prevents consumer regression; it does not make them V1.5 product claims.
@@ -36,7 +38,7 @@ Only `verified` is success. Summary booleans never override recomputed facts.
 ## Install
 
 ```bash
-npm install @concordia-dao/verify@0.1.2
+npm install @concordia-dao/verify@0.1.3
 ```
 
 Node.js 20 or newer is required.
@@ -141,16 +143,17 @@ The package ships no default RPC endpoints and accepts no RPC credentials.
 ## Release authentication
 
 `0.1.0` was operator-published without an npm provenance attestation and is
-deprecated. `0.1.1` remains a supported historical release until 0.1.2 is
-published and independently verified.
+deprecated. `0.1.1` and `0.1.2` remain supported historical releases.
 
-`0.1.2` is the V1.5 package version. Source metadata alone does not prove it is
-published. The pinned `.github/workflows/publish-verifier.yml` workflow must:
+`0.1.3` is the provenance-strengthened V1.5 package version. Source metadata
+alone does not prove it is published. The pinned
+`.github/workflows/publish-verifier.yml` workflow must:
 
 1. be dispatched manually with an exact commit and version;
 2. require that commit to equal the current public `main` tip;
 3. run clean build, tests, lint, audit, pack, and consumer checks;
-4. use `npm publish --provenance --access public` through the
+4. embed the authorized public `main` SHA as `gitHead`, then use
+   `npm publish --provenance --access public` through the
    OIDC trusted publisher and `npm-production` environment; and
 5. run the shared `scripts/verify_published_release.mjs` provenance verifier.
 

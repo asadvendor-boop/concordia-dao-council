@@ -11,7 +11,7 @@ This page is the claim boundary for Concordia V1.5.
 - recorded quorum rejection `6280b8e1…7431` and acceptance `9d631fe1…2928`
 - supplemental recorded Testnet receipts
 - SafePay Lite as recorded native-CSPR evidence under the apex
-- `@concordia-dao/verify` 0.1.2 as a V1-first 0.1.1 compatibility superset
+- `@concordia-dao/verify` 0.1.3 as a provenance-strengthened V1-first 0.1.2 compatibility superset
 
 ## Excluded
 
@@ -37,7 +37,7 @@ Source copy is not hosted proof. Final release claims require:
 2. main-only Pages deployment bound to the release SHA;
 3. CodeQL default-setup and Dependabot review with no unresolved High-or-greater
    alerts;
-4. npm 0.1.2 publication from the exact public `main` tip with OIDC provenance;
+4. npm 0.1.3 publication from the exact public `main` tip with `gitHead` and OIDC provenance;
 5. clean-consumer API, CLI, signature, and V1 fixture verification; and
 6. a hosted crawl of the complete reviewer surface.
 

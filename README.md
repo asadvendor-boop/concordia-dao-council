@@ -162,21 +162,22 @@ node scripts/check-package-files.mjs
 The verifier package has no signer, wallet, secret loader, settlement, or
 mutation capability.
 
-## npm verifier 0.1.2
+## npm verifier 0.1.3
 
-`@concordia-dao/verify` 0.1.2 is prepared as a V1-first compatibility superset
-of 0.1.1. All 0.1.1 public exports, parsers, adapters, outcome codes, and
+`@concordia-dao/verify` 0.1.3 is a provenance-strengthened V1-first compatibility
+superset of 0.1.2. All 0.1.2 public exports, parsers, adapters, outcome codes, and
 fail-closed refusals remain. Historical V2/V3 parsers remain available only so
 existing evidence consumers do not regress.
 
 Publication is manual and gated. The trusted GitHub workflow must check the
 exact public `main` tip, rebuild and test the tarball, install it into a clean
 consumer, publish through npm OIDC with provenance, and verify the registry
-copy with the shared read-only release verifier. Source presence alone is not
-proof that 0.1.2 was published.
+copy with the shared read-only release verifier. The tarball records the exact
+public `main` SHA as `gitHead`, while npm's signed provenance attestation binds
+the package to the authorized GitHub Actions workflow.
 
 - Package target:
-  [@concordia-dao/verify 0.1.2](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2)
+  [@concordia-dao/verify 0.1.3](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3)
 - Package-specific documentation:
   [packages/verify/README.md](packages/verify/README.md)
 
@@ -197,7 +198,7 @@ the human-approval and fail-closed boundaries.
 - Documentation: <https://docs.concordiadao.xyz>
 - Source: <https://github.com/asadvendor-boop/concordia-dao-council>
 - npm target:
-  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2>
+  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3>
 - X: <https://x.com/ConcordiaDAO>
 
 ## License

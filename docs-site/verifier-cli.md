@@ -1,13 +1,13 @@
 # Verifier SDK and CLI
 
-`@concordia-dao/verify` is a read-only, fail-closed package. Version 0.1.2 is
+`@concordia-dao/verify` is a read-only, fail-closed package. Version 0.1.3 is
 V1-first while preserving every 0.1.1 public export, parser, adapter, outcome,
 and refusal behavior.
 
 ## Install
 
 ```bash
-npm install @concordia-dao/verify@0.1.2
+npm install @concordia-dao/verify@0.1.3
 ```
 
 Publication is accepted only after npm registry provenance and clean-consumer
@@ -43,7 +43,7 @@ if (result.status !== "verified") {
 
 ## Compatibility surface
 
-0.1.2 retains strict adapters and refusals for:
+0.1.3 retains strict adapters and refusals for:
 
 - `historical_odra_receipt_v2`
 - `exact_envelope_v3`

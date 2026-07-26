@@ -50,7 +50,7 @@ That compatibility does not promote those paths into the V1.5 product.
 - [Judge Walkthrough](https://concordiadao.xyz/dashboard/judge)
 - [Proof Center](https://concordiadao.xyz/dashboard/proof?proposal=DAO-PROP-6CB25C)
 - [Source](https://github.com/asadvendor-boop/concordia-dao-council)
-- [Verifier 0.1.2 target](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2)
+- [Verifier 0.1.3](https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3)
 
 Publication and hosted-state claims remain subject to the release gates in
 [V1.5 Release Scope](release-scope.md).

@@ -6,11 +6,9 @@
  * and no publish permission, so it can re-prove a release at any time without
  * the ability to create one.
  *
- * The source commit is bound through the SLSA provenance
- * (predicate.buildDefinition.resolvedDependencies[].digest.gitCommit), NOT
- * through registry `gitHead` — npm does not populate gitHead for tarball
- * publication, and asserting it left a genuinely successful publish reporting
- * red.
+ * The source commit is independently bound through both the package `gitHead`
+ * metadata and SLSA provenance
+ * (predicate.buildDefinition.resolvedDependencies[].digest.gitCommit).
  *
  *   node scripts/verify_published_release.mjs <version> <40-hex-commit>
  */
@@ -44,13 +42,14 @@ const record = (name, ok, detail = "") => {
 
 const spec = `${PACKAGE}@${version}`;
 const metadata = JSON.parse(
-  execFileSync("npm", ["view", spec, "name", "version", "dist", "repository", "--json"], {
+  execFileSync("npm", ["view", spec, "name", "version", "gitHead", "dist", "repository", "--json"], {
     encoding: "utf8",
   }),
 );
 
 record("registry name", metadata.name === PACKAGE, metadata.name);
 record("registry version", metadata.version === version, metadata.version);
+record("registry gitHead", metadata.gitHead === commit, metadata.gitHead);
 
 const attestations = metadata.dist?.attestations;
 record(
