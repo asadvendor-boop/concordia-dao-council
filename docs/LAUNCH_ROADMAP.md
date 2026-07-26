@@ -1,8 +1,13 @@
 # Concordia Launch Roadmap
 
-Concordia DAO Council is the Casper governance firewall for AI-run DAOs: Dissent Receipts preserve Verity's objection, Locke is bound to the exact approved hash, and browser-wallet quorum is proven on-chain when execution is reverted before quorum and accepted after quorum.
+Concordia DAO Council is the Casper governance firewall for AI-assisted DAOs:
+Dissent Receipts preserve Verity's objection, Locke is bound to the exact
+approved hash, and browser-wallet quorum is proven on-chain when the governance
+receipt is rejected before quorum and accepted after quorum.
 
-This roadmap separates the live Buildathon proof from the production hardening path.
+This roadmap separates the recorded Buildathon proof, the implemented V1.5
+Casper-native x402 path, and the production hardening required for governed
+agent-to-agent payments.
 
 ## Live Buildathon Proof
 
@@ -12,11 +17,15 @@ This roadmap separates the live Buildathon proof from the production hardening p
 - Supplemental quorum proof: `9d631fe1c925cd4991180b1a794e8b69f061a33033e372273ffadcaf9efe2928`
 - Browser-wallet receipt: `56b6ea6ccaae4d79221ca63a259f508b13a15679ef4984e87d158fbfbe4f12bf`
 - SafePay Lite recorded native-CSPR payment: `dcb35f4295909b1c87d07b7f4d02ab95afef99d2d4cdddee961c8f5ca6d4914c`
+- Casper-native x402 v2: HTTP 402 challenge, payment intent,
+  native-transfer verification, and replay protection on Casper Testnet
 - IPFS archive CID: `bafkreih4jw6ntzydjudnlcbge3pehxufrj2pvydzx5hnzc3e4n4qhahfyq`
 
 Contract lineage: the canonical receipt is on the Jun 29 v1 GovernanceReceipt receipt anchor, while the supplemental quorum receipt is on the Jun 30 v2 quorum-enabled GovernanceReceipt package. The final quorum receipt `9d631...` is the demo climax because it succeeds only after 2-of-3 approval; it does not replace the canonical reviewer receipt `e926...`.
 
-DAO-PROP-6CB25C is the canonical executed reviewer proof. Non-canonical proposals use the dynamic preview path unless they are separately signed and anchored on Casper.
+`DAO-PROP-6CB25C` is the canonical recorded reviewer proof. Non-canonical
+proposals use the dynamic preview path unless they are separately signed and
+anchored on Casper.
 
 ## Target Users
 
@@ -33,13 +42,22 @@ Concordia is packaged as a governance middleware layer:
    SafePay Lite recorded-evidence view, and Casper receipt packaging.
 2. The dashboard exposes Judge Walkthrough, Proof Center, downloadable archive, and certificate surfaces.
 3. Casper Testnet contracts anchor the recorded approved receipts. Mainnet has not been executed.
-4. Optional adapters connect CSPR.cloud, CSPR.trade, CSPR.click/Casper Wallet, and IPFS pinning. Official x402 is excluded.
+4. Casper-native x402 v2 exposes an HTTP 402 challenge, payment intent,
+   native-transfer verification, and replay protection on Testnet.
+5. Optional adapters connect CSPR.cloud, CSPR.trade, CSPR.click/Casper Wallet,
+   and IPFS pinning.
+
+V1.5 does not claim a live external provider or facilitator, official
+facilitator settlement, escrow, refunds, WCSPR settlement, or a payment
+marketplace. Those capabilities require separate evidence and release gates.
 
 ## 30-Day Plan
 
 - Harden the supplemental dynamic proposal path from the processed `DAO-PROP-DYN-002` receipt into a reusable proposal intake path.
 - Add more DAO policy templates for treasury allocation, RWA onboarding, and protocol-parameter changes.
 - Expand invariant coverage with named proof artifacts for replay, nonce, hash mismatch, and duplicate-payment rejection.
+- Publish stable x402 payment-intent and verification schemas, golden vectors,
+  and fail-closed examples through the documentation and npm verifier.
 - Add hosted demo video, launch post, and public issue/milestone tracking.
 
 ## 60-Day Plan
@@ -47,8 +65,11 @@ Concordia is packaged as a governance middleware layer:
 - Promote the supplemental auxiliary Odra module calls into live cross-contract dependencies after audit: CouncilRegistry authority checks, TreasuryPolicy cap enforcement, and CardIndexLedger canonical card-root state.
 - Add governance-admin UX for configuring DAO Constitution caps and quorum thresholds.
 - Add more RWA evidence examples with document hashes, issuer scores, maturity bands, and paid specialist reports.
-- Define the evidence and security requirements for any future provider pilot;
-  no live SafePay provider service ships in V1.5.
+- Define a provider/facilitator pilot interface behind an explicit disabled-by-default
+  release gate.
+- Add independent tests for x402 quote identity, fulfillment binding, replay
+  rejection, settlement finality, and protected-resource release. No provider
+  pilot is promoted until those checks have public evidence.
 
 ## 90-Day Plan
 
@@ -56,13 +77,21 @@ Concordia is packaged as a governance middleware layer:
 - Add DAO-specific reputation deltas for agents and paid providers.
 - Add organization-level deployment templates and a CSPR.click/Casper Wallet custody guide.
 - Add production monitoring around Casper submit/finality and IPFS with Jaeger or Tempo traces.
+- Run a separately scoped Testnet pilot in which a governed x402 payment intent
+  is policy-checked, bound to an exact approved hash and single-use nonce,
+  human- or quorum-authorized, finalized on Casper, and verified before the
+  protected service is released.
 
 ## Six-Month Plan
 
 - Package Concordia as an enterprise governance SDK for Casper DAOs and RWA protocols.
 - Add independent Odra module deployments for registry, policy, card ledger, and receipt anchoring.
+- Package the governed x402 authorization and evidence path as a reusable module
+  for Casper agent services.
 - Add enterprise IAM, durable queues, and event-stream finality as production infrastructure.
 - Explore Casper grant/pilot partnerships with DAOs that need AI-assisted but policy-bound governance execution.
+- Evaluate a separately versioned Casper Mainnet canary only after the
+  security, operational, provider, settlement, and evidence gates pass.
 
 ## Unshipped Monetization Hypotheses
 
@@ -70,19 +99,23 @@ These are future business-model hypotheses, not V1.5 products or revenue:
 
 - a fee for a future verified-governance archive service;
 - a fee for a future specialist-report service;
+- a fee for a future governed x402-protected agent service;
 - a future DAO policy pack;
 - a future hosted compliance dashboard; or
 - a future enterprise deployment.
 
-The shipped SafePay Lite material is only a recorded V1 native-CSPR
-payment/report relation. It does not establish a live provider service,
-official x402 settlement, escrow, refunds, or a marketplace.
+SafePay Lite is recorded V1 native-CSPR evidence. Casper-native x402 v2 is an
+implemented Testnet challenge, intent, verification, and replay-protection
+path. Neither establishes a live provider or facilitator, official facilitator
+settlement, escrow, refunds, WCSPR settlement, or a marketplace.
 
 ## Security Hardening
 
 - Keep deterministic authorization stronger than advisory LLM output.
 - Preserve redaction gates for trace APIs, CSV exports, certificates, and proof packs.
 - Add deeper tests for every replay/hash/quorum invariant.
+- Keep x402 payment intent, authorization, settlement evidence, finality, and
+  protected-resource release fail-closed and independently verifiable.
 - Move more policy state on-chain only after each contract path is independently tested.
 
 ## UI Roadmap
