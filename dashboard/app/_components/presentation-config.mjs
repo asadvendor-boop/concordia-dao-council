@@ -52,7 +52,7 @@ export const PUBLIC_LINKS = [
   { id: "canonical_receipt", label: "Canonical Receipt", href: `https://testnet.cspr.live/deploy/${X402_CANONICAL_RECEIPT_HASH}` },
   { id: "docs", label: "Docs", href: "https://docs.concordiadao.xyz" },
   { id: "github", label: "GitHub", href: "https://github.com/asadvendor-boop/concordia-dao-council" },
-  { id: "npm", label: "Verifier 0.1.2", href: "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2" },
+  { id: "npm", label: "Verifier 0.1.3", href: "https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3" },
   { id: "x", label: "X / Twitter", href: "https://x.com/ConcordiaDAO" },
 ];
 

@@ -5,8 +5,8 @@
 - App: <https://concordiadao.xyz>
 - Documentation: <https://docs.concordiadao.xyz>
 - Source: <https://github.com/asadvendor-boop/concordia-dao-council>
-- npm 0.1.2 target:
-  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.2>
+- npm 0.1.3 target:
+  <https://www.npmjs.com/package/@concordia-dao/verify/v/0.1.3>
 - X: <https://x.com/ConcordiaDAO>
 
 ## V1 reviewer surfaces
