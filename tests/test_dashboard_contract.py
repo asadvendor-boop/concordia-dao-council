@@ -63,11 +63,12 @@ def test_judge_facing_surfaces_do_not_link_public_ipfs_gateway():
 def test_dashboard_states_the_exact_x402_release_boundary():
     dashboard = Path("dashboard/app/_components/ConcordiaApp.js").read_text(encoding="utf-8")
     landing = Path("dashboard/app/_components/LandingPage.js").read_text(encoding="utf-8")
-    combined = "\n".join([dashboard, landing])
+    presentation = Path("dashboard/app/_components/presentation-config.mjs").read_text(encoding="utf-8")
+    combined = "\n".join([dashboard, landing, presentation])
 
     assert "CASPER-NATIVE x402 v2 · DEPLOYED" in dashboard
-    assert "Casper-native x402 v2 is implemented and deployed" in combined
-    assert "no public facilitator or successful live-settlement claim is made" in combined
+    assert "Casper-native x402 v2 is deployed" in combined
+    assert "No external facilitator service is claimed." in combined
     assert "No Mainnet, governance v3, or official x402 capability is claimed." not in landing
 
 
@@ -123,7 +124,7 @@ def test_overview_surfaces_council_personas_without_fake_dropdown_affordance():
     assert ".council-persona-strip" in css
     assert ".council-persona-list" in css
     assert "avatar-persona" in css
-    assert "--persona-avatar-size: clamp(140px, 9vw, 188px)" in css
+    assert "--persona-avatar-size: clamp(118px, 7vw, 150px)" in css
     assert "grid-template-columns:var(--persona-image-col) minmax(0,1fr)" in css
 
 
@@ -136,8 +137,8 @@ def test_overview_uses_judge_first_cta_hierarchy_and_canonical_kpi():
     assert "overview-primary-judge" in dashboard
     assert "overview-primary-proof" in dashboard
     assert "overview-primary-cspr" in dashboard
-    assert "Canonical run selected" in dashboard
-    assert "Live proof" in dashboard
+    assert 'label: "Canonical Proof"' in dashboard
+    assert 'value: "Verified"' in dashboard
     assert "30% treasury request is challenged, capped to 8%" in dashboard
 
 
