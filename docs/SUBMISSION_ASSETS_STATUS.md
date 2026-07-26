@@ -33,7 +33,7 @@ These cannot be completed inside the repository without publishing/recording out
 | Public GitHub repository URL | Pending publication | Publish the final clean ZIP/source to the public repo and paste the URL into DoraHacks. |
 | Public demo video URL | Pending recording/upload | Record the demo using `docs/DEMO_SCRIPT.md`, upload it publicly, and paste the URL into DoraHacks. |
 | X/Twitter launch post URL | Optional / pending | Post the draft from `docs/SOCIAL_LAUNCH.md` and add the URL if used. |
-| Telegram/Discord/community URL | Optional / pending | Create or link the community channel if used. |
+| Official Casper developer channels | Reference | Telegram: https://t.me/CSPRDevelopers · Discord: https://discord.com/invite/caspernetwork. Organizer-provided channels; no adoption or endorsement claim. |
 
 ## Honest Boundary For Odra Topology
 

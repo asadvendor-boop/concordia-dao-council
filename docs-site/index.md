@@ -1,5 +1,13 @@
 # Concordia DAO Council V1.5
 
+Agentic payments on Casper are arriving. The unsolved half is authorization:
+when an autonomous agent can move funds, what proves a decision was actually
+approved — and what refuses the ones that weren't?
+
+A gateway can be routed around. Concordia binds Dissent Receipts,
+browser-wallet quorum, and refusal to the exact approved hash in the governed
+action path, where an unapproved, altered, or replayed request still fails.
+
 Concordia is an evidence-first governance council for AI-assisted DAOs on
 Casper Testnet. Named agents deliberate, challenge, and explain. Deterministic
 code evaluates policy, seals the transcript, binds approval to exact hashes,
